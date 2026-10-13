@@ -1,0 +1,14 @@
+// Моя перша програма на NyxilumLang!
+// Натисни зелену кнопку «Запустити» (або F5).
+
+func main() {
+    print("Привіт, світе!")
+
+    printNoNewLine("Як тебе звати? ")
+    var імя = readLine()
+    print("Радий знайомству, " + імя + "!")
+
+    for i in 1..6 {
+        print(toString(i) + " x 7 = " + toString(i * 7))
+    }
+}

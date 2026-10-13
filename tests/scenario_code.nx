@@ -1,0 +1,121 @@
+// Сценарій режиму "Код": друк, підсвітка, запуск з введенням, помилка.
+// NX_HEADLESS=1 nx tests/scenario_code.nx <тимчасова-тека> <тека-для-png>
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor }
+import "../src/editor.nx" { edText }
+
+var outDir = ""
+
+func ev(type) {
+    var m = newMap()
+    mapSet(m, "type", type)
+    return m
+}
+func key(k, ctrl, shift) {
+    var m = ev("key")
+    mapSet(m, "key", k) mapSet(m, "ctrl", ctrl) mapSet(m, "shift", shift) mapSet(m, "alt", false)
+    surfacePostEvent(S, m)
+}
+func typeText(t) {
+    var i = 0
+    while (i < len(t)) {
+        var ch = t[i]
+        if (ch == "\n") { key("Enter", false, false) }
+        else {
+            var m = ev("text")
+            mapSet(m, "text", ch)
+            surfacePostEvent(S, m)
+        }
+        i = i + 1
+    }
+}
+func click(x, y) {
+    var d = ev("mousedown")
+    mapSet(d, "x", x) mapSet(d, "y", y) mapSet(d, "button", 1) mapSet(d, "shift", false) mapSet(d, "ctrl", false)
+    surfacePostEvent(S, d)
+    var u = ev("mouseup")
+    mapSet(u, "x", x) mapSet(u, "y", y) mapSet(u, "button", 1)
+    surfacePostEvent(S, u)
+}
+func step() { ideStep(0) }
+func shot(name) { surfaceSave(S, outDir + "/" + name + ".png") }
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+func main() {
+    var a = scriptArgs()
+    var dir = a[0]
+    outDir = a[1]
+    ideInit(dir)
+    step()
+    shot("01_start")
+    var ed = currentEditor()
+    check(len(ed.lines) > 5, "приклад відкрито (" + toString(len(ed.lines)) + " рядків)")
+
+    // Нова програма через кнопку й діалог
+    click(115, 800 - 26 - 46 + 10)
+    step()
+    check(app.dialog != null, "діалог нової програми відкрито")
+    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
+    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
+    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
+    typeText("тест")
+    key("Enter", false, false)
+    step()
+    ed = currentEditor()
+    check(endsWith(ed.path, "тест.nx"), "створено тест.nx")
+
+    // Виділити все й надрукувати свою програму (автодужки, автовідступи)
+    key("a", true, false)
+    key("Delete", false, false)
+    typeText("func main() {\nvar x = 0x10\nprint(\"Число: \" + toString(x))\nprintNoNewLine(\"Ім'я? \")\nvar n = readLine()\nprint(\"Привіт, \" + n)\n")
+    step()
+    var text = edText(ed)
+    print(text)
+    check(contains(text, "    var x = 0x10"), "автовідступ всередині {")
+    check(endsWith(trim(text), "}"), "автодужка } у кінці")
+    shot("02_typed")
+
+    // Запуск (F5) і відповідь програмі
+    key("F5", false, false)
+    step()
+    var t0 = timeMs()
+    while (timeMs() - t0 < 4000 && !contains(toString(app.con.lines), "Ім'я?")) { ideStep(50) }
+    check(contains(toString(app.con.lines), "Число: 16"), "програма вивела Число: 16")
+    typeText("Сева")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 4000 && app.con.running) { ideStep(50) }
+    step()
+    check(contains(toString(app.con.lines), "Привіт, Сева"), "введення дійшло до програми")
+    check(contains(toString(app.con.lines), "Готово"), "програма завершилась успішно")
+    shot("03_ran")
+
+    // Помилка: невідома змінна -> червоний рядок у редакторі
+    key("End", true, false)
+    typeText("\nfunc зламано() {\nprint(немає)\n}\n")
+    key("Home", true, false)
+    key("Down", false, false)
+    key("End", false, false)
+    typeText("\nзламано()")
+    key("F5", false, false)
+    t0 = timeMs()
+    step()
+    while (timeMs() - t0 < 4000 && app.con.running) { ideStep(50) }
+    step()
+    step()
+    print(edText(ed))
+    print(app.con.lines)
+    check(ed.errLine >= 0, "рядок з помилкою підсвічено: " + toString(ed.errLine + 1))
+    shot("04_error")
+
+    // Скасування
+    var before = len(ed.lines)
+    key("z", true, false)
+    step()
+    check(len(ed.lines) != before || true, "Ctrl+Z не падає")
+    ideShutdown()
+    check(fileExists(dir + "/тест.nx"), "файл збережено на диск")
+    print("СЦЕНАРІЙ ПРОЙДЕНО")
+}

@@ -1,0 +1,240 @@
+// Консоль: запуск програми, її вивід, введення (readLine) і помилки.
+//
+// Програма запускається окремим процесом тим самим nx, що й IDE (nxPath()),
+// з interactive: true - вивід приходить посимвольно, а рядок, набраний у
+// полі вводу консолі, йде програмі в stdin.
+
+import "theme.nx"
+import "ui.nx"
+
+struct Console {
+    lines: array
+    proc: any
+    outLen: i32
+    errLen: i32
+    running: bool
+    startMs: i32
+    scroll: i32
+    errLine: i32
+    input: string
+    focused: bool
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+}
+
+func newConsole() {
+    return Console { lines: [], proc: null, outLen: 0, errLen: 0, running: false, startMs: 0,
+        scroll: 0, errLine: -1, input: "", focused: false, x: 0, y: 0, w: 0, h: 0 }
+}
+
+// Рядок консолі - [текст, вид]; вид: "out" | "err" | "info" | "ok" | "in".
+func conAdd(con, text, kind) {
+    append(con.lines, [text, kind, true])
+    if (len(con.lines) > 2000) { removeAt(con.lines, 0) }
+}
+
+// Шматок виводу: дописується до останнього незавершеного рядка того ж виду.
+func _conChunk(con, chunk, kind) {
+    chunk = replace(chunk, "\r", "")
+    var parts = split(chunk, "\n")
+    var i = 0
+    while (i < len(parts)) {
+        var n = len(con.lines)
+        if (i == 0 && n > 0 && con.lines[n - 1][1] == kind && con.lines[n - 1][2] == null) {
+            con.lines[n - 1][0] = con.lines[n - 1][0] + parts[0]
+        } else if (i < len(parts) - 1 || len(parts[i]) > 0) {
+            append(con.lines, [parts[i], kind, null])
+        }
+        // Завершений рядок (після нього був \n) - позначаємо третім полем.
+        if (i < len(parts) - 1) {
+            var last = con.lines[len(con.lines) - 1]
+            if (len(last) == 3) { last[2] = true }
+        }
+        i = i + 1
+    }
+    var isErrText = false
+    for p in parts {
+        if (startsWith(p, "Runtime Error") || contains(p, "рядок ") || contains(p, "рядку ")) { isErrText = true }
+    }
+    if (isErrText) { _conFindErrorLine(con) }
+}
+
+// Номер рядка з помилки: беремо ОСТАННЄ "рядок N" (найглибший виклик).
+func _conFindErrorLine(con) {
+    var i = len(con.lines) - 1
+    var stop = max(0, len(con.lines) - 30)
+    while (i >= stop) {
+        var t = con.lines[i][0]
+        // "рядок 12: ..." (виконання/компіляція) або "на рядку 14" (парсер)
+        var at = indexOf(t, "рядок ")
+        if (at < 0) { at = indexOf(t, "рядку ") }
+        if (at >= 0) {
+            var j = at + 6
+            var num = ""
+            while (j < len(t) && charCode(t[j]) >= 48 && charCode(t[j]) <= 57) {
+                num = num + t[j]
+                j = j + 1
+            }
+            if (len(num) > 0) {
+                con.errLine = toInt(num) - 1
+                return
+            }
+        }
+        i = i - 1
+    }
+}
+
+func conClear(con) {
+    con.lines = []
+    con.scroll = 0
+}
+
+func conRun(con, path, dir) {
+    if (con.running) { conStop(con) }
+    conClear(con)
+    con.errLine = -1
+    con.input = ""
+    var parts = split(replace(path, "\\", "/"), "/")
+    var name = parts[len(parts) - 1]
+    conAdd(con, "» Запуск " + name, "info")
+    var opts = newMap()
+    mapSet(opts, "interactive", true)
+    mapSet(opts, "cwd", dir)
+    try {
+        con.proc = procStart(nxPath(), [path], opts)
+        con.running = true
+        con.outLen = 0
+        con.errLen = 0
+        con.startMs = timeMs()
+        con.focused = true
+    } catch (e) {
+        conAdd(con, "Не вдалося запустити: " + toString(e), "err")
+    }
+}
+
+func conStop(con) {
+    if (!con.running) { return }
+    procKill(con.proc)
+    conPoll(con)
+    con.running = false
+    conAdd(con, "■ Зупинено", "info")
+}
+
+// Забрати новий вивід. true - щось змінилось (треба перемалювати).
+func conPoll(con) {
+    if (con.proc == null) { return false }
+    var changed = false
+    var out = procOutput(con.proc)
+    if (len(out) > con.outLen) {
+        _conChunk(con, substring(out, con.outLen, len(out) - con.outLen), "out")
+        con.outLen = len(out)
+        changed = true
+    }
+    var err = procErrorOutput(con.proc)
+    if (len(err) > con.errLen) {
+        _conChunk(con, substring(err, con.errLen, len(err) - con.errLen), "err")
+        con.errLen = len(err)
+        changed = true
+    }
+    if (con.running && !procIsRunning(con.proc)) {
+        // Процес завершився - ще раз забрати залишок виводу.
+        sleep(30)
+        out = procOutput(con.proc)
+        if (len(out) > con.outLen) { _conChunk(con, substring(out, con.outLen, len(out) - con.outLen), "out")  con.outLen = len(out) }
+        err = procErrorOutput(con.proc)
+        if (len(err) > con.errLen) { _conChunk(con, substring(err, con.errLen, len(err) - con.errLen), "err")  con.errLen = len(err) }
+        con.running = false
+        con.focused = false
+        var code = procExitCode(con.proc)
+        var secs = toFixed((timeMs() - con.startMs) / 1000, 2)
+        if (code == 0) { conAdd(con, "√ Готово за " + secs + " с", "ok") }
+        else {
+            _conFindErrorLine(con)
+            var where = ""
+            if (con.errLine >= 0) { where = " - дивись рядок " + toString(con.errLine + 1) }
+            conAdd(con, "✗ Програма зупинилась з помилкою" + where, "err")
+        }
+        changed = true
+    }
+    if (changed) { con.scroll = 0 }
+    return changed
+}
+
+// Enter у полі вводу - рядок іде програмі (для readLine).
+func conSubmit(con) {
+    if (!con.running) { return }
+    conAdd(con, con.input, "in")
+    procWrite(con.proc, con.input + "\n")
+    con.input = ""
+}
+
+func conKey(con, e) {
+    if (e.key == "Enter") { conSubmit(con)  return true }
+    if (e.key == "Backspace") {
+        if (len(con.input) > 0) { con.input = substring(con.input, 0, len(con.input) - 1) }
+        return true
+    }
+    if (e.ctrl && e.key == "v") { con.input = con.input + replace(clipboardGet(), "\n", " ")  return true }
+    return false
+}
+
+func conDraw(con, x, y, w, h) {
+    con.x = x
+    con.y = y
+    con.w = w
+    con.h = h
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    surfaceRect(S, x, y, w, 1, C_BORDER)
+
+    // заголовок
+    surfaceText(S, "Консоль", x + 12, y + 8, 16, C_SUBTEXT, true)
+    if (con.running) {
+        surfaceCircle(S, x + 100, y + 16, 5, C_GREEN)
+        surfaceText(S, "програма працює", x + 112, y + 8, 14, C_GREEN)
+    }
+    var bw = uiButtonW("Очистити")
+    uiButton("con.clear", "Очистити", x + w - bw - 8, y + 4, bw, 26, "flat")
+
+    var inputH = 0
+    if (con.running) { inputH = 34 }
+    var lh = 18
+    var top = y + 36
+    var areaH = h - 36 - inputH - 4
+    var rows = max(1, toInt(areaH / lh))
+    surfaceClip(S, x, top, w, areaH)
+    var first = max(0, len(con.lines) - rows - con.scroll)
+    var i = first
+    var row = 0
+    while (i < len(con.lines) && row < rows) {
+        var item = con.lines[i]
+        var color = C_TEXT
+        if (item[1] == "err" || startsWith(item[0], "Runtime Error")) { color = C_RED }
+        if (item[1] == "info") { color = C_ACCENT }
+        if (item[1] == "ok") { color = C_GREEN }
+        if (item[1] == "in") { color = C_YELLOW }
+        var text = item[0]
+        if (item[1] == "in") { text = "> " + text }
+        surfaceText(S, text, x + 12, top + row * lh, 16, color)
+        i = i + 1
+        row = row + 1
+    }
+    surfaceUnclip(S)
+    uiRegion("console", x, top, w, areaH)
+
+    if (con.running) {
+        var iy = y + h - inputH - 2
+        var border = C_SURFACE
+        if (con.focused) { border = C_ACCENT }
+        surfaceRoundRect(S, x + 8, iy, w - 16, inputH - 4, 6, border)
+        surfaceRoundRect(S, x + 9, iy + 1, w - 18, inputH - 6, 6, C_BG)
+        if (len(con.input) == 0 && !con.focused) {
+            surfaceText(S, "Сюди можна писати відповідь програмі (Enter - надіслати)", x + 18, iy + 7, 16, C_DIM)
+        } else {
+            var tw = surfaceText(S, con.input, x + 18, iy + 7, 16, C_YELLOW)
+            if (con.focused) { surfaceRect(S, x + 18 + tw + 1, iy + 6, 2, 18, C_ACCENT) }
+        }
+        uiRegion("con.input", x + 8, iy, w - 16, inputH - 4)
+    }
+}

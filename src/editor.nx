@@ -1,0 +1,667 @@
+// Текстовий редактор коду (режим "Код").
+//
+// Текст - масив рядків. Курсор (cx, cy) - стовпчик і рядок; виділення - від
+// "якоря" (ax, ay) до курсора (ay = -1 - виділення нема). Скасування -
+// знімки рядків (рядки незмінні, тож знімок - лише копія масиву посилань).
+
+import "theme.nx"
+import "ui.nx"
+import "highlight.nx"
+
+struct Editor {
+    lines: array
+    cx: i32
+    cy: i32
+    ax: i32
+    ay: i32
+    wantCol: i32
+    top: i32
+    left: i32
+    path: string
+    dirty: bool
+    undo: array
+    redo: array
+    lastKind: string
+    lastTime: i32
+    hlSrc: array
+    hlIn: array
+    hlTok: array
+    hlOut: array
+    errLine: i32
+    fontSize: i32
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+    charW: i32
+    lineH: i32
+    gutterW: i32
+}
+
+func newEditor(text, path) {
+    var ed = Editor { lines: [], cx: 0, cy: 0, ax: 0, ay: -1, wantCol: 0, top: 0, left: 0,
+        path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
+        hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
+        x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40 }
+    edSetText(ed, text)
+    return ed
+}
+
+// ---------- текст ----------
+
+func cut(s, a, b) {
+    var n = len(s)
+    if (a < 0) { a = 0 }
+    if (b > n) { b = n }
+    if (b <= a) { return "" }
+    return substring(s, a, b - a)
+}
+
+func leadingSpaces(s) {
+    var i = 0
+    while (i < len(s) && s[i] == " ") { i = i + 1 }
+    return i
+}
+
+func normalizeText(text) {
+    text = replace(text, "\r\n", "\n")
+    text = replace(text, "\r", "\n")
+    return replace(text, "\t", "    ")
+}
+
+func edSetText(ed, text) {
+    ed.lines = split(normalizeText(text), "\n")
+    if (len(ed.lines) == 0) { ed.lines = [""] }
+    ed.cx = 0
+    ed.cy = 0
+    ed.ay = -1
+    ed.top = 0
+    ed.left = 0
+}
+
+func edText(ed) { return join(ed.lines, "\n") }
+
+// ---------- виділення ----------
+
+func edHasSel(ed) { return ed.ay >= 0 && (ed.ay != ed.cy || ed.ax != ed.cx) }
+
+// [y1, x1, y2, x2] - початок і кінець виділення в порядку тексту.
+func edSelRange(ed) {
+    if (ed.ay < ed.cy || (ed.ay == ed.cy && ed.ax <= ed.cx)) { return [ed.ay, ed.ax, ed.cy, ed.cx] }
+    return [ed.cy, ed.cx, ed.ay, ed.ax]
+}
+
+func edSelText(ed) {
+    if (!edHasSel(ed)) { return "" }
+    var r = edSelRange(ed)
+    if (r[0] == r[2]) { return cut(ed.lines[r[0]], r[1], r[3]) }
+    var parts = [cut(ed.lines[r[0]], r[1], len(ed.lines[r[0]]))]
+    var y = r[0] + 1
+    while (y < r[2]) { append(parts, ed.lines[y])  y = y + 1 }
+    append(parts, cut(ed.lines[r[2]], 0, r[3]))
+    return join(parts, "\n")
+}
+
+func edDeleteSel(ed) {
+    if (!edHasSel(ed)) { ed.ay = -1  return }
+    var r = edSelRange(ed)
+    var first = ed.lines[r[0]]
+    var last = ed.lines[r[2]]
+    ed.lines[r[0]] = cut(first, 0, r[1]) + cut(last, r[3], len(last))
+    var k = r[2] - r[0]
+    while (k > 0) { removeAt(ed.lines, r[0] + 1)  k = k - 1 }
+    ed.cy = r[0]
+    ed.cx = r[1]
+    ed.ay = -1
+}
+
+func edSelectAll(ed) {
+    ed.ay = 0
+    ed.ax = 0
+    ed.cy = len(ed.lines) - 1
+    ed.cx = len(ed.lines[ed.cy])
+}
+
+// ---------- скасування ----------
+
+func edSnapshot(ed) { return [slice(ed.lines, 0), ed.cx, ed.cy] }
+
+// Перед кожною зміною. Підряд набрані символи одного виду (kind) за
+// секунду - одна дія скасування, як у звичайних редакторах.
+func edBeginEdit(ed, kind) {
+    var now = timeMs()
+    if (kind != ed.lastKind || now - ed.lastTime > 1000 || kind == "other") {
+        append(ed.undo, edSnapshot(ed))
+        if (len(ed.undo) > 300) { removeAt(ed.undo, 0) }
+    }
+    ed.redo = []
+    ed.lastKind = kind
+    ed.lastTime = now
+    ed.dirty = true
+    ed.errLine = -1
+}
+
+func _restore(ed, snap) {
+    ed.lines = slice(snap[0], 0)
+    ed.cy = min(snap[2], len(ed.lines) - 1)
+    ed.cx = min(snap[1], len(ed.lines[ed.cy]))
+    ed.ay = -1
+    ed.dirty = true
+    ed.lastKind = ""
+}
+
+func edUndo(ed) {
+    if (len(ed.undo) == 0) { return }
+    append(ed.redo, edSnapshot(ed))
+    _restore(ed, pop(ed.undo))
+}
+
+func edRedo(ed) {
+    if (len(ed.redo) == 0) { return }
+    append(ed.undo, edSnapshot(ed))
+    _restore(ed, pop(ed.redo))
+}
+
+// ---------- зміни тексту ----------
+
+func edInsert(ed, text) {
+    edDeleteSel(ed)
+    var parts = split(normalizeText(text), "\n")
+    var line = ed.lines[ed.cy]
+    var before = cut(line, 0, ed.cx)
+    var after = cut(line, ed.cx, len(line))
+    if (len(parts) == 1) {
+        ed.lines[ed.cy] = before + parts[0] + after
+        ed.cx = ed.cx + len(parts[0])
+    } else {
+        ed.lines[ed.cy] = before + parts[0]
+        var k = 1
+        while (k < len(parts) - 1) {
+            insert(ed.lines, ed.cy + k, parts[k])
+            k = k + 1
+        }
+        var lastPart = parts[len(parts) - 1]
+        insert(ed.lines, ed.cy + k, lastPart + after)
+        ed.cy = ed.cy + k
+        ed.cx = len(lastPart)
+    }
+    ed.wantCol = ed.cx
+}
+
+func edBackspace(ed) {
+    if (edHasSel(ed)) { edDeleteSel(ed)  return }
+    var line = ed.lines[ed.cy]
+    if (ed.cx > 0) {
+        var n = 1
+        // Лише пробіли перед курсором - стираємо до попереднього кроку відступу.
+        if (leadingSpaces(line) >= ed.cx && ed.cx >= 4) {
+            n = ed.cx % 4
+            if (n == 0) { n = 4 }
+        } else {
+            // Порожня пара () "" [] {} - стираємо обидва символи.
+            var prev = line[ed.cx - 1]
+            if (ed.cx < len(line)) {
+                var nxt = line[ed.cx]
+                if ((prev == "(" && nxt == ")") || (prev == "[" && nxt == "]") || (prev == "{" && nxt == "}") || (prev == "\"" && nxt == "\"")) {
+                    ed.lines[ed.cy] = cut(line, 0, ed.cx - 1) + cut(line, ed.cx + 1, len(line))
+                    ed.cx = ed.cx - 1
+                    return
+                }
+            }
+        }
+        ed.lines[ed.cy] = cut(line, 0, ed.cx - n) + cut(line, ed.cx, len(line))
+        ed.cx = ed.cx - n
+    } else if (ed.cy > 0) {
+        var prevLine = ed.lines[ed.cy - 1]
+        ed.lines[ed.cy - 1] = prevLine + line
+        removeAt(ed.lines, ed.cy)
+        ed.cy = ed.cy - 1
+        ed.cx = len(prevLine)
+    }
+    ed.wantCol = ed.cx
+}
+
+func edDelete(ed) {
+    if (edHasSel(ed)) { edDeleteSel(ed)  return }
+    var line = ed.lines[ed.cy]
+    if (ed.cx < len(line)) {
+        ed.lines[ed.cy] = cut(line, 0, ed.cx) + cut(line, ed.cx + 1, len(line))
+    } else if (ed.cy < len(ed.lines) - 1) {
+        ed.lines[ed.cy] = line + ed.lines[ed.cy + 1]
+        removeAt(ed.lines, ed.cy + 1)
+    }
+}
+
+// Enter з автовідступом: новий рядок отримує відступ поточного, після "{" -
+// ще +4, а якщо курсор стоїть між { і } - дужка переїжджає на свій рядок.
+func edNewline(ed) {
+    edDeleteSel(ed)
+    var line = ed.lines[ed.cy]
+    var indent = leadingSpaces(line)
+    if (indent > ed.cx) { indent = ed.cx }
+    var before = cut(line, 0, ed.cx)
+    var after = trim(cut(line, ed.cx, len(line)))
+    var extra = 0
+    var tb = trim(before)
+    if (len(tb) > 0 && (endsWith(tb, "{") || endsWith(tb, "[") || endsWith(tb, "("))) { extra = 4 }
+    ed.lines[ed.cy] = before
+    var pad = repeat(" ", indent + extra)
+    if (extra > 0 && (startsWith(after, "}") || startsWith(after, "]") || startsWith(after, ")"))) {
+        insert(ed.lines, ed.cy + 1, pad)
+        insert(ed.lines, ed.cy + 2, repeat(" ", indent) + after)
+    } else {
+        insert(ed.lines, ed.cy + 1, pad + after)
+    }
+    ed.cy = ed.cy + 1
+    ed.cx = len(pad)
+    ed.wantCol = ed.cx
+}
+
+func _selLines(ed) {
+    if (!edHasSel(ed)) { return [ed.cy, ed.cy] }
+    var r = edSelRange(ed)
+    var y2 = r[2]
+    if (r[3] == 0 && y2 > r[0]) { y2 = y2 - 1 }
+    return [r[0], y2]
+}
+
+func edIndent(ed, outdent) {
+    var ys = _selLines(ed)
+    var multi = edHasSel(ed) && ys[1] > ys[0]
+    if (!multi && !outdent) {
+        edDeleteSel(ed)
+        edInsert(ed, repeat(" ", 4 - ed.cx % 4))
+        return
+    }
+    var y = ys[0]
+    while (y <= ys[1]) {
+        var line = ed.lines[y]
+        if (outdent) {
+            var n = min(4, leadingSpaces(line))
+            ed.lines[y] = cut(line, n, len(line))
+            if (y == ed.cy) { ed.cx = max(0, ed.cx - n) }
+            if (y == ed.ay) { ed.ax = max(0, ed.ax - n) }
+        } else if (len(trim(line)) > 0) {
+            ed.lines[y] = "    " + line
+            if (y == ed.cy) { ed.cx = ed.cx + 4 }
+            if (y == ed.ay) { ed.ax = ed.ax + 4 }
+        }
+        y = y + 1
+    }
+}
+
+// Ctrl+/ - закоментувати/розкоментувати рядки.
+func edToggleComment(ed) {
+    var ys = _selLines(ed)
+    var allCommented = true
+    var minIndent = 100000
+    var y = ys[0]
+    while (y <= ys[1]) {
+        var t = trim(ed.lines[y])
+        if (len(t) > 0) {
+            if (!startsWith(t, "//")) { allCommented = false }
+            minIndent = min(minIndent, leadingSpaces(ed.lines[y]))
+        }
+        y = y + 1
+    }
+    if (minIndent == 100000) { minIndent = 0 }
+    y = ys[0]
+    while (y <= ys[1]) {
+        var line = ed.lines[y]
+        if (len(trim(line)) > 0) {
+            if (allCommented) {
+                var at = indexOf(line, "//")
+                var drop = 2
+                if (at + 2 < len(line) && line[at + 2] == " ") { drop = 3 }
+                ed.lines[y] = cut(line, 0, at) + cut(line, at + drop, len(line))
+            } else {
+                ed.lines[y] = cut(line, 0, minIndent) + "// " + cut(line, minIndent, len(line))
+            }
+        }
+        y = y + 1
+    }
+    ed.cx = min(ed.cx, len(ed.lines[ed.cy]))
+    if (ed.ay >= 0) { ed.ax = min(ed.ax, len(ed.lines[ed.ay])) }
+}
+
+func edDuplicateLine(ed) {
+    insert(ed.lines, ed.cy + 1, ed.lines[ed.cy])
+    ed.cy = ed.cy + 1
+}
+
+// Набраний символ (подія "text"): автопари дужок і лапок.
+func edType(ed, t) {
+    var line = ed.lines[ed.cy]
+    var nxt = ""
+    if (ed.cx < len(line)) { nxt = line[ed.cx] }
+    if (!edHasSel(ed) && (t == ")" || t == "]" || t == "}" || t == "\"") && nxt == t) {
+        ed.cx = ed.cx + 1
+        return
+    }
+    if (t == "}" && !edHasSel(ed) && leadingSpaces(line) == len(line) && len(line) >= 4) {
+        ed.lines[ed.cy] = repeat(" ", len(line) - 4)
+        ed.cx = len(line) - 4
+    }
+    var freeAfter = nxt == "" || nxt == " " || nxt == ")" || nxt == "]" || nxt == "}" || nxt == ","
+    var close = ""
+    if (t == "(") { close = ")" }
+    if (t == "[") { close = "]" }
+    if (t == "{") { close = "}" }
+    if (t == "\"") {
+        var prevCh = ""
+        if (ed.cx > 0) { prevCh = line[ed.cx - 1] }
+        if (prevCh != "\\" && !isIdentPart(charCode(prevCh + " "))) { close = "\"" }
+    }
+    if (close != "" && freeAfter && !edHasSel(ed)) {
+        edInsert(ed, t + close)
+        ed.cx = ed.cx - 1
+        return
+    }
+    edInsert(ed, t)
+}
+
+// ---------- рух курсора ----------
+
+func _isWordAt(line, i) { return i >= 0 && i < len(line) && isIdentPart(charCode(line[i])) }
+
+func edWordLeft(ed) {
+    var line = ed.lines[ed.cy]
+    var i = ed.cx
+    if (i == 0) {
+        if (ed.cy > 0) { ed.cy = ed.cy - 1  ed.cx = len(ed.lines[ed.cy]) }
+        return
+    }
+    while (i > 0 && line[i - 1] == " ") { i = i - 1 }
+    if (_isWordAt(line, i - 1)) { while (_isWordAt(line, i - 1)) { i = i - 1 } }
+    else if (i > 0) { i = i - 1 }
+    ed.cx = i
+}
+
+func edWordRight(ed) {
+    var line = ed.lines[ed.cy]
+    var i = ed.cx
+    if (i >= len(line)) {
+        if (ed.cy < len(ed.lines) - 1) { ed.cy = ed.cy + 1  ed.cx = 0 }
+        return
+    }
+    if (_isWordAt(line, i)) { while (_isWordAt(line, i)) { i = i + 1 } }
+    else { i = i + 1 }
+    while (i < len(line) && line[i] == " ") { i = i + 1 }
+    ed.cx = i
+}
+
+func edSelectWord(ed) {
+    var line = ed.lines[ed.cy]
+    var a = ed.cx
+    var b = ed.cx
+    if (!_isWordAt(line, a) && _isWordAt(line, a - 1)) { a = a - 1  b = a }
+    if (!_isWordAt(line, a)) { return }
+    while (_isWordAt(line, a - 1)) { a = a - 1 }
+    while (_isWordAt(line, b)) { b = b + 1 }
+    ed.ay = ed.cy
+    ed.ax = a
+    ed.cx = b
+}
+
+func _visibleRows(ed) { return max(1, toInt(ed.h / ed.lineH)) }
+
+// Рух з/без Shift: з Shift виділення розтягується від якоря.
+func _beginMove(ed, shift) {
+    if (shift) { if (ed.ay < 0) { ed.ay = ed.cy  ed.ax = ed.cx } }
+    else { ed.ay = -1 }
+}
+
+func edMoveKey(ed, key, ctrl, shift) {
+    var hadSel = edHasSel(ed)
+    var r = edSelRange(ed)
+    _beginMove(ed, shift)
+    var keepWant = false
+    if (key == "Left") {
+        if (hadSel && !shift) { ed.cy = r[0]  ed.cx = r[1] }
+        else if (ctrl) { edWordLeft(ed) }
+        else if (ed.cx > 0) { ed.cx = ed.cx - 1 }
+        else if (ed.cy > 0) { ed.cy = ed.cy - 1  ed.cx = len(ed.lines[ed.cy]) }
+    } else if (key == "Right") {
+        if (hadSel && !shift) { ed.cy = r[2]  ed.cx = r[3] }
+        else if (ctrl) { edWordRight(ed) }
+        else if (ed.cx < len(ed.lines[ed.cy])) { ed.cx = ed.cx + 1 }
+        else if (ed.cy < len(ed.lines) - 1) { ed.cy = ed.cy + 1  ed.cx = 0 }
+    } else if (key == "Up" || key == "Down" || key == "PageUp" || key == "PageDown") {
+        var step = 1
+        if (key == "PageUp" || key == "PageDown") { step = _visibleRows(ed) - 1 }
+        if (key == "Up" || key == "PageUp") { step = -step }
+        if (ctrl && (key == "Up" || key == "Down")) {
+            ed.top = clamp(ed.top + step, 0, max(0, len(ed.lines) - 1))
+            return
+        }
+        ed.cy = clamp(ed.cy + step, 0, len(ed.lines) - 1)
+        ed.cx = min(ed.wantCol, len(ed.lines[ed.cy]))
+        keepWant = true
+    } else if (key == "Home") {
+        if (ctrl) { ed.cy = 0  ed.cx = 0 }
+        else {
+            var ind = leadingSpaces(ed.lines[ed.cy])
+            if (ed.cx == ind) { ed.cx = 0 } else { ed.cx = ind }
+        }
+    } else if (key == "End") {
+        if (ctrl) { ed.cy = len(ed.lines) - 1 }
+        ed.cx = len(ed.lines[ed.cy])
+    }
+    if (!keepWant) { ed.wantCol = ed.cx }
+}
+
+func edEnsureVisible(ed) {
+    var rows = _visibleRows(ed)
+    if (ed.cy < ed.top) { ed.top = ed.cy }
+    if (ed.cy > ed.top + rows - 2) { ed.top = max(0, ed.cy - rows + 2) }
+    var cols = max(4, toInt((ed.w - ed.gutterW - 12) / ed.charW))
+    if (ed.cx < ed.left) { ed.left = max(0, ed.cx - 4) }
+    if (ed.cx > ed.left + cols - 2) { ed.left = ed.cx - cols + 2 }
+}
+
+func edScroll(ed, lines) {
+    ed.top = clamp(ed.top + lines, 0, max(0, len(ed.lines) - 3))
+}
+
+func edGoToLine(ed, line) {
+    ed.cy = clamp(line, 0, len(ed.lines) - 1)
+    ed.cx = leadingSpaces(ed.lines[ed.cy])
+    ed.ay = -1
+    var rows = _visibleRows(ed)
+    if (ed.cy < ed.top || ed.cy >= ed.top + rows - 1) { ed.top = max(0, ed.cy - toInt(rows / 3)) }
+}
+
+// Пікселі -> позиція в тексті.
+func edPosAt(ed, mx, my) {
+    var row = toInt(floor((my - ed.y - 4) / ed.lineH)) + ed.top
+    row = clamp(row, 0, len(ed.lines) - 1)
+    var col = toInt(round((mx - ed.x - ed.gutterW) / ed.charW)) + ed.left
+    col = clamp(col, 0, len(ed.lines[row]))
+    return [row, col]
+}
+
+// ---------- клавіатура ----------
+
+// Повертає true, якщо клавішу оброблено.
+func edKey(ed, e) {
+    var k = e.key
+    if (e.ctrl) {
+        if (k == "a") { edSelectAll(ed)  return true }
+        if (k == "c") {
+            if (edHasSel(ed)) { clipboardSet(edSelText(ed)) }
+            else { clipboardSet(ed.lines[ed.cy] + "\n") }
+            return true
+        }
+        if (k == "x") {
+            edBeginEdit(ed, "other")
+            if (edHasSel(ed)) {
+                clipboardSet(edSelText(ed))
+                edDeleteSel(ed)
+            } else {
+                clipboardSet(ed.lines[ed.cy] + "\n")
+                if (len(ed.lines) > 1) {
+                    removeAt(ed.lines, ed.cy)
+                    ed.cy = min(ed.cy, len(ed.lines) - 1)
+                } else { ed.lines[0] = "" }
+                ed.cx = min(ed.cx, len(ed.lines[ed.cy]))
+            }
+            edEnsureVisible(ed)
+            return true
+        }
+        if (k == "v") {
+            var t = clipboardGet()
+            if (len(t) > 0) {
+                edBeginEdit(ed, "other")
+                edInsert(ed, t)
+                edEnsureVisible(ed)
+            }
+            return true
+        }
+        if (k == "z" && !e.shift) { edUndo(ed)  edEnsureVisible(ed)  return true }
+        if (k == "y" || (k == "z" && e.shift)) { edRedo(ed)  edEnsureVisible(ed)  return true }
+        if (k == "d") { edBeginEdit(ed, "other")  edDuplicateLine(ed)  edEnsureVisible(ed)  return true }
+        if (k == "/") { edBeginEdit(ed, "other")  edToggleComment(ed)  return true }
+        if (k == "=" || k == "+") { edZoom(ed, 1)  return true }
+        if (k == "-") { edZoom(ed, -1)  return true }
+    }
+    if (k == "Left" || k == "Right" || k == "Up" || k == "Down" || k == "Home" || k == "End" || k == "PageUp" || k == "PageDown") {
+        edMoveKey(ed, k, e.ctrl, e.shift)
+        if (!(e.ctrl && (k == "Up" || k == "Down"))) { edEnsureVisible(ed) }
+        return true
+    }
+    if (k == "Backspace") { edBeginEdit(ed, "del")  edBackspace(ed)  edEnsureVisible(ed)  return true }
+    if (k == "Delete") { edBeginEdit(ed, "del")  edDelete(ed)  edEnsureVisible(ed)  return true }
+    if (k == "Enter") { edBeginEdit(ed, "other")  edNewline(ed)  edEnsureVisible(ed)  return true }
+    if (k == "Tab") { edBeginEdit(ed, "other")  edIndent(ed, e.shift)  edEnsureVisible(ed)  return true }
+    if (k == "Escape" && edHasSel(ed)) { ed.ay = -1  return true }
+    return false
+}
+
+func edTextInput(ed, t) {
+    edBeginEdit(ed, "type")
+    edType(ed, t)
+    edEnsureVisible(ed)
+}
+
+var ZOOM_SIZES = [12, 14, 16, 20, 24, 28, 32]
+
+func edZoom(ed, dir) {
+    var i = indexOf(ZOOM_SIZES, ed.fontSize)
+    if (i < 0) { i = 2 }
+    i = clamp(i + dir, 0, len(ZOOM_SIZES) - 1)
+    ed.fontSize = ZOOM_SIZES[i]
+}
+
+// ---------- малювання ----------
+
+// Кеш підсвітки: токени перераховуються лише для змінених рядків (і тих,
+// чий стан "всередині /* */" на вході змінився). Прохід зверху до
+// останнього видимого рядка - щоб стан коментаря був правильним.
+func _warmTokens(ed, upTo) {
+    var i = 0
+    while (i <= upTo && i < len(ed.lines)) {
+        while (len(ed.hlSrc) < len(ed.lines)) {
+            append(ed.hlSrc, null) append(ed.hlIn, false) append(ed.hlTok, []) append(ed.hlOut, false)
+        }
+        var inState = false
+        if (i > 0) { inState = ed.hlOut[i - 1] }
+        if (ed.hlSrc[i] != ed.lines[i] || ed.hlIn[i] != inState) {
+            var r = hlLine(ed.lines[i], inState)
+            ed.hlSrc[i] = ed.lines[i]
+            ed.hlIn[i] = inState
+            ed.hlTok[i] = r[0]
+            ed.hlOut[i] = r[1]
+        }
+        i = i + 1
+    }
+}
+
+func edDraw(ed, x, y, w, h, focused) {
+    ed.x = x
+    ed.y = y
+    ed.w = w
+    ed.h = h
+    var fs = ed.fontSize
+    ed.charW = textWidth("M", fs)
+    ed.lineH = textHeight(fs) + 4
+    var digits = len(toString(len(ed.lines)))
+    ed.gutterW = (max(digits, 2) + 2) * ed.charW + 8
+    var cw = ed.charW
+    var lh = ed.lineH
+    var textX = x + ed.gutterW
+
+    surfaceRect(S, x, y, w, h, C_BG)
+    surfaceRect(S, x, y, ed.gutterW - 6, h, C_PANEL)
+    surfaceClip(S, x, y, w, h)
+
+    var rows = toInt(h / lh) + 1
+    var last = min(len(ed.lines) - 1, ed.top + rows)
+    _warmTokens(ed, last)
+    var sel = [-1, 0, -1, 0]
+    if (edHasSel(ed)) { sel = edSelRange(ed) }
+
+    var row = 0
+    while (row < rows) {
+        var li = ed.top + row
+        if (li >= len(ed.lines)) { break }
+        var ly = y + 4 + row * lh
+        var line = ed.lines[li]
+        if (li == ed.errLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_ERRLINE) }
+        else if (li == ed.cy && focused && !edHasSel(ed)) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_CURLINE) }
+
+        // виділення
+        if (sel[0] >= 0 && li >= sel[0] && li <= sel[2]) {
+            var sx = 0
+            var ex = len(line) + 1
+            if (li == sel[0]) { sx = sel[1] }
+            if (li == sel[2]) { ex = sel[3] }
+            if (ex > sx) {
+                surfaceRect(S, textX + (sx - ed.left) * cw, ly - 2, (ex - sx) * cw, lh, C_SELECTION)
+            }
+        }
+
+        // текст за токенами
+        surfaceClip(S, textX - 2, y, w - ed.gutterW + 2, h)
+        var toks = ed.hlTok[li]
+        var k = 0
+        var nt = len(toks)
+        while (k < nt) {
+            var ts = toks[k]
+            var te = toks[k + 1]
+            if (te > ed.left) {
+                surfaceText(S, substring(line, ts, te - ts), textX + (ts - ed.left) * cw, ly, fs, HL_COLORS[toks[k + 2]])
+            }
+            k = k + 3
+        }
+        surfaceUnclip(S)
+
+        // номер рядка
+        var num = toString(li + 1)
+        var numColor = C_DIM
+        if (li == ed.cy) { numColor = C_SUBTEXT }
+        if (li == ed.errLine) {
+            numColor = C_RED
+            surfaceCircle(S, x + 8, ly + toInt(lh / 2) - 2, 4, C_RED)
+        }
+        surfaceText(S, num, x + ed.gutterW - 14 - len(num) * cw, ly, fs, numColor)
+        row = row + 1
+    }
+
+    // курсор
+    if (focused && ed.cy >= ed.top && ed.cy < ed.top + rows) {
+        var cxp = textX + (ed.cx - ed.left) * cw
+        if (cxp >= textX - 1) {
+            surfaceRect(S, cxp, y + 4 + (ed.cy - ed.top) * lh - 1, 2, lh - 2, C_ACCENT)
+        }
+    }
+
+    // смуга прокрутки
+    if (len(ed.lines) > rows - 1) {
+        var total = len(ed.lines) + rows - 2
+        var barH = max(24, toInt(h * (rows - 1) / total))
+        var barY = y + toInt((h - barH) * ed.top / max(1, len(ed.lines) - 1))
+        surfaceRoundRect(S, x + w - 8, barY, 6, barH, 3, C_SURFACE2)
+    }
+    surfaceUnclip(S)
+    uiRegion("editor", x, y, w, h)
+}

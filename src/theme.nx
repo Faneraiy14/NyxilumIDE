@@ -1,0 +1,34 @@
+// Кольори IDE (темна тема). Одне місце - щоб змінити вигляд усієї IDE.
+
+var C_BG = 0x1e1e2e          // фон редактора
+var C_PANEL = 0x181825       // бічні панелі
+var C_PANEL2 = 0x11111b      // найтемніше: верхня смуга, консоль
+var C_SURFACE = 0x313244     // кнопки
+var C_SURFACE2 = 0x45475a    // кнопки під мишею
+var C_BORDER = 0x2a2b3c
+var C_TEXT = 0xcdd6f4
+var C_SUBTEXT = 0xa6adc8
+var C_DIM = 0x6c7086
+var C_ACCENT = 0x89b4fa
+var C_GREEN = 0xa6e3a1
+var C_RED = 0xf38ba8
+var C_YELLOW = 0xf9e2af
+var C_PEACH = 0xfab387
+var C_MAUVE = 0xcba6f7
+var C_TEAL = 0x94e2d5
+var C_SELECTION = 0x3e4060
+var C_CURLINE = 0x262637
+var C_ERRLINE = 0x3b2433
+
+// Підсвітка коду: вид токена -> колір
+var HL_COLORS = [0xcdd6f4, 0xcba6f7, 0xa6e3a1, 0xfab387, 0x6c7086, 0x89b4fa, 0xf9e2af, 0x94e2d5, 0x9399b2, 0xfab387]
+var HL_TEXT = 0
+var HL_KEYWORD = 1
+var HL_STRING = 2
+var HL_NUMBER = 3
+var HL_COMMENT = 4
+var HL_BUILTIN = 5
+var HL_FUNC = 6
+var HL_TYPE = 7
+var HL_PUNCT = 8
+var HL_INTERP = 9

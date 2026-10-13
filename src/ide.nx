@@ -1,0 +1,535 @@
+// Nyx IDE - середовище програмування для NyxilumLang, написане на NyxilumLang.
+//
+//   nx ide.nx [тека-з-програмами]
+//
+// Без аргументу програми лежать у ~/NyxПрограми (створюється з прикладом).
+
+import "theme.nx"
+import "ui.nx"
+import "editor.nx"
+import "console.nx"
+
+var TOP_H = 48
+var LEFT_W = 230
+var STATUS_H = 26
+
+struct App {
+    mode: string
+    dir: string
+    files: array
+    editors: map
+    current: string
+    con: any
+    focus: string
+    drag: string
+    consoleH: i32
+    lastClickTime: i32
+    lastClickX: i32
+    lastClickY: i32
+    clickCount: i32
+    dialog: any
+    status: string
+    statusTime: i32
+}
+
+var app = null
+
+// ---------- файли ----------
+
+func homeDir() {
+    var h = osEnv("HOME")
+    if (h == null || h == "") { h = osEnv("USERPROFILE") }
+    if (h == null || h == "") { h = osCwd() }
+    return h
+}
+
+func joinPath(dir, name) {
+    if (endsWith(dir, "/") || endsWith(dir, "\\")) { return dir + name }
+    return dir + "/" + name
+}
+
+func fileName(path) {
+    var parts = split(replace(path, "\\", "/"), "/")
+    return parts[len(parts) - 1]
+}
+
+// Тека IDE (там, де лежить src/): приклади, гайд.
+func ideHome() { return joinPath(scriptDir(), "..") }
+
+func refreshFiles() {
+    var names = []
+    for n in listDir(app.dir) {
+        if (endsWith(n, ".nx") && fileExists(joinPath(app.dir, n))) { append(names, n) }
+    }
+    app.files = sort(names)
+}
+
+func currentEditor() {
+    if (app.current == "") { return null }
+    return mapGet(app.editors, app.current)
+}
+
+func openFile(path) {
+    if (!mapHas(app.editors, path)) {
+        var text = ""
+        if (fileExists(path)) { text = readFile(path) }
+        mapSet(app.editors, path, newEditor(text, path))
+    }
+    app.current = path
+    app.focus = "editor"
+    surfaceTitle(S, "Nyx IDE — " + fileName(path))
+}
+
+func saveEditor(ed) {
+    if (ed == null || !ed.dirty) { return }
+    writeFile(ed.path, edText(ed))
+    ed.dirty = false
+}
+
+func saveAll() {
+    for p in mapKeys(app.editors) { saveEditor(mapGet(app.editors, p)) }
+}
+
+func setStatus(text) {
+    app.status = text
+    app.statusTime = timeMs()
+}
+
+func newFile(name) {
+    name = trim(name)
+    if (name == "") { return }
+    if (!endsWith(name, ".nx")) { name = name + ".nx" }
+    var path = joinPath(app.dir, name)
+    if (fileExists(path)) {
+        setStatus("Файл " + name + " вже є - відкрито його")
+    } else {
+        writeFile(path, "func main() {\n    print(\"Привіт!\")\n}\n")
+    }
+    refreshFiles()
+    openFile(path)
+}
+
+func freeName() {
+    var i = 1
+    while (fileExists(joinPath(app.dir, "програма" + toString(i) + ".nx"))) { i = i + 1 }
+    return "програма" + toString(i)
+}
+
+// ---------- запуск ----------
+
+func runCurrent() {
+    var ed = currentEditor()
+    if (ed == null) { return }
+    saveAll()
+    ed.errLine = -1
+    conRun(app.con, ed.path, app.dir)
+    app.focus = "console"
+}
+
+// Після завершення з помилкою - підсвітити рядок у редакторі й перейти до нього.
+func afterPoll() {
+    var con = app.con
+    if (!con.running && con.errLine >= 0) {
+        var ed = currentEditor()
+        if (ed != null) {
+            ed.errLine = con.errLine
+            if (ed.errLine < len(ed.lines)) { edGoToLine(ed, ed.errLine) }
+            app.focus = "editor"
+        }
+        con.errLine = -1
+    }
+}
+
+// ---------- діалог (назва нової програми) ----------
+
+struct Dialog {
+    title: string
+    text: string
+    action: string
+}
+
+func openDialog(title, text, action) {
+    app.dialog = Dialog { title: title, text: text, action: action }
+    app.focus = "dialog"
+}
+
+func closeDialog(ok) {
+    var d = app.dialog
+    app.dialog = null
+    app.focus = "editor"
+    if (ok && d.action == "new") { newFile(d.text) }
+}
+
+func drawDialog() {
+    var d = app.dialog
+    var W = surfaceWidth(S)
+    var H = surfaceHeight(S)
+    surfaceRect(S, 0, 0, W, H, 0x99000000)
+    var w = 460
+    var h = 170
+    var x = toInt((W - w) / 2)
+    var y = toInt((H - h) / 2)
+    surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
+    surfaceText(S, d.title, x + 20, y + 18, 20, C_TEXT, true)
+    surfaceRoundRect(S, x + 20, y + 58, w - 40, 36, 6, C_ACCENT)
+    surfaceRoundRect(S, x + 21, y + 59, w - 42, 34, 6, C_BG)
+    var tw = surfaceText(S, d.text, x + 32, y + 68, 16, C_TEXT)
+    surfaceRect(S, x + 33 + tw, y + 66, 2, 20, C_ACCENT)
+    surfaceText(S, ".nx", x + w - 60, y + 68, 16, C_DIM)
+    uiButton("dialog.cancel", "Скасувати", x + w - 250, y + h - 52, 110, 34, "normal")
+    uiButton("dialog.ok", "Створити", x + w - 130, y + h - 52, 110, 34, "primary")
+}
+
+func dialogKey(e) {
+    var d = app.dialog
+    if (e.key == "Enter") {
+        closeDialog(true)
+        return
+    }
+    if (e.key == "Escape") {
+        closeDialog(false)
+        return
+    }
+    if (e.key == "Backspace" && len(d.text) > 0) { d.text = substring(d.text, 0, len(d.text) - 1) }
+}
+
+// ---------- малювання ----------
+
+func drawTopBar(W) {
+    surfaceRect(S, 0, 0, W, TOP_H, C_PANEL2)
+    surfaceText(S, "Nyx", 16, 12, 24, C_ACCENT, true)
+    surfaceText(S, "IDE", 16 + textWidth("Nyx ", 24, true), 12, 24, C_TEXT)
+
+    var tx = LEFT_W
+    var blocksKind = "tab"
+    var codeKind = "tab"
+    if (app.mode == "blocks") { blocksKind = "tabOn" } else { codeKind = "tabOn" }
+    uiButton("mode.blocks", "Блоки", tx, 0, 110, TOP_H, blocksKind)
+    uiButton("mode.code", "Код", tx + 110, 0, 110, TOP_H, codeKind)
+
+    var x = W - 16
+    var helpW = uiButtonW("Довідка")
+    x = x - helpW
+    uiButton("help", "Довідка", x, 8, helpW, 32, "normal")
+    var saveW = uiButtonW("Зберегти")
+    x = x - saveW - 8
+    uiButton("save", "Зберегти", x, 8, saveW, 32, "normal")
+    if (app.con.running) {
+        var stopW = uiButtonW("■ Зупинити")
+        x = x - stopW - 8
+        uiButton("stop", "■ Зупинити", x, 8, stopW, 32, "danger")
+    } else {
+        var runW = uiButtonW("▶ Запустити")
+        x = x - runW - 8
+        uiButton("run", "▶ Запустити", x, 8, runW, 32, "primary")
+    }
+}
+
+func drawFiles(H) {
+    var y0 = TOP_H
+    var h = H - TOP_H - STATUS_H
+    surfaceRect(S, 0, y0, LEFT_W, h, C_PANEL)
+    surfaceText(S, "Мої програми", 16, y0 + 14, 16, C_SUBTEXT, true)
+    var y = y0 + 44
+    for name in app.files {
+        var path = joinPath(app.dir, name)
+        var on = path == app.current
+        var hover = uiHover(0, y, LEFT_W, 30)
+        if (on) { surfaceRect(S, 0, y, LEFT_W, 30, C_SURFACE) }
+        else if (hover) { surfaceRect(S, 0, y, LEFT_W, 30, C_BG) }
+        if (on) { surfaceRect(S, 0, y, 3, 30, C_ACCENT) }
+        var label = substring(name, 0, len(name) - 3)
+        var color = C_SUBTEXT
+        if (on) { color = C_TEXT }
+        surfaceText(S, uiFit(label, LEFT_W - 50, 16), 20, y + 7, 16, color)
+        if (mapHas(app.editors, path) && mapGet(app.editors, path).dirty) {
+            surfaceCircle(S, LEFT_W - 20, y + 15, 4, C_PEACH)
+        }
+        uiRegion("file:" + path, 0, y, LEFT_W, 30)
+        y = y + 30
+        if (y > y0 + h - 60) { break }
+    }
+    uiButton("newfile", "+ Нова програма", 12, y0 + h - 46, LEFT_W - 24, 34, "normal")
+}
+
+func drawStatus(W, H) {
+    var y = H - STATUS_H
+    surfaceRect(S, 0, y, W, STATUS_H, C_PANEL2)
+    var ed = currentEditor()
+    var left = ""
+    if (ed != null) {
+        left = fileName(ed.path) + "   рядок " + toString(ed.cy + 1) + ", стовпчик " + toString(ed.cx + 1)
+        if (ed.dirty) { left = left + "   • не збережено" } else { left = left + "   √ збережено" }
+    }
+    surfaceText(S, left, 12, y + 5, 14, C_SUBTEXT)
+    var msg = "F5 - запустити   Ctrl+S - зберегти   Ctrl+Z - скасувати   Ctrl+/ - коментар   Ctrl+= / Ctrl+- - шрифт"
+    if (app.status != "" && timeMs() - app.statusTime < 4000) { msg = app.status }
+    var mw = textWidth(msg, 14)
+    surfaceText(S, msg, W - mw - 12, y + 5, 14, C_DIM)
+}
+
+func drawBlocksPlaceholder(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_BG)
+    var t1 = "Режим блоків скоро буде тут"
+    var t2 = "Поки що пиши код у вкладці «Код»"
+    surfaceText(S, t1, x + toInt((w - textWidth(t1, 24, true)) / 2), y + toInt(h / 2) - 30, 24, C_TEXT, true)
+    surfaceText(S, t2, x + toInt((w - textWidth(t2, 16)) / 2), y + toInt(h / 2) + 10, 16, C_SUBTEXT)
+}
+
+func layoutConsoleH(H) {
+    var maxH = H - TOP_H - STATUS_H - 120
+    app.consoleH = clamp(app.consoleH, 90, max(90, maxH))
+    return app.consoleH
+}
+
+func draw() {
+    var W = surfaceWidth(S)
+    var H = surfaceHeight(S)
+    uiBegin()
+    surfaceClear(S, C_BG)
+    drawTopBar(W)
+    drawFiles(H)
+
+    var cx = LEFT_W
+    var cw = W - LEFT_W
+    var conH = layoutConsoleH(H)
+    var edY = TOP_H
+    var edH = H - TOP_H - STATUS_H - conH
+    var ed = currentEditor()
+    if (app.mode == "blocks") {
+        drawBlocksPlaceholder(cx, edY, cw, edH)
+    } else if (ed != null) {
+        edDraw(ed, cx, edY, cw, edH, app.focus == "editor" && app.dialog == null)
+    }
+    conDraw(app.con, cx, edY + edH, cw, conH)
+    uiRegion("split", cx, edY + edH - 3, cw, 7)
+    drawStatus(W, H)
+    if (app.dialog != null) { drawDialog() }
+    surfacePresent(S)
+}
+
+// ---------- події ----------
+
+func doAction(id) {
+    if (id == "run") { runCurrent() }
+    else if (id == "stop") { conStop(app.con) }
+    else if (id == "save") {
+        saveAll()
+        setStatus("Збережено √")
+    }
+    else if (id == "mode.blocks") { app.mode = "blocks" }
+    else if (id == "mode.code") { app.mode = "code" }
+    else if (id == "newfile") { openDialog("Назва нової програми", freeName(), "new") }
+    else if (id == "con.clear") { conClear(app.con) }
+    else if (id == "dialog.ok") { closeDialog(true) }
+    else if (id == "dialog.cancel") { closeDialog(false) }
+    else if (id == "help") { setStatus("Довідку й гайд додамо разом з режимом блоків") }
+    else if (startsWith(id, "file:")) {
+        saveAll()
+        openFile(substring(id, 5, len(id) - 5))
+        app.mode = "code"
+    }
+}
+
+func onMouseDown(e) {
+    uiMouseX = e.x
+    uiMouseY = e.y
+    var id = uiHit(e.x, e.y)
+    if (app.dialog != null && !startsWith(id, "dialog.")) { return }
+
+    // подвійний/потрійний клік: те саме місце (±4 px) протягом 400 мс
+    if (timeMs() - app.lastClickTime < 400 && abs(e.x - app.lastClickX) < 5 && abs(e.y - app.lastClickY) < 5) {
+        app.clickCount = app.clickCount + 1
+    } else { app.clickCount = 1 }
+    app.lastClickTime = timeMs()
+    app.lastClickX = e.x
+    app.lastClickY = e.y
+
+    if (e.button != 1) { return }
+    var ed = currentEditor()
+    if (id == "editor" && ed != null) {
+        app.focus = "editor"
+        app.con.focused = false
+        var pos = edPosAt(ed, e.x, e.y)
+        var shift = e.shift == true
+        if (shift) {
+            if (ed.ay < 0) {
+                ed.ay = ed.cy
+                ed.ax = ed.cx
+            }
+        } else { ed.ay = -1 }
+        ed.cy = pos[0]
+        ed.cx = pos[1]
+        ed.wantCol = ed.cx
+        if (app.clickCount == 2) { edSelectWord(ed) }
+        else if (app.clickCount >= 3) {
+            ed.ay = ed.cy
+            ed.ax = 0
+            ed.cx = len(ed.lines[ed.cy])
+        } else {
+            if (!shift) {
+                ed.ay = ed.cy
+                ed.ax = ed.cx
+            }
+            app.drag = "editor"
+        }
+        return
+    }
+    if (id == "split") {
+        app.drag = "split"
+        return
+    }
+    if (id == "con.input") {
+        app.focus = "console"
+        app.con.focused = true
+        return
+    }
+    uiPressedId = id
+}
+
+func onMouseUp(e) {
+    var id = uiHit(e.x, e.y)
+    if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
+    uiPressedId = ""
+    app.drag = ""
+}
+
+func onMouseMove(e) {
+    uiMouseX = e.x
+    uiMouseY = e.y
+    var ed = currentEditor()
+    if (app.drag == "editor" && ed != null) {
+        var pos = edPosAt(ed, e.x, e.y)
+        ed.cy = pos[0]
+        ed.cx = pos[1]
+        if (e.y < ed.y) { edScroll(ed, -1) }
+        if (e.y > ed.y + ed.h) { edScroll(ed, 1) }
+    }
+    if (app.drag == "split") {
+        app.consoleH = surfaceHeight(S) - STATUS_H - e.y
+    }
+}
+
+func onWheel(e) {
+    var id = uiHit(e.x, e.y)
+    var ed = currentEditor()
+    if (id == "editor" && ed != null) {
+        if (e.ctrl) { edZoom(ed, -e.dy) } else { edScroll(ed, e.dy * 3) }
+    } else if (id == "console") {
+        app.con.scroll = max(0, app.con.scroll - e.dy * 3)
+    }
+}
+
+func onKey(e) {
+    var k = e.key
+    if (app.dialog != null) {
+        dialogKey(e)
+        return
+    }
+    if (k == "F5" || (e.ctrl && k == "r")) {
+        if (app.con.running) { conStop(app.con) } else { runCurrent() }
+        return
+    }
+    if (e.ctrl && k == "s") {
+        saveAll()
+        setStatus("Збережено √")
+        return
+    }
+    if (e.ctrl && k == "n") {
+        doAction("newfile")
+        return
+    }
+    if (app.focus == "console" && app.con.running) {
+        if (k == "Escape") {
+            app.focus = "editor"
+            app.con.focused = false
+            return
+        }
+        conKey(app.con, e)
+        return
+    }
+    var ed = currentEditor()
+    if (ed != null && app.mode == "code") { edKey(ed, e) }
+}
+
+func onText(e) {
+    if (app.dialog != null) {
+        if (e.text != "/" && e.text != "\\") { app.dialog.text = app.dialog.text + e.text }
+        return
+    }
+    if (app.focus == "console" && app.con.running) {
+        app.con.input = app.con.input + e.text
+        return
+    }
+    var ed = currentEditor()
+    if (ed != null && app.mode == "code") { edTextInput(ed, e.text) }
+}
+
+func handle(e) {
+    var t = e.type
+    if (t == "mousemove") { onMouseMove(e) }
+    else if (t == "mousedown") { onMouseDown(e) }
+    else if (t == "mouseup") { onMouseUp(e) }
+    else if (t == "wheel") { onWheel(e) }
+    else if (t == "key") { onKey(e) }
+    else if (t == "text") { onText(e) }
+}
+
+// ---------- старт і цикл ----------
+
+func ideInit(dir) {
+    if (!dirExists(dir)) { makeDir(dir) }
+    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", con: newConsole(),
+        focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
+        clickCount: 0, dialog: null, status: "", statusTime: 0 }
+
+    var s = surfaceOpen("Nyx IDE", 1280, 800)
+    uiInit(s)
+    refreshFiles()
+    if (len(app.files) == 0) {
+        var example = joinPath(ideHome(), "examples/привіт.nx")
+        var text = "func main() {\n    print(\"Привіт, світе!\")\n}\n"
+        if (fileExists(example)) { text = readFile(example) }
+        writeFile(joinPath(dir, "привіт.nx"), text)
+        refreshFiles()
+    }
+    openFile(joinPath(dir, app.files[0]))
+    draw()
+    return s
+}
+
+// Один крок циклу: дочекатися подій (wait мс, -1 - безкінечно), обробити
+// ВСІ, що назбирались, і лише потім один раз перемалювати.
+// false - вікно закрили.
+func ideStep(wait) {
+    if (app.con.running && (wait < 0 || wait > 40)) { wait = 40 }
+    var e = surfaceNextEvent(S, wait)
+    var dirty = false
+    while (e != null) {
+        if (e.type == "close") { return false }
+        handle(e)
+        dirty = true
+        e = surfaceNextEvent(S, 0)
+    }
+    if (app.con.proc != null && (app.con.running || dirty)) {
+        if (conPoll(app.con)) { dirty = true }
+        afterPoll()
+    }
+    if (app.status != "" && timeMs() - app.statusTime > 4000 && timeMs() - app.statusTime < 4100) { dirty = true }
+    if (dirty) { draw() }
+    return surfaceIsOpen(S)
+}
+
+func ideShutdown() {
+    saveAll()
+    if (app.con.running) { conStop(app.con) }
+}
+
+func main() {
+    var args = scriptArgs()
+    var dir = joinPath(homeDir(), "NyxПрограми")
+    if (len(args) > 0) { dir = args[0] }
+    ideInit(dir)
+    while (ideStep(-1)) { }
+    ideShutdown()
+}

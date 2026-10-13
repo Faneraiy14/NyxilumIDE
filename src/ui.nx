@@ -1,0 +1,105 @@
+// Базові елементи інтерфейсу поверх полотна surface*.
+//
+// Підхід "immediate mode": кожен кадр інтерфейс малюється заново, і кожна
+// кнопка під час малювання реєструє свою область (uiRegion). Клік потім
+// шукає, у чию область потрапив (uiHit) - ніяких об'єктів-віджетів, які
+// треба синхронізувати зі станом програми.
+
+import "theme.nx"
+
+var S = null                 // полотно (surface)
+var _regions = []            // [x, y, w, h, id, ...]
+var uiMouseX = -1
+var uiMouseY = -1
+var uiPressedId = ""         // кнопка, на якій натиснули мишу
+
+var FONT = 16                // розмір шрифту інтерфейсу
+var CHAR_W = 8               // ширина символу шрифту FONT
+
+func uiInit(surface) {
+    S = surface
+    CHAR_W = textWidth("M", FONT)
+}
+
+func uiBegin() { _regions = [] }
+
+func uiRegion(id, x, y, w, h) {
+    append(_regions, x) append(_regions, y) append(_regions, w) append(_regions, h) append(_regions, id)
+}
+
+// id області під точкою (остання намальована - зверху) або "".
+func uiHit(x, y) {
+    var k = len(_regions) - 5
+    while (k >= 0) {
+        if (x >= _regions[k] && y >= _regions[k + 1] && x < _regions[k] + _regions[k + 2] && y < _regions[k + 1] + _regions[k + 3]) {
+            return _regions[k + 4]
+        }
+        k = k - 5
+    }
+    return ""
+}
+
+func uiHover(x, y, w, h) {
+    return uiMouseX >= x && uiMouseY >= y && uiMouseX < x + w && uiMouseY < y + h
+}
+
+// Кнопка. kind: "normal" | "primary" (зелена) | "danger" (червона) |
+// "tab" | "tabOn" (вкладка) | "flat" (без фону, лише під мишею).
+func uiButton(id, label, x, y, w, h, kind) {
+    var hover = uiHover(x, y, w, h)
+    var bg = C_SURFACE
+    var fg = C_TEXT
+    if (kind == "primary") { bg = 0x40a060  fg = 0xffffff }
+    if (kind == "danger") { bg = 0xc0506a  fg = 0xffffff }
+    if (kind == "tab") { bg = C_PANEL2  fg = C_SUBTEXT }
+    if (kind == "tabOn") { bg = C_BG  fg = C_TEXT }
+    if (kind == "flat") { bg = -1  fg = C_SUBTEXT }
+    if (hover) {
+        if (kind == "primary") { bg = 0x4cb870 }
+        else if (kind == "danger") { bg = 0xd8607c }
+        else if (kind == "tabOn") { bg = C_BG }
+        else { bg = C_SURFACE2  fg = C_TEXT }
+    }
+    if (uiPressedId == id && hover) { bg = C_DIM }
+    if (bg >= 0) {
+        if (kind == "tab" || kind == "tabOn") { surfaceRect(S, x, y, w, h, bg) }
+        else { surfaceRoundRect(S, x, y, w, h, 6, bg) }
+    }
+    if (kind == "tabOn") { surfaceRect(S, x, y + h - 2, w, 2, C_ACCENT) }
+    // "▶ " / "■ " на початку підпису - іконка фігурою (гліфи шрифту дрібні).
+    var icon = ""
+    if (startsWith(label, "▶ ") || startsWith(label, "■ ")) {
+        icon = label[0]
+        label = substring(label, 2, len(label) - 2)
+    }
+    var tw = textWidth(label, FONT)
+    var iconW = 0
+    if (icon != "") { iconW = 18 }
+    var tx = x + toInt((w - tw - iconW) / 2)
+    var midY = y + toInt(h / 2)
+    if (icon == "▶") { surfacePolygon(S, [tx, midY - 6, tx + 11, midY, tx, midY + 6], fg) }
+    if (icon == "■") { surfaceRect(S, tx, midY - 5, 10, 10, fg) }
+    surfaceText(S, label, tx + iconW, y + toInt((h - textHeight(FONT)) / 2), FONT, fg)
+    uiRegion(id, x, y, w, h)
+}
+
+// Ширина кнопки під підпис з полями.
+func uiButtonW(label) { return textWidth(label, FONT) + 24 }
+
+// Обрізає текст справа "…", щоб влазив у maxW пікселів.
+func uiFit(text, maxW, size) {
+    if (textWidth(text, size) <= maxW) { return text }
+    var cw = textWidth("M", size)
+    var n = maxW / cw - 1
+    if (n < 1) { return "" }
+    return substring(text, 0, toInt(n)) + "…"
+}
+
+// Підказка-плашка біля миші.
+func uiTooltip(text) {
+    var w = textWidth(text, 14) + 16
+    var x = min(uiMouseX + 12, surfaceWidth(S) - w - 4)
+    var y = uiMouseY + 20
+    surfaceRoundRect(S, x, y, w, 24, 6, C_SURFACE2)
+    surfaceText(S, text, x + 8, y + 5, 14, C_TEXT)
+}

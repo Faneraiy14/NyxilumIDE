@@ -1,0 +1,163 @@
+// Підсвітка синтаксису NyxilumLang: рядок тексту -> токени.
+//
+// hlLine(text, inComment) повертає [токени, inCommentНаКінці], де токени -
+// плаский масив трійок [початок, кінець, вид, початок, кінець, вид, ...]
+// (вид - HL_* з theme.nx). inComment - чи рядок починається всередині
+// /* ... */, що почався вище.
+
+import "theme.nx"
+import "builtins.nx"
+
+var _keywords = null
+var _builtins = null
+
+func _initTables() {
+    _keywords = newMap()
+    for k in ["func", "var", "if", "else", "while", "for", "return", "break", "continue",
+              "in", "struct", "self", "import", "extends", "super", "try", "catch", "throw"] {
+        mapSet(_keywords, k, true)
+    }
+    _builtins = newMap()
+    for b in BUILTIN_NAMES { mapSet(_builtins, b, true) }
+}
+
+func isIdentStart(code) {
+    return (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code == 95
+        || (code >= 0x400 && code <= 0x4ff)
+}
+
+func isDigitCode(code) { return code >= 48 && code <= 57 }
+
+func isIdentPart(code) { return isIdentStart(code) || isDigitCode(code) }
+
+func isUpperLatin(code) { return code >= 65 && code <= 90 }
+
+func hlLine(text, inComment) {
+    if (_keywords == null) { _initTables() }
+    var toks = []
+    var n = len(text)
+    var i = 0
+    var prevWord = ""
+
+    if (inComment) {
+        var endAt = indexOf(text, "*/")
+        if (endAt < 0) {
+            append(toks, 0) append(toks, n) append(toks, HL_COMMENT)
+            return [toks, true]
+        }
+        append(toks, 0) append(toks, endAt + 2) append(toks, HL_COMMENT)
+        i = endAt + 2
+    }
+
+    while (i < n) {
+        var c = text[i]
+        var code = charCode(c)
+
+        if (c == " " || c == "\t") { i = i + 1 continue }
+
+        // коментарі
+        if (c == "/" && i + 1 < n) {
+            var c2 = text[i + 1]
+            if (c2 == "/") {
+                append(toks, i) append(toks, n) append(toks, HL_COMMENT)
+                return [toks, false]
+            }
+            if (c2 == "*") {
+                var rest = substring(text, i + 2, n - i - 2)
+                var close = indexOf(rest, "*/")
+                if (close < 0) {
+                    append(toks, i) append(toks, n) append(toks, HL_COMMENT)
+                    return [toks, true]
+                }
+                var stop = i + 2 + close + 2
+                append(toks, i) append(toks, stop) append(toks, HL_COMMENT)
+                i = stop
+                continue
+            }
+        }
+
+        // рядки з інтерполяцією ${...}
+        if (c == "\"") {
+            var start = i
+            i = i + 1
+            while (i < n && text[i] != "\"") {
+                if (text[i] == "\\") { i = i + 2 continue }
+                if (text[i] == "$" && i + 1 < n && text[i + 1] == "{") {
+                    append(toks, start) append(toks, i) append(toks, HL_STRING)
+                    var depth = 0
+                    var j = i + 1
+                    while (j < n) {
+                        if (text[j] == "{") { depth = depth + 1 }
+                        if (text[j] == "}") {
+                            depth = depth - 1
+                            if (depth == 0) { break }
+                        }
+                        j = j + 1
+                    }
+                    var interpEnd = min(j + 1, n)
+                    append(toks, i) append(toks, interpEnd) append(toks, HL_INTERP)
+                    i = interpEnd
+                    start = i
+                    continue
+                }
+                i = i + 1
+            }
+            i = min(i + 1, n)
+            if (i > start) { append(toks, start) append(toks, i) append(toks, HL_STRING) }
+            continue
+        }
+
+        // числа (і 0x...)
+        if (isDigitCode(code)) {
+            var start = i
+            i = i + 1
+            while (i < n && (isIdentPart(charCode(text[i])) || text[i] == ".")) {
+                if (text[i] == "." && i + 1 < n && text[i + 1] == ".") { break }
+                i = i + 1
+            }
+            append(toks, start) append(toks, i) append(toks, HL_NUMBER)
+            continue
+        }
+
+        // слова
+        if (isIdentStart(code)) {
+            var start = i
+            i = i + 1
+            while (i < n) {
+                var cc = charCode(text[i])
+                if (isIdentPart(cc)) { i = i + 1 continue }
+                if (text[i] == "'" && i + 1 < n && isIdentStart(charCode(text[i + 1]))) { i = i + 1 continue }
+                break
+            }
+            var word = substring(text, start, i - start)
+            var kind = HL_TEXT
+            if (mapHas(_keywords, word)) {
+                kind = HL_KEYWORD
+            } else if (word == "true" || word == "false" || word == "null") {
+                kind = HL_NUMBER
+            } else if (prevWord == "func" || prevWord == "struct" || prevWord == "extends") {
+                kind = HL_FUNC
+                if (prevWord != "func") { kind = HL_TYPE }
+            } else if (isUpperLatin(code)) {
+                kind = HL_TYPE
+            } else {
+                var k = i
+                while (k < n && text[k] == " ") { k = k + 1 }
+                if (k < n && text[k] == "(") {
+                    kind = HL_FUNC
+                    if (mapHas(_builtins, word)) { kind = HL_BUILTIN }
+                } else if (mapHas(_builtins, word)) {
+                    kind = HL_BUILTIN
+                }
+            }
+            append(toks, start) append(toks, i) append(toks, kind)
+            prevWord = word
+            continue
+        }
+
+        // розділові знаки й оператори
+        append(toks, i) append(toks, i + 1) append(toks, HL_PUNCT)
+        i = i + 1
+    }
+    return [toks, false]
+}
