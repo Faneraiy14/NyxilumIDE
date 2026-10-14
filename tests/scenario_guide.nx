@@ -48,9 +48,8 @@ func main() {
     check(app.guideOpen && app.guideLesson == 0 && app.mode == "blocks", "перший запуск: урок 1 у режимі блоків")
     surfaceSave(S, out + "/g01_lesson1.png")
 
-    // перший запуск створює "мої блоки" зі «сказати» - для чистоти уроку прибираємо
     var ws = currentBlocks()
-    ws.stacks[0].next = null
+    check(endsWith(app.currentB, "Урок 1.nxb") && len(ws.stacks) == 1 && ws.stacks[0].next == null, "урок 1 - своя чиста програма з шапкою")
 
     playDemo("", 20000)
     print(generateCode(ws.stacks, "x")[0])
@@ -60,18 +59,36 @@ func main() {
     surfaceSave(S, out + "/g02_lesson1_done.png")
 
     doAction("g.next")
-    ws.stacks[0].next = null
+    ws = currentBlocks()
+    check(endsWith(app.currentB, "Урок 2.nxb") && ws.stacks[0].next == null, "урок 2 - нова чиста програма")
     playDemo("Сева", 30000)
     print(generateCode(ws.stacks, "x")[0])
     check(contains(app.con.lastOutput, "Привіт, Сева"), "показ уроку 2: питання й відповідь")
     check(indexOf(app.done, LESSONS[1].title) >= 0, "урок 2 зараховано")
 
     doAction("g.next")
-    ws.stacks[0].next = null
+    ws = currentBlocks()
     playDemo("", 30000)
     print(generateCode(ws.stacks, "x")[0])
     check(indexOf(app.done, LESSONS[2].title) >= 0, "урок 3 (повторення) зараховано")
     surfaceSave(S, out + "/g03_lesson3.png")
+
+    // "Почати спочатку" лишає тільки шапку
+    doAction("bclear")
+    check(len(ws.stacks) == 1 && ws.stacks[0].spec == "start" && ws.stacks[0].next == null, "«Почати спочатку» лишає шапку")
+
+    // історія версій
+    doAction("history")
+    check(app.histOpen && !app.guideOpen, "панель історії відкрито")
+    doAction("h.save")
+    app.dialog.text = "порожня програма"
+    doAction("dialog.ok")
+    check(len(app.histList) == 1, "версію збережено")
+    doAction("g.next")
+    doAction("help")
+    doAction("history")
+    surfaceSave(S, out + "/g05_history.png")
+    doAction("help")
 
     doAction("g.tab.examples")
     ideStep(0)

@@ -1,6 +1,6 @@
 // Сценарій режиму "Код": друк, підсвітка, запуск з введенням, помилка.
 // NX_HEADLESS=1 nx tests/scenario_code.nx <тимчасова-тека> <тека-для-png>
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, doAction, draw }
 import "../src/editor.nx" { edText }
 
 var outDir = ""
@@ -113,6 +113,29 @@ func main() {
     print(app.con.lines)
     check(ed.errLine >= 0, "рядок з помилкою підсвічено: " + toString(ed.errLine + 1))
     shot("04_error")
+
+    // Історія версій: зберегти, змінити, подивитись diff, повернути
+    doAction("history")
+    doAction("h.save")
+    app.dialog.text = "версія з помилкою"
+    doAction("dialog.ok")
+    check(len(app.histList) == 1, "версію збережено")
+    var savedText = edText(ed)
+    key("End", true, false)
+    typeText("\n// новий рядок")
+    step()
+    doAction("h.sel:0")
+    draw()
+    var plus = 0
+    for r in app.histDiff { if (r[0] == "+") { plus = plus + 1 } }
+    check(plus >= 1, "diff показує доданий рядок (+" + toString(plus) + ")")
+    shot("05_history")
+    doAction("h.restore")
+    check(edText(ed) == savedText, "версію повернуто")
+    check(len(app.histList) == 2, "перед поверненням збережено поточний стан")
+    key("z", true, false)
+    step()
+    check(contains(edText(ed), "// новий рядок"), "повернення можна скасувати Ctrl+Z")
 
     // Скасування
     var before = len(ed.lines)

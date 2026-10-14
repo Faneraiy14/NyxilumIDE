@@ -1,0 +1,260 @@
+// Історія версій - маленький "git" усередині IDE.
+//
+// Версія - знімок програми з описом "що змінилось" (у git це коміт з
+// повідомленням). Знімки файлу лежать у <тека>/.nyx/history/<файл>.json -
+// масив {t: час, msg: опис, text: вміст}. Порівняння версій - построковий
+// diff (як git diff): додане зеленим з "+", прибране червоним з "-".
+
+import "theme.nx"
+import "ui.nx"
+import "highlight.nx"
+import "blocks_model.nx"
+
+func historyPath(dir, file) {
+    var parts = split(replace(file, "\\", "/"), "/")
+    var name = parts[len(parts) - 1]
+    return dir + "/.nyx/history/" + name + ".json"
+}
+
+func historyLoad(path) {
+    if (!fileExists(path)) { return [] }
+    try {
+        var list = []
+        for m in fromJson(readFile(path)) {
+            append(list, [toInt(mapGet(m, "t")), toString(mapGet(m, "msg")), toString(mapGet(m, "text"))])
+        }
+        return list
+    } catch (e) { return [] }
+}
+
+func _historySave(path, list) {
+    var arr = []
+    for v in list {
+        var m = newMap()
+        mapSet(m, "t", v[0])
+        mapSet(m, "msg", v[1])
+        mapSet(m, "text", v[2])
+        append(arr, m)
+    }
+    var dir = substring(path, 0, len(path) - len(split(path, "/")[len(split(path, "/")) - 1]) - 1)
+    if (!dirExists(dir)) { makeDir(dir) }
+    writeFile(path, toJson(arr))
+}
+
+// Додати версію. false - нічого не змінилось від останньої версії.
+func historyAdd(path, text, msg) {
+    var list = historyLoad(path)
+    if (len(list) > 0 && list[len(list) - 1][2] == text) { return false }
+    if (trim(msg) == "") { msg = "(без опису)" }
+    append(list, [timestamp(), msg, text])
+    _historySave(path, list)
+    return true
+}
+
+// Вміст файлу так, як його зручно порівнювати: для блоків - їхній код.
+func readableText(file, text) {
+    if (endsWith(file, ".nxb")) {
+        try {
+            var g = generateCode(stacksFromJson(text), "")
+            var lines = split(g[0], "\n")
+            var i = indexOf(lines, "func main() {")
+            if (i < 0) { return g[0] }
+            return join(slice(lines, i), "\n")
+        } catch (e) { return text }
+    }
+    return text
+}
+
+// ---------- diff ----------
+
+// Построкове порівняння: масив [вид, рядок], вид " " - без змін, "+" -
+// з'явився в b, "-" - зник з a. Спільний початок і кінець відкидаються
+// одразу, найдовша спільна підпослідовність (LCS) - лише для середини.
+func diffLines(a, b) {
+    var x = split(a, "\n")
+    var y = split(b, "\n")
+    var out = []
+    var pre = 0
+    while (pre < len(x) && pre < len(y) && x[pre] == y[pre]) { pre = pre + 1 }
+    var suf = 0
+    while (suf < len(x) - pre && suf < len(y) - pre && x[len(x) - 1 - suf] == y[len(y) - 1 - suf]) { suf = suf + 1 }
+    var k = 0
+    while (k < pre) {
+        append(out, [" ", x[k]])
+        k = k + 1
+    }
+    var xs = slice(x, pre, len(x) - suf)
+    var ys = slice(y, pre, len(y) - suf)
+    var n = len(xs)
+    var m = len(ys)
+    if (n * m > 250000) {
+        // завелика середина для LCS у VM - показуємо як "замінено"
+        for l in xs { append(out, ["-", l]) }
+        for l in ys { append(out, ["+", l]) }
+    } else {
+        // lcs[i][j] - довжина LCS для xs[i..] і ys[j..], плоским масивом
+        var w = m + 1
+        var lcs = []
+        var t = 0
+        while (t < (n + 1) * w) {
+            append(lcs, 0)
+            t = t + 1
+        }
+        var i = n - 1
+        while (i >= 0) {
+            var j = m - 1
+            while (j >= 0) {
+                if (xs[i] == ys[j]) { lcs[i * w + j] = lcs[(i + 1) * w + j + 1] + 1 }
+                else { lcs[i * w + j] = max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]) }
+                j = j - 1
+            }
+            i = i - 1
+        }
+        i = 0
+        var j2 = 0
+        while (i < n && j2 < m) {
+            if (xs[i] == ys[j2]) {
+                append(out, [" ", xs[i]])
+                i = i + 1
+                j2 = j2 + 1
+            } else if (lcs[(i + 1) * w + j2] >= lcs[i * w + j2 + 1]) {
+                append(out, ["-", xs[i]])
+                i = i + 1
+            } else {
+                append(out, ["+", ys[j2]])
+                j2 = j2 + 1
+            }
+        }
+        while (i < n) {
+            append(out, ["-", xs[i]])
+            i = i + 1
+        }
+        while (j2 < m) {
+            append(out, ["+", ys[j2]])
+            j2 = j2 + 1
+        }
+    }
+    k = len(x) - suf
+    while (k < len(x)) {
+        append(out, [" ", x[k]])
+        k = k + 1
+    }
+    return out
+}
+
+// [додано, прибрано]
+func diffCounts(d) {
+    var plus = 0
+    var minus = 0
+    for r in d {
+        if (r[0] == "+") { plus = plus + 1 }
+        if (r[0] == "-") { minus = minus + 1 }
+    }
+    return [plus, minus]
+}
+
+// ---------- панель ----------
+
+var HISTORY_W = 440
+
+// sel: -1 - список версій, інакше номер версії для порівняння з поточним.
+// scroll - прокрутка порівняння (рядків).
+// counts[i] - [+, -] версії i проти попередньої; diff - готове порівняння
+// вибраної версії з поточним станом (рахує ide.nx і кешує).
+func drawHistory(file, list, counts, sel, diff, scroll, x, y, h) {
+    var w = HISTORY_W
+    surfaceRect(S, x, y, w, h, C_PANEL)
+    surfaceRect(S, x, y, 1, h, C_PEACH)
+    surfaceText(S, "Історія версій", x + 16, y + 12, 18, C_TEXT, true)
+    uiButton("h.close", "×", x + w - 44, y + 6, 36, 30, "flat")
+    surfaceClip(S, x, y + 40, w, h - 40)
+    var cy = y + 46
+
+    if (sel < 0) {
+        uiButton("h.save", "+ Зберегти версію", x + 14, cy, 200, 34, "primary")
+        cy = cy + 46
+        for l in wrapLines("Версія - знімок програми з коротким описом, що змінилось. Можна будь-коли подивитись, чим версії відрізняються, і повернутись до старої. У git (системі версій, якою користуються програмісти) таку версію називають «коміт».", w - 32, 14) {
+            surfaceText(S, l, x + 16, cy, 14, C_DIM)
+            cy = cy + 18
+        }
+        cy = cy + 10
+        if (len(list) == 0) {
+            surfaceText(S, "Ще жодної версії.", x + 16, cy, 16, C_SUBTEXT)
+        }
+        var i = len(list) - 1
+        while (i >= 0 && cy < y + h) {
+            var v = list[i]
+            var cnt = counts[i]
+            var hover = uiHover(x + 10, cy, w - 20, 56)
+            var bg = C_SURFACE
+            if (hover) { bg = C_SURFACE2 }
+            surfaceRoundRect(S, x + 10, cy, w - 20, 56, 8, bg)
+            surfaceText(S, uiFit(v[1], w - 150, 16), x + 22, cy + 8, 16, C_TEXT, true)
+            surfaceText(S, formatDate(v[0], "dd.MM.yyyy HH:mm"), x + 22, cy + 32, 14, C_DIM)
+            surfaceText(S, "+" + toString(cnt[0]), x + w - 110, cy + 18, 16, C_GREEN)
+            surfaceText(S, "-" + toString(cnt[1]), x + w - 60, cy + 18, 16, C_RED)
+            uiRegion("h.sel:" + toString(i), x + 10, cy, w - 20, 56)
+            cy = cy + 62
+            i = i - 1
+        }
+        surfaceUnclip(S)
+        return
+    }
+
+    var v2 = list[sel]
+    uiButton("h.back", "← Усі версії", x + 10, cy - 4, 130, 30, "flat")
+    cy = cy + 32
+    surfaceText(S, uiFit(v2[1], w - 32, 16), x + 16, cy, 16, C_TEXT, true)
+    surfaceText(S, formatDate(v2[0], "dd.MM.yyyy HH:mm"), x + 16, cy + 22, 14, C_DIM)
+    cy = cy + 46
+    uiButton("h.restore", "Повернути цю версію", x + 14, cy, 210, 32, "normal")
+    cy = cy + 44
+    surfaceText(S, "Що змінилось відтоді (зараз проти версії):", x + 16, cy, 14, C_SUBTEXT)
+    cy = cy + 22
+    var d = diff
+    var cnt2 = diffCounts(d)
+    if (cnt2[0] == 0 && cnt2[1] == 0) {
+        surfaceText(S, "Нічого - програма така сама, як у цій версії.", x + 16, cy, 14, C_GREEN)
+        surfaceUnclip(S)
+        return
+    }
+    var cw = textWidth("M", 14)
+    var lh = 17
+    var row = 0
+    for r in d {
+        if (row >= scroll && cy + lh < y + h) {
+            var bg2 = -1
+            var fg = C_DIM
+            if (r[0] == "+") {
+                bg2 = 0x1f3b2a
+                fg = C_GREEN
+            }
+            if (r[0] == "-") {
+                bg2 = 0x3d2230
+                fg = C_RED
+            }
+            if (bg2 >= 0) { surfaceRect(S, x + 8, cy - 1, w - 16, lh, bg2) }
+            surfaceText(S, r[0], x + 12, cy, 14, fg)
+            surfaceText(S, r[1], x + 12 + 2 * cw, cy, 14, fg)
+            cy = cy + lh
+        }
+        row = row + 1
+    }
+    surfaceUnclip(S)
+    uiRegion("h.diff", x, y + 40, w, h - 40)
+}
+
+func wrapLines(text, maxW, size) {
+    var lines = []
+    var cur = ""
+    for word in split(text, " ") {
+        var cand = word
+        if (cur != "") { cand = cur + " " + word }
+        if (textWidth(cand, size) > maxW && cur != "") {
+            append(lines, cur)
+            cur = word
+        } else { cur = cand }
+    }
+    if (cur != "") { append(lines, cur) }
+    return lines
+}

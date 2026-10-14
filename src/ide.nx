@@ -11,6 +11,7 @@ import "console.nx"
 import "blocks_model.nx"
 import "blocks_view.nx"
 import "guide.nx"
+import "history.nx"
 
 var TOP_H = 48
 var LEFT_W = 230
@@ -32,6 +33,13 @@ struct App {
     demo: any
     cursorX: i32
     cursorY: i32
+    histOpen: bool
+    histSel: i32
+    histScroll: i32
+    histList: array
+    histCounts: array
+    histDiff: array
+    histDiffKey: string
     con: any
     focus: string
     drag: string
@@ -93,6 +101,7 @@ func currentBlocks() {
 }
 
 func openBlocks(path) {
+    app.histSel = -1
     if (!mapHas(app.blocks, path)) {
         var text = ""
         if (fileExists(path)) { text = readFile(path) }
@@ -121,6 +130,7 @@ func setMode(mode) {
 }
 
 func openFile(path) {
+    app.histSel = -1
     if (!mapHas(app.editors, path)) {
         var text = ""
         if (fileExists(path)) { text = readFile(path) }
@@ -252,10 +262,18 @@ struct Dialog {
     title: string
     text: string
     action: string
+    okLabel: string
+    suffix: string
 }
 
 func openDialog(title, text, action) {
-    app.dialog = Dialog { title: title, text: text, action: action }
+    var okLabel = "Створити"
+    var suffix = ext()
+    if (action == "version") {
+        okLabel = "Зберегти"
+        suffix = ""
+    }
+    app.dialog = Dialog { title: title, text: text, action: action, okLabel: okLabel, suffix: suffix }
     app.focus = "dialog"
 }
 
@@ -264,6 +282,7 @@ func closeDialog(ok) {
     app.dialog = null
     app.focus = "editor"
     if (ok && d.action == "new") { newFile(d.text) }
+    if (ok && d.action == "version") { saveVersion(d.text) }
 }
 
 func drawDialog() {
@@ -281,9 +300,9 @@ func drawDialog() {
     surfaceRoundRect(S, x + 21, y + 59, w - 42, 34, 6, C_BG)
     var tw = surfaceText(S, d.text, x + 32, y + 68, 16, C_TEXT)
     surfaceRect(S, x + 33 + tw, y + 66, 2, 20, C_ACCENT)
-    surfaceText(S, ".nx", x + w - 60, y + 68, 16, C_DIM)
+    surfaceText(S, d.suffix, x + w - 30 - textWidth(d.suffix, 16), y + 68, 16, C_DIM)
     uiButton("dialog.cancel", "Скасувати", x + w - 250, y + h - 52, 110, 34, "normal")
-    uiButton("dialog.ok", "Створити", x + w - 130, y + h - 52, 110, 34, "primary")
+    uiButton("dialog.ok", d.okLabel, x + w - 130, y + h - 52, 110, 34, "primary")
 }
 
 func dialogKey(e) {
@@ -319,6 +338,11 @@ func drawTopBar(W) {
     var helpKind = "normal"
     if (app.guideOpen) { helpKind = "primary" }
     uiButton("help", "Навчання", x, 8, helpW, 32, helpKind)
+    var histW = uiButtonW("Історія")
+    x = x - histW - 8
+    var histKind = "normal"
+    if (app.histOpen) { histKind = "primary" }
+    uiButton("history", "Історія", x, 8, histW, 32, histKind)
     var saveW = uiButtonW("Зберегти")
     x = x - saveW - 8
     uiButton("save", "Зберегти", x, 8, saveW, 32, "normal")
@@ -401,6 +425,7 @@ func draw() {
     var cx = LEFT_W
     var cw = W - LEFT_W
     if (app.guideOpen) { cw = cw - GUIDE_W }
+    if (app.histOpen) { cw = cw - HISTORY_W }
     var conH = layoutConsoleH(H)
     var edY = TOP_H
     var edH = H - TOP_H - STATUS_H - conH
@@ -416,6 +441,10 @@ func draw() {
     if (app.guideOpen) {
         checkLessons()
         drawGuide(app.guideTab, app.guideLesson, app.done, lessonCtx(), W - GUIDE_W, TOP_H, H - TOP_H - STATUS_H)
+    }
+    if (app.histOpen) {
+        refreshHistoryDiff()
+        drawHistory(curPath(), app.histList, app.histCounts, app.histSel, app.histDiff, app.histScroll, W - HISTORY_W, TOP_H, H - TOP_H - STATUS_H)
     }
     drawStatus(W, H)
     if (app.dialog != null) { drawDialog() }
@@ -439,11 +468,30 @@ func doAction(id) {
         if (ws != null) { ws.showCode = !ws.showCode }
     }
     else if (id == "bopencode") { blocksToCode() }
+    else if (id == "bclear") {
+        var ws = currentBlocks()
+        if (ws != null) {
+            blocksClear(ws)
+            setStatus("Почали спочатку (Ctrl+Z - повернути блоки)")
+        }
+    }
     else if (id == "newfile") { openDialog("Назва нової програми", freeName(), "new") }
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
-    else if (id == "help") { app.guideOpen = !app.guideOpen }
+    else if (id == "help") {
+        app.guideOpen = !app.guideOpen
+        if (app.guideOpen) { app.histOpen = false }
+    }
+    else if (id == "history") {
+        app.histOpen = !app.histOpen
+        if (app.histOpen) {
+            app.guideOpen = false
+            app.histSel = -1
+            loadHistory()
+        }
+    }
+    else if (startsWith(id, "h.")) { historyAction(id) }
     else if (startsWith(id, "g.")) { guideAction(id) }
     else if (startsWith(id, "file:")) {
         saveAll()
@@ -546,6 +594,10 @@ func onMouseMove(e) {
 
 func onWheel(e) {
     var id = uiHit(e.x, e.y)
+    if (id == "h.diff") {
+        app.histScroll = max(0, app.histScroll + e.dy * 3)
+        return
+    }
     var bws = currentBlocks()
     if (app.mode == "blocks" && bws != null && startsWith(id, "b")) {
         blocksWheel(bws, e)
@@ -605,7 +657,7 @@ func onKey(e) {
 
 func onText(e) {
     if (app.dialog != null) {
-        if (e.text != "/" && e.text != "\\") { app.dialog.text = app.dialog.text + e.text }
+        if (app.dialog.action != "new" || (e.text != "/" && e.text != "\\")) { app.dialog.text = app.dialog.text + e.text }
         return
     }
     if (app.focus == "console" && app.con.running) {
@@ -633,6 +685,89 @@ func handle(e) {
     else if (t == "text") { onText(e) }
 }
 
+// ---------- історія версій ----------
+
+func curPath() {
+    if (app.mode == "blocks") { return app.currentB }
+    return app.current
+}
+
+func curText() {
+    if (app.mode == "blocks") {
+        var ws = currentBlocks()
+        if (ws == null) { return "" }
+        return stacksToJson(ws.stacks)
+    }
+    var ed = currentEditor()
+    if (ed == null) { return "" }
+    return edText(ed)
+}
+
+func loadHistory() {
+    var file = curPath()
+    app.histList = historyLoad(historyPath(app.dir, file))
+    app.histCounts = []
+    var prev = ""
+    for v in app.histList {
+        var now = readableText(file, v[2])
+        append(app.histCounts, diffCounts(diffLines(prev, now)))
+        prev = now
+    }
+    app.histDiffKey = ""
+}
+
+// Порівняння вибраної версії з поточним станом - лише коли щось змінилось.
+func refreshHistoryDiff() {
+    if (app.histSel < 0 || app.histSel >= len(app.histList)) { return }
+    var cur = curText()
+    var key = toString(app.histSel) + "|" + cur
+    if (key == app.histDiffKey) { return }
+    var file = curPath()
+    app.histDiff = diffLines(readableText(file, app.histList[app.histSel][2]), readableText(file, cur))
+    app.histDiffKey = key
+}
+
+func saveVersion(msg) {
+    saveAll()
+    if (historyAdd(historyPath(app.dir, curPath()), curText(), msg)) {
+        setStatus("Версію збережено: " + msg)
+    } else {
+        setStatus("Нічого не змінилось від останньої версії")
+    }
+    loadHistory()
+}
+
+func historyAction(id) {
+    if (id == "h.close") { app.histOpen = false }
+    else if (id == "h.save") { openDialog("Що змінилось у цій версії?", "", "version") }
+    else if (id == "h.back") { app.histSel = -1 }
+    else if (startsWith(id, "h.sel:")) {
+        app.histSel = toInt(substring(id, 6, len(id) - 6))
+        app.histScroll = 0
+    }
+    else if (id == "h.restore") {
+        var v = app.histList[app.histSel]
+        // поточний стан - теж версією, щоб повернення можна було скасувати
+        historyAdd(historyPath(app.dir, curPath()), curText(), "Перед поверненням до «" + v[1] + "»")
+        if (app.mode == "blocks") {
+            var ws = currentBlocks()
+            wsSnapshot(ws)
+            ws.stacks = stacksFromJson(v[2])
+        } else {
+            var ed = currentEditor()
+            edBeginEdit(ed, "other")
+            var cy = ed.cy
+            edSetText(ed, v[2])
+            ed.cy = min(cy, len(ed.lines) - 1)
+            ed.dirty = true
+        }
+        saveAll()
+        loadHistory()
+        app.histSel = -1
+        setStatus("Повернуто версію «" + v[1] + "»")
+    }
+}
+
 // ---------- навчання ----------
 
 func lessonCtx() {
@@ -656,6 +791,37 @@ func checkLessons() {
         append(app.done, les.title)
         saveProgress(joinPath(joinPath(app.dir, ".nyx"), "уроки.json"), app.done)
         setStatus("Урок пройдено: " + les.title + "!")
+    }
+}
+
+// Кожен урок - своя чиста програма ("Урок 2.nxb" лише з шапкою), щоб
+// блоки різних уроків не накладались, а зроблене раніше не пропадало.
+func openLesson(i) {
+    initLessons()
+    app.guideLesson = i
+    var les = LESSONS[i]
+    if (les.mode != app.mode) { setMode(les.mode) }
+    if (les.check == "tocode") { return }   // урок 7 - про ту саму програму з блоків
+    var num = substring(les.title, 0, indexOf(les.title, "."))
+    var path = joinPath(app.dir, "Урок " + num + ext())
+    if (!fileExists(path)) {
+        if (les.mode == "blocks") {
+            var start = newBlock("start")
+            start.x = 40
+            start.y = 40
+            writeFile(path, stacksToJson([start]))
+        } else {
+            writeFile(path, "func main() {\n    \n}\n")
+        }
+    }
+    refreshFiles()
+    if (les.mode == "blocks") { openBlocks(path) } else {
+        openFile(path)
+        var ed = currentEditor()
+        if (len(ed.lines) == 3 && trim(ed.lines[1]) == "") {
+            ed.cy = 1
+            ed.cx = 4
+        }
     }
 }
 
@@ -693,16 +859,8 @@ func guideAction(id) {
     else if (id == "g.tab.lessons") { app.guideTab = "lessons" }
     else if (id == "g.tab.examples") { app.guideTab = "examples" }
     else if (id == "g.back") { app.guideLesson = -1 }
-    else if (startsWith(id, "g.open:")) {
-        app.guideLesson = toInt(substring(id, 7, len(id) - 7))
-        var les = LESSONS[app.guideLesson]
-        if (les.mode != app.mode) { setMode(les.mode) }
-    }
-    else if (id == "g.next") {
-        app.guideLesson = min(app.guideLesson + 1, len(LESSONS) - 1)
-        var les2 = LESSONS[app.guideLesson]
-        if (les2.mode != app.mode) { setMode(les2.mode) }
-    }
+    else if (startsWith(id, "g.open:")) { openLesson(toInt(substring(id, 7, len(id) - 7))) }
+    else if (id == "g.next") { openLesson(min(app.guideLesson + 1, len(LESSONS) - 1)) }
     else if (id == "g.demo") { startDemo(LESSONS[app.guideLesson].demo) }
     else if (startsWith(id, "g.ex:")) { openExample(substring(id, 5, len(id) - 5)) }
 }
@@ -944,7 +1102,8 @@ func drawDemoCursor() {
 func ideInit(dir) {
     if (!dirExists(dir)) { makeDir(dir) }
     app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], guideOpen: false, guideTab: "lessons", guideLesson: -1, done: [], demo: null,
-        cursorX: 0, cursorY: 0, con: newConsole(),
+        cursorX: 0, cursorY: 0, histOpen: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
+        histDiff: [], histDiffKey: "", con: newConsole(),
         focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
         clickCount: 0, dialog: null, status: "", statusTime: 0 }
 
@@ -964,8 +1123,8 @@ func ideInit(dir) {
     if (fileExists(progressPath)) { app.done = loadProgress(progressPath) }
     else {
         app.guideOpen = true
-        app.guideLesson = 0
         setMode("blocks")
+        openLesson(0)
         if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }
         saveProgress(progressPath, [])
     }

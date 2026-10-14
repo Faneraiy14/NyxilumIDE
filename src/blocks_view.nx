@@ -553,6 +553,8 @@ func blocksDraw(ws, x, y, w, h, title) {
     if (ws.showCode) { codeLabel = "Сховати код" }
     var cbw = uiButtonW(codeLabel)
     uiButton("btogglecode", codeLabel, wx + ww - cbw - 12, y + 10, cbw, 30, "normal")
+    var clw = uiButtonW("Почати спочатку")
+    uiButton("bclear", "Почати спочатку", wx + ww - cbw - clw - 20, y + 10, clw, 30, "normal")
     surfaceUnclip(S)
 
     if (ws.showCode) { drawCodePanel(ws, wx + ww, y, CODE_W, h, title) }
@@ -760,6 +762,22 @@ func dropDrag(ws) {
     append(ws.stacks, d)
 }
 
+// "Почати спочатку": лишити тільки жовту шапку (порожню).
+func blocksClear(ws) {
+    wsSnapshot(ws)
+    var keep = null
+    for st in ws.stacks { if (keep == null && st.spec == "start") { keep = st } }
+    if (keep == null) {
+        keep = newBlock("start")
+        keep.x = 40
+        keep.y = 40
+    }
+    keep.next = null
+    ws.stacks = [keep]
+    ws.panX = 30 - keep.x
+    ws.panY = 30 - keep.y
+}
+
 // ---------- скасування ----------
 
 func wsSnapshot(ws) {
@@ -929,7 +947,7 @@ func blocksMouseDown(ws, e, id) {
         ws.editIdx = 0
         return true
     }
-    if (id == "btogglecode" || id == "bopencode") { return false }
+    if (id == "btogglecode" || id == "bopencode" || id == "bclear") { return false }
 
     // палітра: шаблон блока
     var k = len(_pHits) - 5
