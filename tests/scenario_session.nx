@@ -1,0 +1,46 @@
+// Сесія: після перезапуску IDE відкриті ті самі вкладки, активна вкладка,
+// курсор і прокрутка, розділення, бічна панель; зниклі файли пропускаються.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_session.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, openPath, currentEditor, refreshFiles }
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    if (!dirExists(dir)) { makeDir(dir) }
+    var long = ""
+    var i = 0
+    while (i < 80) {
+        long = long + "    print(" + toString(i) + ")\n"
+        i = i + 1
+    }
+    writeFile(dir + "/довгий.nx", "func main() {\n" + long + "}\n")
+    writeFile(dir + "/другий.nx", "func main() {\n    print(2)\n}\n")
+    writeFile(dir + "/зникне.nx", "func main() {\n}\n")
+    ideInit(dir)
+    openPath(dir + "/зникне.nx")
+    openPath(dir + "/другий.nx")
+    openPath(dir + "/довгий.nx")
+    var ed = currentEditor()
+    ed.cy = 60
+    ed.cx = 7
+    ed.top = 40
+    app.split = dir + "/другий.nx"
+    app.side = "search"
+    ideShutdown()
+    deleteFile(dir + "/зникне.nx")
+
+    // «перезапуск»
+    ideInit(dir)
+    check(indexOf(app.tabs, dir + "/довгий.nx") >= 0 && indexOf(app.tabs, dir + "/другий.nx") >= 0, "вкладки відновлено")
+    check(indexOf(app.tabs, dir + "/зникне.nx") < 0, "видалений файл пропущено")
+    check(app.active == dir + "/довгий.nx", "активна вкладка та сама")
+    var e2 = currentEditor()
+    check(e2.cy == 60 && e2.cx == 7 && e2.top == 40, "курсор і прокрутка на місці")
+    check(app.split == dir + "/другий.nx", "розділення відновлено")
+    check(app.side == "search", "бічна панель та сама")
+    shot("ss01_restored")
+    ideShutdown()
+    print("СЕСІЯ: УСЕ ГАРАЗД")
+}

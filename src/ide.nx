@@ -3742,13 +3742,111 @@ func ideInit(dir) {
         if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }
         saveProgress(progressPath, [])
     }
-    // без питання про рівень - відкрити першу програму коду
-    if (!app.askLevel) {
+    // без питання про рівень - як було минулого разу (вкладки, курсори),
+    // а вперше - перша програма коду
+    if (!app.askLevel && !restoreSession()) {
         var codes = filesOfKind("code")
         if (len(codes) > 0) { openPath(codes[0]) }
     }
     draw()
     return s
+}
+
+// ---------- сесія: що було відкрито (<тека>/.nyx/сесія.json) ----------
+
+func sessionPath() { return joinPath(joinPath(app.dir, ".nyx"), "сесія.json") }
+
+func _rel(p) {
+    if (startsWith(p, app.dir + "/")) { return substring(p, len(app.dir) + 1, len(p) - len(app.dir) - 1) }
+    return p
+}
+
+func _abs(r) {
+    if (startsWith(r, "/") || (len(r) > 1 && r[1] == ":")) { return r }
+    return joinPath(app.dir, r)
+}
+
+func saveSession() {
+    if (app == null || app.cfg == null) { return }
+    var m = newMap()
+    var tabs = []
+    for t in app.tabs { append(tabs, _rel(t)) }
+    mapSet(m, "tabs", tabs)
+    mapSet(m, "active", _rel(app.active))
+    mapSet(m, "side", app.side)
+    mapSet(m, "sideW", app.sideW)
+    mapSet(m, "panelOpen", app.panelOpen)
+    mapSet(m, "panelTab", app.panelTab)
+    mapSet(m, "consoleH", app.consoleH)
+    mapSet(m, "split", _rel(app.split))
+    mapSet(m, "splitSide", app.splitSide)
+    var exp = []
+    for d in mapKeys(app.expanded) { append(exp, _rel(d)) }
+    mapSet(m, "expanded", exp)
+    var pos = newMap()
+    for p in mapKeys(app.editors) {
+        var ed = mapGet(app.editors, p)
+        mapSet(pos, _rel(p), [ed.cy, ed.cx, ed.top])
+    }
+    mapSet(m, "cursors", pos)
+    try {
+        if (!dirExists(joinPath(app.dir, ".nyx"))) { makeDir(joinPath(app.dir, ".nyx")) }
+        writeFile(sessionPath(), toJson(m))
+    } catch (e) { }
+}
+
+// true - сесію відновлено (хоч одна вкладка відкрилась).
+func restoreSession() {
+    var p = sessionPath()
+    if (!fileExists(p)) { return false }
+    try {
+        var m = fromJson(readFile(p))
+        if (mapHas(m, "expanded")) {
+            for d in mapGet(m, "expanded") {
+                var ad = _abs(toString(d))
+                if (dirExists(ad)) { mapSet(app.expanded, ad, true) }
+            }
+            refreshFiles()
+        }
+        var cursors = newMap()
+        if (mapHas(m, "cursors")) { cursors = mapGet(m, "cursors") }
+        var opened = 0
+        for t in mapGet(m, "tabs") {
+            var at = _abs(toString(t))
+            if (!fileExists(at)) { continue }
+            openPath(at)
+            opened = opened + 1
+            _restoreCursor(at, cursors)
+        }
+        if (opened == 0) { return false }
+        var act = _abs(toString(mapGet(m, "active")))
+        if (fileExists(act)) { openPath(act) }
+        var sp = _abs(toString(mapGet(m, "split")))
+        if (mapGet(m, "split") != "" && fileExists(sp) && mapHas(app.editors, sp)) {
+            app.split = sp
+            app.splitSide = toInt(mapGet(m, "splitSide"))
+        }
+        if (mapHas(m, "side")) { app.side = toString(mapGet(m, "side")) }
+        if (app.side == "learn" && !app.cfg.lessons) { app.side = "files" }
+        if (mapHas(m, "sideW")) { app.sideW = toInt(mapGet(m, "sideW")) }
+        if (mapHas(m, "panelOpen")) { app.panelOpen = mapGet(m, "panelOpen") == true }
+        if (mapHas(m, "panelTab")) { app.panelTab = toString(mapGet(m, "panelTab")) }
+        if (mapHas(m, "consoleH")) { app.consoleH = toInt(mapGet(m, "consoleH")) }
+        return true
+    } catch (e) {
+        return false
+    }
+}
+
+func _restoreCursor(path, cursors) {
+    var r = _rel(path)
+    if (!mapHas(cursors, r) || !mapHas(app.editors, path)) { return }
+    var c = mapGet(cursors, r)
+    var ed = mapGet(app.editors, path)
+    ed.cy = clamp(toInt(c[0]), 0, len(ed.lines) - 1)
+    ed.cx = clamp(toInt(c[1]), 0, len(ed.lines[ed.cy]))
+    ed.top = clamp(toInt(c[2]), 0, max(0, len(ed.lines) - 1))
+    ed.wantCol = ed.cx
 }
 
 // Один крок циклу: дочекатися подій (wait мс, -1 - безкінечно), обробити
@@ -3796,6 +3894,7 @@ func ideStep(wait) {
     if (timeMs() - app.lastAutosave > 30000) {
         app.lastAutosave = timeMs()
         saveAll()
+        saveSession()
     }
     if (uiAnimating) { dirty = true }
     if (dirty) { draw() }
@@ -3820,6 +3919,7 @@ func recoverFromError(err) {
         appendFile(errorLogPath(), formatDate(timestamp(), "yyyy-MM-dd HH:mm:ss") + "  " + msg + "\n")
     } catch (e1) { }
     try { saveAll() } catch (e2) { }
+    try { saveSession() } catch (e3) { }
     app.demo = null
     app.drag = ""
     app.palette = null
@@ -3844,6 +3944,7 @@ func recoverFromError(err) {
 
 func ideShutdown() {
     saveAll()
+    saveSession()
     if (app.con.running) { conStop(app.con) }
     if (app.term.running) { termStop(app.term) }
 }

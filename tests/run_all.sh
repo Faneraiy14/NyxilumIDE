@@ -34,4 +34,5 @@ run test_code_to_blocks.nx
 run scenario_terminal.nx "$TMP/p8" "$TMP/shots"
 run scenario_ext.nx "$TMP/p9" "$TMP/shots"
 run scenario_git.nx "$TMP/p10" "$TMP/shots"
+run scenario_session.nx "$TMP/p11" "$TMP/shots"
 exit $fail
