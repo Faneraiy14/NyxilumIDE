@@ -78,6 +78,8 @@ struct App {
     probRun: i32
     exSel: string
     lastAutosave: i32
+    dbgPath: string
+    lastPauses: i32
     entry: any
     ctx: any
     cfg: any
@@ -319,27 +321,66 @@ func blocksTitle(ws) {
     return substring(n, 0, len(n) - 4)
 }
 
-func runCurrent() {
+// debugMode: "" - звичайний запуск, "step" - покроково з першого рядка,
+// "cont" - до точок зупинки.
+func runCurrent() { runWith("") }
+
+func runWith(debugMode) {
     saveAll()
+    app.lastPauses = 0
+    app.dbgPath = app.active
     if (app.mode == "blocks") {
         var ws = currentBlocks()
         if (ws == null) { return }
         ws.errBlock = null
+        ws.dbgBlock = null
         var g = generateCode(ws.stacks, blocksTitle(ws))
         app.genMap = g[1]
         var genDir = joinPath(app.dir, ".nyx")
         if (!dirExists(genDir)) { makeDir(genDir) }
         var genPath = joinPath(genDir, blocksTitle(ws) + ".nx")
         writeFile(genPath, g[0])
-        conRun(app.con, genPath, app.dir)
+        conRun(app.con, genPath, app.dir, debugMode, [])
         app.focus = "console"
         return
     }
     var ed = currentEditor()
     if (ed == null) { return }
     ed.errLine = -1
-    conRun(app.con, ed.path, app.dir)
+    var breaks = []
+    if (debugMode != "") { breaks = edBreakLines(ed) }
+    conRun(app.con, ed.path, app.dir, debugMode, breaks)
     app.focus = "console"
+}
+
+// Підсвітка місця паузи: рядок у редакторі коду, блок у редакторі блоків.
+func syncDebugView() {
+    var con = app.con
+    for p in mapKeys(app.editors) {
+        var ed = mapGet(app.editors, p)
+        ed.dbgLine = -1
+        if (con.paused && p == app.dbgPath) { ed.dbgLine = con.pauseLine }
+    }
+    for p2 in mapKeys(app.blocks) {
+        var ws = mapGet(app.blocks, p2)
+        ws.dbgBlock = null
+        if (con.paused && p2 == app.dbgPath && con.pauseLine >= 0 && con.pauseLine < len(app.genMap)) {
+            ws.dbgBlock = app.genMap[con.pauseLine]
+        }
+    }
+    // нова пауза: показати "ЗМІННІ" (перший раз) і прокрутити до рядка
+    if (con.paused && con.pauses != app.lastPauses) {
+        if (app.lastPauses == 0) {
+            app.panelOpen = true
+            app.panelTab = "vars"
+        }
+        app.lastPauses = con.pauses
+        if (app.active == app.dbgPath && app.mode == "code") {
+            var e2 = currentEditor()
+            var rows = max(1, toInt(e2.h / e2.lineH))
+            if (con.pauseLine < e2.top || con.pauseLine >= e2.top + rows - 1) { e2.top = max(0, con.pauseLine - toInt(rows / 3)) }
+        }
+    }
 }
 
 // "Відкрити як код": код з блоків стає звичайною програмою .nx.
@@ -537,7 +578,8 @@ struct Palette {
 func commandList() {
     var list = [
         ["run", "Запустити програму", "F5"],
-        ["stop", "Зупинити програму", ""],
+        ["stop", "Зупинити програму", "Shift+F5"],
+        ["debug", "Запустити покроково", "F10"],
         ["save", "Зберегти все", "Ctrl+S"],
         ["newcode", "Нова програма (код)", "Ctrl+N"],
         ["newblocks", "Нова програма з блоків", ""],
@@ -965,7 +1007,10 @@ func drawTitleBar(W) {
     surfaceText(S, "Nyx", 14, 8, 20, C_ACCENT, true)
     surfaceText(S, "IDE", 14 + textWidth("Nyx ", 20, true), 8, 20, C_TEXT)
     // поле "палітри команд" по центру, як у VS Code
-    var cw = min(440, W - 420)
+    // поле команд звужується, коли праворуч панель налагодження
+    var rightW = 420
+    if (app.con.running && app.con.debug && app.con.paused) { rightW = 900 }
+    var cw = min(440, W - rightW)
     if (cw > 160) {
         var cx = toInt((W - cw) / 2)
         var bg = C_BG
@@ -978,12 +1023,32 @@ func drawTitleBar(W) {
         uiRegion("cmd.open", cx, 6, cw, 24)
     }
     var runnable = app.active != "" && fileKind(app.active) != "text"
+    var rx = W - 10
     if (app.con.running) {
         var stopW = uiButtonW("■ Зупинити")
-        uiButton("stop", "■ Зупинити", W - stopW - 10, 4, stopW, 28, "danger")
+        rx = rx - stopW
+        uiButton("stop", "■ Зупинити", rx, 4, stopW, 28, "danger")
+        if (app.con.debug && app.con.paused) {
+            // панель налагодження, як у VS Code
+            var btns = [["dbg.out", "Вийти", "Shift+F11 - вийти з функції"], ["dbg.into", "Всередину", "F11 - крок усередину функції"],
+                        ["dbg.over", "Крок", "F10 - наступний рядок"], ["dbg.cont", "▶ Далі", "F5 - продовжити до точки зупинки"]]
+            for bt in btns {
+                var bw2 = uiButtonW(bt[1])
+                rx = rx - bw2 - 6
+                var kind = "normal"
+                if (bt[0] == "dbg.over") { kind = "primary" }
+                uiButton(bt[0], bt[1], rx, 4, bw2, 28, kind)
+                if (uiHover(rx, 4, bw2, 28)) { app.tooltip = bt[2] }
+            }
+        }
     } else if (runnable) {
         var runW = uiButtonW("▶ Запустити")
-        uiButton("run", "▶ Запустити", W - runW - 10, 4, runW, 28, "primary")
+        rx = rx - runW
+        uiButton("run", "▶ Запустити", rx, 4, runW, 28, "primary")
+        var dw = uiButtonW("Крок за кроком")
+        rx = rx - dw - 6
+        uiButton("debug", "Крок за кроком", rx, 4, dw, 28, "normal")
+        if (uiHover(rx, 4, dw, 28)) { app.tooltip = "F10 - запустити покроково: програма зупиняється на кожному рядку, видно змінні" }
     }
 }
 
@@ -1483,7 +1548,7 @@ func drawPanel(x, y, w, h) {
     surfaceRect(S, x, y, w, h, C_PANEL2)
     surfaceRect(S, x, y, w, 1, C_BORDER)
     uiRegion("panel", x, y, w, h)
-    var tabs = [["console", "КОНСОЛЬ"], ["problems", "ПРОБЛЕМИ"]]
+    var tabs = [["console", "КОНСОЛЬ"], ["problems", "ПРОБЛЕМИ"], ["vars", "ЗМІННІ"]]
     var tx = x + 10
     for t in tabs {
         var label = t[1]
@@ -1505,7 +1570,45 @@ func drawPanel(x, y, w, h) {
     var by = y + PANEL_HEAD_H
     var bh = h - PANEL_HEAD_H
     if (app.panelTab == "console") { conDraw(app.con, x, by, w - 34, bh) }
+    else if (app.panelTab == "vars") { drawVars(x, by, w, bh) }
     else { drawProblems(x, by, w, bh) }
+}
+
+// "ЗМІННІ": значення змінних у паузі покрокового запуску.
+func drawVars(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    var con = app.con
+    if (!con.paused) {
+        var t = "Натисни «Крок за кроком» (F10) - програма зупинятиметься на кожному рядку, а тут буде видно змінні."
+        if (con.running && con.debug) { t = "Програма виконується… (зупиниться на точці зупинки)" }
+        var ty = y + 8
+        for l in wrapLines(t, w - 28, 14) {
+            surfaceText(S, l, x + 14, ty, 14, C_DIM)
+            ty = ty + 18
+        }
+        return
+    }
+    surfaceClip(S, x, y, w, h)
+    var where = "Функція " + con.pauseFunc + ", рядок " + toString(con.pauseLine + 1)
+    surfaceText(S, where, x + 14, y + 6, 14, C_YELLOW, true)
+    var cy = y + 30
+    var col1 = x + 30
+    var col2 = x + 30 + min(220, toInt(w * 0.25))
+    var sections = [["Змінні функції", con.locals], ["Глобальні", con.globals]]
+    for sec in sections {
+        if (len(sec[1]) == 0) { continue }
+        surfaceText(S, sec[0], x + 14, cy, 13, C_SUBTEXT, true)
+        cy = cy + 20
+        for v in sec[1] {
+            surfaceText(S, uiFit(toString(v[0]), col2 - col1 - 10, 14), col1, cy, 14, C_ACCENT)
+            var tw = surfaceText(S, "= " + uiFit(toString(v[1]), w - (col2 - x) - 140, 14), col2, cy, 14, C_TEXT)
+            surfaceText(S, toString(v[2]), col2 + tw + 14, cy + 1, 12, C_DIM)
+            cy = cy + 18
+        }
+        cy = cy + 6
+    }
+    if (len(con.locals) == 0 && len(con.globals) == 0) { surfaceText(S, "Змінних ще немає.", x + 14, cy, 14, C_DIM) }
+    surfaceUnclip(S)
 }
 
 // Проблема: [файл, рядок (0-based, -1 - невідомо), повідомлення, вид "error"/"warning"/"info", джерело]
@@ -1541,6 +1644,7 @@ func drawStatus(W, H) {
     var y = H - STATUS_H
     var bg = 0x2c5aa0
     if (app.con.running) { bg = 0xb5651d }
+    if (app.con.running && app.con.paused) { bg = 0x8a6d1f }
     surfaceRect(S, 0, y, W, STATUS_H, bg)
     var fg = 0xffffff
     var x = 10
@@ -1559,6 +1663,8 @@ func drawStatus(W, H) {
     uiRegion("status.problems", 0, y, x + 10, STATUS_H)
     if (app.status != "" && timeMs() - app.statusTime < 4000) {
         surfaceText(S, uiFit(app.status, W - x - 420, 14), x + 24, y + 5, 14, fg)
+    } else if (app.con.running && app.con.paused) {
+        surfaceText(S, "Пауза: рядок " + toString(app.con.pauseLine + 1) + "   F10 крок · F11 всередину · F5 далі", x + 24, y + 5, 14, fg)
     } else if (app.con.running) {
         surfaceText(S, "Програма працює…", x + 24, y + 5, 14, fg)
     }
@@ -1610,6 +1716,7 @@ func draw() {
     var edY = tabsY + TABS_H
     var edH = bodyH - TABS_H - panelH
 
+    syncDebugView()
     if (len(app.tabs) == 0) {
         drawWelcome(ex, bodyY, ew, bodyH - panelH)
     } else {
@@ -1657,6 +1764,11 @@ func toggleSide(view) {
 
 func doAction(id) {
     if (id == "run") { runCurrent() }
+    else if (id == "debug") { runWith("step") }
+    else if (id == "dbg.cont") { conDebug(app.con, "c") }
+    else if (id == "dbg.over") { conDebug(app.con, "n") }
+    else if (id == "dbg.into") { conDebug(app.con, "s") }
+    else if (id == "dbg.out") { conDebug(app.con, "o") }
     else if (id == "stop") { conStop(app.con) }
     else if (id == "save") {
         saveAll()
@@ -1850,6 +1962,11 @@ func onMouseDown(e) {
         }
         return
     }
+    if (id == "gutter" && ed != null) {
+        edToggleBreakAt(ed, e.y)
+        if (app.con.running && app.con.debug && app.dbgPath == ed.path) { conSetBreaks(app.con, edBreakLines(ed)) }
+        return
+    }
     if (id == "split") {
         app.drag = "split"
         return
@@ -1960,8 +2077,27 @@ func onKey(e) {
         else if (k == "Left") { tourGo(app.tour - 1) }
         return
     }
+    // клавіші налагодження - як у VS Code
+    if (k == "F5" && e.shift) {
+        conStop(app.con)
+        return
+    }
     if (k == "F5" || (e.ctrl && k == "r")) {
-        if (app.con.running) { conStop(app.con) } else { runCurrent() }
+        if (app.con.running && app.con.paused) { conDebug(app.con, "c") }
+        else if (app.con.running) { conStop(app.con) }
+        else if (app.active != "" && fileKind(app.active) != "text") {
+            // з точками зупинки - одразу в режимі "до точки зупинки"
+            var ed0 = currentEditor()
+            if (app.mode == "code" && ed0 != null && len(ed0.breaks) > 0) { runWith("cont") } else { runCurrent() }
+        }
+        return
+    }
+    if (k == "F10" || k == "F11") {
+        if (app.con.running && app.con.paused) {
+            if (k == "F10") { conDebug(app.con, "n") }
+            else if (e.shift) { conDebug(app.con, "o") }
+            else { conDebug(app.con, "s") }
+        } else if (!app.con.running && app.active != "" && fileKind(app.active) != "text") { runWith("step") }
         return
     }
     if (e.ctrl && e.shift && k == "p") {
@@ -2561,7 +2697,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)

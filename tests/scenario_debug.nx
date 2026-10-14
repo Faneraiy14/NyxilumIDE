@@ -1,0 +1,99 @@
+// Покроковий запуск (налагоджувач): F10/F11/Shift+F11/F5, точка зупинки
+// кліком по жолобу, підсвітка рядка, вкладка ЗМІННІ; блоки - підсвітка блока.
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, currentBlocks, doAction, draw }
+
+// Чекати паузу (або кінець програми).
+func waitPause() {
+    var before = app.con.pauses
+    step()   // спершу обробити натиснуту клавішу (запуск/команду)
+    var t0 = timeMs()
+    while (timeMs() - t0 < 6000 && app.con.running && (!app.con.paused || app.con.pauses == before)) { ideStep(20) }
+    step()
+}
+
+func hasVar(list, name, value) {
+    for v in list { if (v[0] == name && v[1] == value) { return true } }
+    return false
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("middle", false, true, true)
+    makeDir(dir)
+    writeFile(dir + "/крок.nx", "var лічильник = 0\n\nfunc подвоїти(x) {\n    var r = x * 2\n    return r\n}\n\nfunc main() {\n    var a = 5\n    var b = подвоїти(a)\n    for i in 0..3 {\n        лічильник = лічильник + i\n    }\n    print(\"b = \" + toString(b))\n}\n")
+    ideInit(dir)
+    clickId("file:" + dir + "/крок.nx")
+    var ed = currentEditor()
+    check(endsWith(ed.path, "крок.nx"), "відкрито програму")
+
+    // точка зупинки на рядку 12 (лічильник = ...) кліком по жолобу
+    draw()
+    var g = edRowY(ed, 11)
+    click(ed.x + 10, g)
+    check(indexOf(ed.breaks, 11) >= 0, "клік по жолобу поставив точку зупинки на рядку 12")
+
+    key("F10", false, false)
+    waitPause()
+    check(app.con.paused && app.con.pauseLine == 8, "F10: пауза на першому рядку main (9)")
+    check(ed.dbgLine == 8, "рядок підсвічено в редакторі")
+    check(app.panelTab == "vars", "відкрилась вкладка ЗМІННІ")
+    shot("d01_paused")
+    key("F10", false, false)
+    waitPause()
+    check(app.con.pauseLine == 9 && hasVar(app.con.locals, "a", "5"), "F10: крок, a = 5")
+    key("F11", false, false)
+    waitPause()
+    check(app.con.pauseFunc == "подвоїти" && hasVar(app.con.locals, "x", "5"), "F11: всередині подвоїти, x = 5")
+    shot("d02_into")
+    key("F11", false, true)
+    waitPause()
+    check(app.con.pauseFunc == "main" && hasVar(app.con.locals, "b", "10"), "Shift+F11: вийшли, b = 10")
+    key("F5", false, false)
+    waitPause()
+    check(app.con.pauseLine == 11 && hasVar(app.con.locals, "i", "0"), "F5: зупинка на точці, i = 0")
+    check(hasVar(app.con.globals, "лічильник", "0"), "видно глобальну змінну")
+    key("F5", false, false)
+    waitPause()
+    check(app.con.pauseLine == 11 && hasVar(app.con.locals, "i", "1"), "F5: знову точка, i = 1")
+    // зняти точку на ходу й дочекатися кінця
+    click(ed.x + 10, edRowY(ed, 11))
+    key("F5", false, false)
+    var t0 = timeMs()
+    while (timeMs() - t0 < 6000 && app.con.running) { ideStep(20) }
+    step()
+    check(!app.con.running && contains(toString(app.con.lines), "b = 10"), "точку знято - програма дійшла до кінця")
+    check(ed.dbgLine == -1, "підсвітку прибрано")
+
+    // Shift+F5 зупиняє посеред паузи
+    key("F10", false, false)
+    waitPause()
+    key("F5", false, true)
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && app.con.running) { ideStep(20) }
+    check(!app.con.running, "Shift+F5 зупинив налагодження")
+
+    // блоки: пауза підсвічує блок
+    clickId("ex.newfile")
+    typeText("кроки.nxb")
+    key("Enter", false, false)
+    step()
+    var ws = currentBlocks()
+    var say = ws.stacks[0].next
+    key("F10", false, false)
+    waitPause()
+    step()
+    check(ws.dbgBlock == say, "покроковий запуск блоків підсвічує блок «сказати»")
+    shot("d03_blocks")
+    key("F10", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 6000 && app.con.running) { ideStep(20) }
+    check(!app.con.running && ws.dbgBlock == null, "програма з блоків дійшла до кінця")
+
+    ideShutdown()
+    print("НАЛАГОДЖУВАЧ: УСЕ ГАРАЗД")
+}
+
+// y середини рядка row (0-based) у редакторі
+func edRowY(ed, row) { return ed.y + 4 + (row - ed.top) * ed.lineH + toInt(ed.lineH / 2) }

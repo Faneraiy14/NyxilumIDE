@@ -43,6 +43,8 @@ struct Editor {
     findOpen: bool
     findText: string
     plain: bool
+    breaks: array
+    dbgLine: i32
 }
 
 func newEditor(text, path) {
@@ -50,7 +52,7 @@ func newEditor(text, path) {
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
         x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
-        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false }
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1 }
     edSetText(ed, text)
     return ed
 }
@@ -479,6 +481,21 @@ func edGoToLine(ed, line) {
     if (ed.cy < ed.top || ed.cy >= ed.top + rows - 1) { ed.top = max(0, ed.cy - toInt(rows / 3)) }
 }
 
+// Точка зупинки на рядку під мишею (клік по жолобу).
+func edToggleBreakAt(ed, my) {
+    var row = toInt(floor((my - ed.y - 4) / ed.lineH)) + ed.top
+    if (row < 0 || row >= len(ed.lines)) { return }
+    var i = indexOf(ed.breaks, row)
+    if (i >= 0) { removeAt(ed.breaks, i) } else { append(ed.breaks, row) }
+}
+
+// Номери рядків точок зупинки (з 1, для налагоджувача).
+func edBreakLines(ed) {
+    var out = []
+    for b in ed.breaks { append(out, b + 1) }
+    return out
+}
+
 // Пікселі -> позиція в тексті.
 func edPosAt(ed, mx, my) {
     var row = toInt(floor((my - ed.y - 4) / ed.lineH)) + ed.top
@@ -844,7 +861,8 @@ func edDraw(ed, x, y, w, h, focused) {
         if (li >= len(ed.lines)) { break }
         var ly = y + 4 + row * lh
         var line = ed.lines[li]
-        if (li == ed.errLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_ERRLINE) }
+        if (li == ed.dbgLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, 0x4a4520) }
+        else if (li == ed.errLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_ERRLINE) }
         else if (li == ed.cy && focused && !edHasSel(ed)) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_CURLINE) }
 
         // виділення
@@ -880,6 +898,12 @@ func edDraw(ed, x, y, w, h, focused) {
         if (li == ed.errLine) {
             numColor = C_RED
             surfaceCircle(S, x + 8, ly + toInt(lh / 2) - 2, 4, C_RED)
+        }
+        // точка зупинки - червоне коло на жолобі; поточний рядок паузи - жовта стрілка
+        if (indexOf(ed.breaks, li) >= 0) { surfaceCircle(S, x + 9, ly + toInt(lh / 2) - 1, 6, 0xe5484d) }
+        if (li == ed.dbgLine) {
+            var ay = ly + toInt(lh / 2) - 1
+            surfacePolygon(S, [x + 3, ay - 6, x + 11, ay - 6, x + 17, ay, x + 11, ay + 6, x + 3, ay + 6], C_YELLOW)
         }
         surfaceText(S, num, x + ed.gutterW - 14 - len(num) * cw, ly, fs, numColor)
         row = row + 1
@@ -920,6 +944,8 @@ func edDraw(ed, x, y, w, h, focused) {
     }
     surfaceUnclip(S)
     uiRegion("editor", x, y, w, h)
+    // жолоб з номерами рядків - клік ставить/знімає точку зупинки
+    uiRegion("gutter", x, y, ed.gutterW - 6, h)
 
     // рядок пошуку
     if (ed.findOpen) {

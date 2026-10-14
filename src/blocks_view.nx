@@ -43,6 +43,7 @@ struct BlocksWs {
     edit: any
     editIdx: i32
     errBlock: any
+    dbgBlock: any
     undo: array
     redo: array
     dirty: bool
@@ -67,7 +68,7 @@ func newBlocksWs(path, text) {
     initSpecs()
     var ws = BlocksWs { stacks: [], panX: 0, panY: 0, cat: "Події", drag: null, dragOffX: 0, dragOffY: 0,
         dragX: 0, dragY: 0, dragH: 0, pending: null, pendingSlot: -1, pendingSlotType: "", pendingPal: false,
-        pressX: 0, pressY: 0, panning: false, edit: null, editIdx: -1, errBlock: null, undo: [], redo: [],
+        pressX: 0, pressY: 0, panning: false, edit: null, editIdx: -1, errBlock: null, dbgBlock: null, undo: [], redo: [],
         dirty: false, path: path, menu: [], menuX: 0, menuY: 0, menuBlock: null, menuIdx: -1, palScroll: 0, palScrollX: 0, palPanning: false,
         showCode: false, snap: [], x: 0, y: 0, w: 0, h: 0 }
     try {
@@ -335,6 +336,11 @@ func drawBlock(b, x, y, ws) {
         if (_record) { append(_attach, "next") append(_attach, b) append(_attach, x) append(_attach, y + total) }
     }
     if (err) { surfaceRectLine(S, x - 3, y - 3, w + 6, hh + 6, C_RED, 3) }
+    // блок, на якому програма зараз стоїть (покроковий запуск)
+    if (ws != null && ws.dbgBlock == b) {
+        surfaceRectLine(S, x - 4, y - 4, w + 8, hh + 8, C_YELLOW, 3)
+        surfacePolygon(S, [x - 18, y + toInt(hh / 2) - 7, x - 8, y + toInt(hh / 2), x - 18, y + toInt(hh / 2) + 7], C_YELLOW)
+    }
     b.h = total
     return total
 }

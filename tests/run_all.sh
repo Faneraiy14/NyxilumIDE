@@ -26,6 +26,7 @@ run scenario_blocks.nx "$TMP/p2" "$TMP/shots"
 run scenario_guide.nx "$TMP/p3" "$TMP/shots"
 mkdir -p "$TMP/p4"
 run test_blocks_model.nx "$TMP/p4"
+run scenario_debug.nx "$TMP/p6" "$TMP/shots"
 run scenario_crash.nx "$TMP/p5" "$TMP/shots"
 run test_explain.nx
 exit $fail

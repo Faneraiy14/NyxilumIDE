@@ -21,6 +21,16 @@ struct Console {
     runs: i32
     lastOk: bool
     lastOutput: string
+    debug: bool
+    dbgStart: string
+    dbgBreaks: array
+    paused: bool
+    pauseLine: i32
+    pauseFunc: string
+    pauses: i32
+    locals: array
+    globals: array
+    errBuf: string
     x: i32
     y: i32
     w: i32
@@ -29,7 +39,9 @@ struct Console {
 
 func newConsole() {
     return Console { lines: [], proc: null, outLen: 0, errLen: 0, running: false, startMs: 0,
-        scroll: 0, errLine: -1, input: "", focused: false, runs: 0, lastOk: false, lastOutput: "", x: 0, y: 0, w: 0, h: 0 }
+        scroll: 0, errLine: -1, input: "", focused: false, runs: 0, lastOk: false, lastOutput: "",
+        debug: false, dbgStart: "", dbgBreaks: [], paused: false, pauseLine: -1, pauseFunc: "", pauses: 0,
+        locals: [], globals: [], errBuf: "", x: 0, y: 0, w: 0, h: 0 }
 }
 
 // Рядок консолі - [текст, вид]; вид: "out" | "err" | "info" | "ok" | "in".
@@ -94,17 +106,34 @@ func conClear(con) {
     con.scroll = 0
 }
 
-func conRun(con, path, dir) {
+// debugMode: "" - звичайний запуск; "step" - з паузою на першому рядку;
+// "cont" - до першої точки зупинки (breaks - номери рядків, з 1).
+func conRun(con, path, dir, debugMode, breaks) {
     if (con.running) { conStop(con) }
     conClear(con)
     con.errLine = -1
     con.input = ""
+    con.debug = debugMode != ""
+    con.dbgStart = debugMode
+    con.dbgBreaks = breaks
+    con.paused = false
+    con.pauseLine = -1
+    con.pauses = 0
+    con.locals = []
+    con.globals = []
+    con.errBuf = ""
     var parts = split(replace(path, "\\", "/"), "/")
     var name = parts[len(parts) - 1]
-    conAdd(con, "» Запуск " + name, "info")
+    if (con.debug) { conAdd(con, "» Покроковий запуск " + name, "info") }
+    else { conAdd(con, "» Запуск " + name, "info") }
     var opts = newMap()
     mapSet(opts, "interactive", true)
     mapSet(opts, "cwd", dir)
+    if (con.debug) {
+        var env = newMap()
+        mapSet(env, "NX_DEBUG", "1")
+        mapSet(opts, "env", env)
+    }
     try {
         con.proc = procStart(nxPath(), [path], opts)
         con.running = true
@@ -117,8 +146,63 @@ func conRun(con, path, dir) {
     }
 }
 
+// Команда налагоджувачу (лише в паузі): "s" крок, "n" через, "o" вийти, "c" далі.
+func conDebug(con, cmd) {
+    if (!con.running || !con.paused) { return }
+    con.paused = false
+    con.pauseLine = -1
+    procWrite(con.proc, cmd + "\n")
+}
+
+// Точки зупинки на ходу (у паузі): нові діють з наступної команди.
+func conSetBreaks(con, breaks) {
+    con.dbgBreaks = breaks
+    if (con.running && con.paused) { procWrite(con.proc, "b " + _joinNums(breaks) + "\n") }
+}
+
+func _joinNums(arr) {
+    var parts = []
+    for n in arr { append(parts, toString(n)) }
+    return join(parts, ",")
+}
+
+// stderr: рядки з префіксом \u0001NXDBG - події налагоджувача, решта - помилки.
+func _errChunk(con, chunk) {
+    var marker = fromCharCode(1) + "NXDBG "
+    con.errBuf = con.errBuf + replace(chunk, "\r", "")
+    var lines = split(con.errBuf, "\n")
+    con.errBuf = lines[len(lines) - 1]
+    var i = 0
+    while (i < len(lines) - 1) {
+        var l = lines[i]
+        if (startsWith(l, marker)) { _dbgEvent(con, substring(l, len(marker), len(l) - len(marker))) }
+        else { _conChunk(con, l + "\n", "err") }
+        i = i + 1
+    }
+}
+
+func _dbgEvent(con, json) {
+    var ev = null
+    try { ev = fromJson(json) } catch (e) { return }
+    var kind = mapGet(ev, "event")
+    if (kind == "ready") {
+        procWrite(con.proc, "b " + _joinNums(con.dbgBreaks) + "\n")
+        if (con.dbgStart == "cont") { procWrite(con.proc, "c\n") } else { procWrite(con.proc, "s\n") }
+        return
+    }
+    if (kind == "paused") {
+        con.paused = true
+        con.pauses = con.pauses + 1
+        con.pauseLine = toInt(mapGet(ev, "line")) - 1
+        con.pauseFunc = toString(mapGet(ev, "func"))
+        con.locals = mapGet(ev, "locals")
+        con.globals = mapGet(ev, "globals")
+    }
+}
+
 func conStop(con) {
     if (!con.running) { return }
+    con.paused = false
     procKill(con.proc)
     conPoll(con)
     con.running = false
@@ -137,7 +221,7 @@ func conPoll(con) {
     }
     var err = procErrorOutput(con.proc)
     if (len(err) > con.errLen) {
-        _conChunk(con, substring(err, con.errLen, len(err) - con.errLen), "err")
+        _errChunk(con, substring(err, con.errLen, len(err) - con.errLen))
         con.errLen = len(err)
         changed = true
     }
@@ -147,7 +231,13 @@ func conPoll(con) {
         out = procOutput(con.proc)
         if (len(out) > con.outLen) { _conChunk(con, substring(out, con.outLen, len(out) - con.outLen), "out")  con.outLen = len(out) }
         err = procErrorOutput(con.proc)
-        if (len(err) > con.errLen) { _conChunk(con, substring(err, con.errLen, len(err) - con.errLen), "err")  con.errLen = len(err) }
+        if (len(err) > con.errLen) { _errChunk(con, substring(err, con.errLen, len(err) - con.errLen))  con.errLen = len(err) }
+        if (con.errBuf != "") {
+            _conChunk(con, con.errBuf, "err")
+            con.errBuf = ""
+        }
+        con.paused = false
+        con.pauseLine = -1
         con.running = false
         con.focused = false
         var code = procExitCode(con.proc)
