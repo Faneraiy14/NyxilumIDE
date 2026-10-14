@@ -589,6 +589,7 @@ func onMouseDown(e) {
     var ed = currentEditor()
     if (id == "editor" && ed != null) {
         app.focus = "editor"
+        ed.acOpen = false
         app.con.focused = false
         var pos = edPosAt(ed, e.x, e.y)
         var shift = e.shift == true

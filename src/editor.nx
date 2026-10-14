@@ -7,6 +7,7 @@
 import "theme.nx"
 import "ui.nx"
 import "highlight.nx"
+import "builtins.nx"
 
 struct Editor {
     lines: array
@@ -36,13 +37,19 @@ struct Editor {
     charW: i32
     lineH: i32
     gutterW: i32
+    acOpen: bool
+    acItems: array
+    acSel: i32
+    findOpen: bool
+    findText: string
 }
 
 func newEditor(text, path) {
     var ed = Editor { lines: [], cx: 0, cy: 0, ax: 0, ay: -1, wantCol: 0, top: 0, left: 0,
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
-        x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40 }
+        x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "" }
     edSetText(ed, text)
     return ed
 }
@@ -480,11 +487,220 @@ func edPosAt(ed, mx, my) {
     return [row, col]
 }
 
+// ---------- автодоповнення ----------
+
+var _acKeywords = ["func", "var", "if", "else", "while", "for", "return", "break", "continue",
+                   "in", "struct", "self", "import", "extends", "super", "try", "catch", "throw",
+                   "true", "false", "null"]
+
+// Слово (назва) перед курсором: [початок, текст].
+func _wordBefore(ed) {
+    var line = ed.lines[ed.cy]
+    var a = ed.cx
+    while (a > 0 && (isIdentPart(charCode(line[a - 1])) || (line[a - 1] == "'" && a > 1 && isIdentPart(charCode(line[a - 2]))))) { a = a - 1 }
+    return [a, cut(line, a, ed.cx)]
+}
+
+// Назви з усього файлу (з кешу підсвітки - перераховуються лише змінені рядки).
+func _fileNames(ed) {
+    _warmTokens(ed, len(ed.lines) - 1)
+    var names = []
+    var seen = newMap()
+    var i = 0
+    while (i < len(ed.lines)) {
+        var t = ed.hlTok[i]
+        var k = 0
+        while (k < len(t)) {
+            var kind = t[k + 2]
+            if (kind == HL_TEXT || kind == HL_FUNC || kind == HL_TYPE) {
+                var w = substring(ed.lines[i], t[k], t[k + 1] - t[k])
+                // слово, яке зараз набирається, у підказки не йде
+                if (!(i == ed.cy && t[k + 1] == ed.cx) && !mapHas(seen, w)) {
+                    mapSet(seen, w, true)
+                    append(names, [w, kind])
+                }
+            }
+            k = k + 3
+        }
+        i = i + 1
+    }
+    return names
+}
+
+func edUpdateCompletion(ed) {
+    var wb = _wordBefore(ed)
+    var prefix = wb[1]
+    ed.acOpen = false
+    if (len(prefix) < 2) { return }
+    var low = toLower(prefix)
+    var items = []
+    var seen = newMap()
+    for nk in _fileNames(ed) {
+        var w = nk[0]
+        if (w != prefix && startsWith(toLower(w), low) && !mapHas(seen, w)) {
+            mapSet(seen, w, true)
+            var kindName = "назва"
+            if (nk[1] == HL_FUNC) { kindName = "функція" }
+            if (nk[1] == HL_TYPE) { kindName = "структура" }
+            append(items, [w, kindName])
+        }
+    }
+    for w in _acKeywords {
+        if (w != prefix && startsWith(w, low) && !mapHas(seen, w)) {
+            mapSet(seen, w, true)
+            append(items, [w, "слово мови"])
+        }
+    }
+    for w in BUILTIN_NAMES {
+        if (w != prefix && startsWith(toLower(w), low) && !mapHas(seen, w)) {
+            mapSet(seen, w, true)
+            append(items, [w, "вбудована"])
+        }
+        if (len(items) >= 40) { break }
+    }
+    if (len(items) == 0) { return }
+    ed.acItems = slice(items, 0, min(len(items), 8))
+    ed.acSel = 0
+    ed.acOpen = true
+}
+
+func edAcceptCompletion(ed) {
+    var item = ed.acItems[ed.acSel]
+    var wb = _wordBefore(ed)
+    var line = ed.lines[ed.cy]
+    var ins = item[0]
+    var after = cut(line, ed.cx, len(line))
+    // вбудована функція - одразу з дужками, курсор усередині
+    var addParen = item[1] == "вбудована" && !startsWith(after, "(")
+    ed.lines[ed.cy] = cut(line, 0, wb[0]) + ins + after
+    ed.cx = wb[0] + len(ins)
+    if (addParen) {
+        ed.lines[ed.cy] = cut(ed.lines[ed.cy], 0, ed.cx) + "()" + cut(ed.lines[ed.cy], ed.cx, len(ed.lines[ed.cy]))
+        ed.cx = ed.cx + 1
+    }
+    ed.wantCol = ed.cx
+    ed.acOpen = false
+    ed.dirty = true
+}
+
+// ---------- пошук (Ctrl+F) ----------
+
+// Наступний (dir = 1) чи попередній (-1) збіг після курсора - з виділенням.
+func edFindNext(ed, dir) {
+    var q = ed.findText
+    if (q == "") { return false }
+    var lq = toLower(q)
+    var n = len(ed.lines)
+    var startLine = ed.cy
+    var startCol = ed.cx
+    if (dir < 0 && edHasSel(ed)) { startCol = edSelRange(ed)[1] }
+    var step = 0
+    while (step <= n) {
+        var li = ((startLine + dir * step) % n + n) % n
+        var line = toLower(ed.lines[li])
+        var found = -1
+        if (dir > 0) {
+            var from = 0
+            if (step == 0) { from = startCol }
+            var rest = cut(line, from, len(line))
+            var at = indexOf(rest, lq)
+            if (at >= 0) { found = from + at }
+        } else {
+            var limit = len(line)
+            if (step == 0) { limit = startCol }
+            var pos = 0
+            while (true) {
+                var at2 = indexOf(cut(line, pos, len(line)), lq)
+                if (at2 < 0 || pos + at2 + len(lq) > limit) { break }
+                found = pos + at2
+                pos = found + 1
+            }
+        }
+        if (found >= 0) {
+            ed.ay = li
+            ed.ax = found
+            ed.cy = li
+            ed.cx = found + len(q)
+            edEnsureVisible(ed)
+            return true
+        }
+        step = step + 1
+    }
+    return false
+}
+
+func edFindCount(ed) {
+    if (ed.findText == "") { return 0 }
+    var lq = toLower(ed.findText)
+    var c = 0
+    for l in ed.lines {
+        var line = toLower(l)
+        var pos = 0
+        while (true) {
+            var at = indexOf(cut(line, pos, len(line)), lq)
+            if (at < 0) { break }
+            c = c + 1
+            pos = pos + at + len(lq)
+        }
+    }
+    return c
+}
+
 // ---------- клавіатура ----------
 
 // Повертає true, якщо клавішу оброблено.
 func edKey(ed, e) {
     var k = e.key
+    if (e.ctrl && k == "f") {
+        ed.findOpen = true
+        ed.acOpen = false
+        if (edHasSel(ed)) {
+            var r0 = edSelRange(ed)
+            if (r0[0] == r0[2]) { ed.findText = edSelText(ed) }
+        }
+        return true
+    }
+    if (ed.findOpen) {
+        if (k == "Escape") {
+            ed.findOpen = false
+            return true
+        }
+        if (k == "Enter") {
+            var dir = 1
+            if (e.shift) { dir = -1 }
+            edFindNext(ed, dir)
+            return true
+        }
+        if (k == "Backspace") {
+            if (len(ed.findText) > 0) { ed.findText = substring(ed.findText, 0, len(ed.findText) - 1) }
+            return true
+        }
+        if (e.ctrl && k == "v") {
+            ed.findText = ed.findText + replace(clipboardGet(), "\n", " ")
+            return true
+        }
+        return true
+    }
+    if (ed.acOpen) {
+        if (k == "Down") {
+            ed.acSel = (ed.acSel + 1) % len(ed.acItems)
+            return true
+        }
+        if (k == "Up") {
+            ed.acSel = (ed.acSel - 1 + len(ed.acItems)) % len(ed.acItems)
+            return true
+        }
+        if (k == "Enter" || k == "Tab") {
+            edBeginEdit(ed, "other")
+            edAcceptCompletion(ed)
+            return true
+        }
+        if (k == "Escape") {
+            ed.acOpen = false
+            return true
+        }
+        if (k != "Shift" && k != "Backspace") { ed.acOpen = false }
+    }
     if (e.ctrl) {
         if (k == "a") { edSelectAll(ed)  return true }
         if (k == "c") {
@@ -529,7 +745,13 @@ func edKey(ed, e) {
         if (!(e.ctrl && (k == "Up" || k == "Down"))) { edEnsureVisible(ed) }
         return true
     }
-    if (k == "Backspace") { edBeginEdit(ed, "del")  edBackspace(ed)  edEnsureVisible(ed)  return true }
+    if (k == "Backspace") {
+        edBeginEdit(ed, "del")
+        edBackspace(ed)
+        edEnsureVisible(ed)
+        if (ed.acOpen) { edUpdateCompletion(ed) }
+        return true
+    }
     if (k == "Delete") { edBeginEdit(ed, "del")  edDelete(ed)  edEnsureVisible(ed)  return true }
     if (k == "Enter") { edBeginEdit(ed, "other")  edNewline(ed)  edEnsureVisible(ed)  return true }
     if (k == "Tab") { edBeginEdit(ed, "other")  edIndent(ed, e.shift)  edEnsureVisible(ed)  return true }
@@ -538,9 +760,22 @@ func edKey(ed, e) {
 }
 
 func edTextInput(ed, t) {
+    if (ed.findOpen) {
+        ed.findText = ed.findText + t
+        // пошук "на льоту" - з початку поточного збігу
+        if (edHasSel(ed)) {
+            var r = edSelRange(ed)
+            ed.cy = r[0]
+            ed.cx = r[1]
+        }
+        ed.ay = -1
+        edFindNext(ed, 1)
+        return
+    }
     edBeginEdit(ed, "type")
     edType(ed, t)
     edEnsureVisible(ed)
+    if (isIdentPart(charCode(t))) { edUpdateCompletion(ed) } else { ed.acOpen = false }
 }
 
 var ZOOM_SIZES = [12, 14, 16, 20, 24, 28, 32]
@@ -655,6 +890,24 @@ func edDraw(ed, x, y, w, h, focused) {
         }
     }
 
+    // збіги пошуку на видимих рядках
+    if (ed.findOpen && ed.findText != "") {
+        var lq = toLower(ed.findText)
+        var r2 = 0
+        while (r2 < rows && ed.top + r2 < len(ed.lines)) {
+            var ln = toLower(ed.lines[ed.top + r2])
+            var pos = 0
+            while (true) {
+                var at = indexOf(cut(ln, pos, len(ln)), lq)
+                if (at < 0) { break }
+                var mx = textX + (pos + at - ed.left) * cw
+                surfaceRect(S, mx, y + 4 + r2 * lh - 2, len(lq) * cw, lh, 0x50f9e2af)
+                pos = pos + at + len(lq)
+            }
+            r2 = r2 + 1
+        }
+    }
+
     // смуга прокрутки
     if (len(ed.lines) > rows - 1) {
         var total = len(ed.lines) + rows - 2
@@ -664,4 +917,48 @@ func edDraw(ed, x, y, w, h, focused) {
     }
     surfaceUnclip(S)
     uiRegion("editor", x, y, w, h)
+
+    // рядок пошуку
+    if (ed.findOpen) {
+        var fw = 380
+        var fx = x + w - fw - 16
+        var fy = y + 8
+        surfaceRoundRect(S, fx, fy, fw, 40, 8, C_SURFACE)
+        surfaceRoundRect(S, fx + 8, fy + 6, fw - 120, 28, 6, C_BG)
+        var tw = surfaceText(S, ed.findText, fx + 16, fy + 12, 16, C_TEXT)
+        surfaceRect(S, fx + 17 + tw, fy + 10, 2, 20, C_ACCENT)
+        if (ed.findText == "") { surfaceText(S, "Знайти…", fx + 22, fy + 12, 16, C_DIM) }
+        var cnt = edFindCount(ed)
+        var info = toString(cnt) + " збіг."
+        if (cnt == 0 && ed.findText != "") { info = "нема" }
+        surfaceText(S, info, fx + fw - 104, fy + 12, 14, C_SUBTEXT)
+        surfaceText(S, "Esc", fx + fw - 36, fy + 12, 14, C_DIM)
+    }
+
+    // список автодоповнення під курсором
+    if (ed.acOpen && focused && ed.cy >= ed.top && ed.cy < ed.top + rows) {
+        var wb = _wordBefore(ed)
+        var px = textX + (wb[0] - ed.left) * cw - 4
+        var py = y + 4 + (ed.cy - ed.top + 1) * lh
+        var pw = 0
+        for it in ed.acItems { pw = max(pw, textWidth(it[0], fs) + textWidth(it[1], 12) + 40) }
+        var ph = len(ed.acItems) * (lh + 2) + 8
+        if (py + ph > y + h) { py = y + 4 + (ed.cy - ed.top) * lh - ph }
+        px = min(px, x + w - pw - 8)
+        surfaceRoundRect(S, px + 3, py + 3, pw, ph, 8, 0x66000000)
+        surfaceRoundRect(S, px, py, pw, ph, 8, C_SURFACE)
+        var iy = py + 4
+        var i = 0
+        while (i < len(ed.acItems)) {
+            var it2 = ed.acItems[i]
+            if (i == ed.acSel) { surfaceRoundRect(S, px + 4, iy, pw - 8, lh + 2, 6, C_SURFACE2) }
+            var col = C_TEXT
+            if (it2[1] == "функція" || it2[1] == "вбудована") { col = C_YELLOW }
+            if (it2[1] == "слово мови") { col = C_MAUVE }
+            surfaceText(S, it2[0], px + 12, iy + 2, fs, col)
+            surfaceText(S, it2[1], px + pw - textWidth(it2[1], 12) - 12, iy + 5, 12, C_DIM)
+            iy = iy + lh + 2
+            i = i + 1
+        }
+    }
 }

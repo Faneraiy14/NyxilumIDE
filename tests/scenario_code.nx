@@ -1,7 +1,7 @@
 // Сценарій режиму "Код": друк, підсвітка, запуск з введенням, помилка.
 // NX_HEADLESS=1 nx tests/scenario_code.nx <тимчасова-тека> <тека-для-png>
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, doAction, draw }
-import "../src/editor.nx" { edText }
+import "../src/editor.nx" { edText, edHasSel }
 
 var outDir = ""
 
@@ -114,6 +114,31 @@ func main() {
     check(ed.errLine >= 0, "рядок з помилкою підсвічено: " + toString(ed.errLine + 1))
     check(contains(toString(app.con.lines), "Підказка:"), "у консолі є підказка до помилки")
     shot("04_error")
+
+    // Автодоповнення і пошук
+    key("End", true, false)
+    typeText("\nprin")
+    step()
+    check(ed.acOpen && len(ed.acItems) > 0, "автодоповнення відкрилось: " + toString(ed.acItems))
+    var hasPrint = false
+    for it in ed.acItems { if (it[0] == "print" || it[0] == "printNoNewLine") { hasPrint = true } }
+    check(hasPrint, "серед підказок є print")
+    while (ed.acItems[ed.acSel][0] != "print") { key("Down", false, false)  step() }
+    key("Enter", false, false)
+    step()
+    check(ed.lines[ed.cy] == "print()" || endsWith(ed.lines[ed.cy], "print()"), "вставлено print(): " + ed.lines[ed.cy])
+    shot("06_autocomplete_done")
+    key("z", true, false)
+    key("z", true, false)
+    step()
+    key("f", true, false)
+    typeText("Число")
+    step()
+    check(ed.findOpen && edHasSel(ed) && contains(ed.lines[ed.cy], "Число"), "Ctrl+F знайшов «Число» у рядку " + toString(ed.cy + 1))
+    shot("07_find")
+    key("Escape", false, false)
+    step()
+    check(!ed.findOpen, "Escape закрив пошук")
 
     // Історія версій: зберегти, змінити, подивитись diff, повернути
     doAction("history")
