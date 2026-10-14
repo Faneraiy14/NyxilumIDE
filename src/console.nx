@@ -18,6 +18,9 @@ struct Console {
     errLine: i32
     input: string
     focused: bool
+    runs: i32
+    lastOk: bool
+    lastOutput: string
     x: i32
     y: i32
     w: i32
@@ -26,7 +29,7 @@ struct Console {
 
 func newConsole() {
     return Console { lines: [], proc: null, outLen: 0, errLen: 0, running: false, startMs: 0,
-        scroll: 0, errLine: -1, input: "", focused: false, x: 0, y: 0, w: 0, h: 0 }
+        scroll: 0, errLine: -1, input: "", focused: false, runs: 0, lastOk: false, lastOutput: "", x: 0, y: 0, w: 0, h: 0 }
 }
 
 // Рядок консолі - [текст, вид]; вид: "out" | "err" | "info" | "ok" | "in".
@@ -148,6 +151,10 @@ func conPoll(con) {
         con.running = false
         con.focused = false
         var code = procExitCode(con.proc)
+        // для уроків: чи запуск вдався і що програма вивела
+        con.runs = con.runs + 1
+        con.lastOk = code == 0
+        con.lastOutput = out
         var secs = toFixed((timeMs() - con.startMs) / 1000, 2)
         if (code == 0) { conAdd(con, "√ Готово за " + secs + " с", "ok") }
         else {

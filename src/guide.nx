@@ -1,0 +1,301 @@
+// Навчання: уроки з автоматичною перевіркою, сценарії "Покажи мені" і
+// галерея прикладів. Панель праворуч (кнопка "Навчання" вгорі).
+//
+// Урок - дані: режим, назва, пояснення, мета, перевірка (id) і, за
+// бажанням, демонстрація - список дій, які IDE виконує сама, рухаючи
+// намальований курсор (див. ide.nx: demo*).
+
+import "theme.nx"
+import "ui.nx"
+import "blocks_model.nx"
+
+struct Lesson {
+    mode: string
+    title: string
+    text: string
+    goal: string
+    check: string
+    demo: array
+}
+
+var LESSONS = []
+
+func _lesson(mode, title, text, goal, check, demo) {
+    append(LESSONS, Lesson { mode: mode, title: title, text: text, goal: goal, check: check, demo: demo })
+}
+
+func initLessons() {
+    if (len(LESSONS) > 0) { return }
+    _lesson("blocks", "1. Перша програма",
+        "Програма з блоків починається з жовтої шапки «коли натиснуто Запустити». Усе, що прилипло під нею, виконується по черзі, згори донизу.\n\nУ категорії «Вивід» є синій блок «сказати». Перетягни його мишею під шапку - він сам прилипне. Клацни по білому віконцю і впиши свій текст.\n\nПотім натисни зелену кнопку «Запустити» вгорі. Те, що «каже» програма, з'явиться внизу, в консолі.",
+        "Програма має щось сказати й запуститися без помилок.", "hello",
+        [["cat", "Вивід"], ["drag", "say", "end"], ["type", "end", 0, "Привіт, світе!"], ["click", "run"]])
+    _lesson("blocks", "2. Розмова з програмою",
+        "Блок «запитати ... і запам'ятати в відповідь» ставить питання і чекає, поки ти напишеш відповідь у консолі (і натиснеш Enter).\n\nВідповідь зберігається в змінній «відповідь». Помаранчевий кружечок «відповідь» з категорії «Змінні» можна вставити в інший блок - наприклад, у «з'єднати» з категорії «Оператори»: «з'єднати Привіт, (відповідь)».\n\nСклади програму, яка питає ім'я і вітається.",
+        "Запитати щось і використати відповідь у «сказати».", "ask",
+        [["cat", "Вивід"], ["drag", "ask", "end"], ["drag", "say", "end"], ["cat", "Оператори"], ["dropin", "join", "end", 0], ["type", "join", 0, "Привіт, "], ["cat", "Змінні"], ["dropin", "var:відповідь", "join", 1], ["click", "run"]])
+    _lesson("blocks", "3. Повторення",
+        "Щоб не ставити той самий блок десять разів, є «повторити 10 разів» (категорія «Керування»). Він обіймає інші блоки - усе всередині повториться стільки разів, скільки вказано.\n\nПостав «повторити» під шапку, а всередину - «сказати» з «випадкове від 1 до 10» (категорія «Оператори»).",
+        "«повторити» з блоком «сказати» всередині, і програма запускається.", "repeat",
+        [["cat", "Керування"], ["drag", "repeat", "end"], ["cat", "Вивід"], ["drag", "say", "body"], ["cat", "Оператори"], ["dropin", "random", "body", 0], ["click", "run"]])
+    _lesson("blocks", "4. Змінні - пам'ять програми",
+        "Змінна - це коробочка з назвою, у якій програма тримає число чи текст.\n\n«запам'ятати в рахунок значення 0» кладе 0 у коробочку «рахунок». «збільшити рахунок на 1» додає 1. Кружечок «рахунок» - це те, що зараз у коробочці.\n\nЗроби лічильник: запам'ятай 0, потім повтори 5 разів: збільшити на 1 і сказати рахунок.",
+        "Є «запам'ятати», «збільшити» і змінна всередині іншого блока.", "vars", [])
+    _lesson("blocks", "5. Умови",
+        "«якщо ... інакше» робить вибір. У шестикутне віконце кладеться умова з «Операторів»: «=», «<», «>».\n\nНаприклад: запитай число; якщо відповідь = 7 - скажи «Вгадав!», інакше - «Ні, не 7».",
+        "Є «якщо» з умовою, і програма запускається.", "if", [])
+    _lesson("blocks", "6. Малювання",
+        "Категорія «Малювання» відкриває окреме вікно-сцену. Координати: x - вправо від лівого краю, y - вниз від верху.\n\nЗалий сцену кольором, намалюй коло і прямокутник, а в кінці - «показати малюнок» (без нього нічого не видно!).\n\nПодивись приклад «Сонечко» у вкладці «Приклади», а «Керуй колом» - як зробити гру зі стрілками.",
+        "Є «коло» чи «прямокутник» і «показати малюнок», програма запускається.", "draw", [])
+    _lesson("blocks", "7. Від блоків до коду",
+        "Кожна програма з блоків - це справжній код мовою NyxilumLang. Натисни «Показати код» на робочій області - побачиш його праворуч.\n\nКнопка «Відкрити як код» робить з твоєї програми звичайний файл коду - і далі можна писати руками, як справжні програмісти.",
+        "Відкрити програму з блоків як код.", "tocode", [])
+
+    _lesson("code", "8. print - вивести текст",
+        "У режимі «Код» програму пишуть словами. Вона завжди починається з func main() { ... } - усе між фігурними дужками виконується по черзі.\n\nprint(\"Привіт!\") виводить текст у консоль. Текст - у лапках.\n\nНапиши програму, яка виводить два рядки, і запусти її (F5).",
+        "Програма виводить хоча б 2 рядки.", "code_print", [])
+    _lesson("code", "9. var і readLine",
+        "var ім'я = readLine() - питає в консолі й запам'ятовує відповідь у змінну.\n\nprint(\"Привіт, \" + ім'я) - склеює текст зі змінною.\n\nЧисло з тексту: toInt(readLine()).",
+        "Програма використовує readLine і запускається.", "code_read", [])
+    _lesson("code", "10. Цикл for",
+        "for i in 1..6 { print(i) } - повторює для i = 1, 2, 3, 4, 5 (останнє число не входить).\n\nСпробуй вивести таблицю множення на 3.",
+        "Є цикл for, програма запускається.", "code_for", [])
+    _lesson("code", "11. Свої функції",
+        "Функція - це свій блок, який можна викликати багато разів:\n\nfunc привітати(хто) {\n    print(\"Привіт, \" + хто)\n}\n\nі далі в main: привітати(\"Сева\")\n\nНапиши свою функцію і виклич її.",
+        "Крім main є ще своя функція, програма запускається.", "code_func", [])
+}
+
+// ---------- перевірка уроків ----------
+
+func _walk(b, out) {
+    while (b != null) {
+        append(out, b)
+        for a in b.args { if (typeOf(a) == "struct") { _walk(a, out) } }
+        if (b.body != null) { _walk(b.body, out) }
+        if (b.body2 != null) { _walk(b.body2, out) }
+        b = b.next
+    }
+}
+
+// Усі блоки, що виконуються (під шапкою "start").
+func liveBlocks(stacks) {
+    var out = []
+    for s in stacks { if (s.spec == "start") { _walk(s, out) } }
+    return out
+}
+
+func _has(blocks, spec) {
+    for b in blocks { if (b.spec == spec) { return true } }
+    return false
+}
+
+// Чи є блок spec, у якого вкладено (у віконця чи тіло) блок inner.
+func _hasInside(blocks, spec, inner) {
+    for b in blocks {
+        if (b.spec == spec) {
+            var sub = []
+            for a in b.args { if (typeOf(a) == "struct") { _walk(a, sub) } }
+            if (b.body != null) { _walk(b.body, sub) }
+            if (b.body2 != null) { _walk(b.body2, sub) }
+            if (_has(sub, inner)) { return true }
+        }
+    }
+    return false
+}
+
+func _countLines(text) {
+    var n = 0
+    for l in split(text, "\n") { if (len(trim(l)) > 0) { n = n + 1 } }
+    return n
+}
+
+// ctx: [stacks, editorText, lastOk, lastOutput, mode, currentFile, runs]
+func lessonDone(lesson, ctx) {
+    var stacks = ctx[0]
+    var code = ctx[1]
+    var ranOk = ctx[2]
+    var output = ctx[3]
+    var c = lesson.check
+    if (lesson.mode == "blocks" && c != "tocode") {
+        var bl = liveBlocks(stacks)
+        if (c == "hello") { return ranOk && ctx[4] == "blocks" && _has(bl, "say") && len(trim(output)) > 0 }
+        if (c == "ask") { return ranOk && _has(bl, "ask") && _hasInside(bl, "say", "var") }
+        if (c == "repeat") { return ranOk && (_hasInside(bl, "repeat", "say") || _hasInside(bl, "forever", "say")) }
+        if (c == "vars") { return ranOk && _has(bl, "set") && _has(bl, "change") && _has(bl, "var") }
+        if (c == "if") { return ranOk && (_has(bl, "if") || _has(bl, "ifelse")) }
+        if (c == "draw") { return ranOk && (_has(bl, "circle") || _has(bl, "rect")) && _has(bl, "show") }
+        return false
+    }
+    if (c == "tocode") { return ctx[4] == "code" && contains(ctx[5], "(код)") }
+    if (ctx[4] != "code" || !ranOk) { return false }
+    if (c == "code_print") { return _countLines(output) >= 2 }
+    if (c == "code_read") { return contains(code, "readLine") }
+    if (c == "code_for") { return contains(code, "for ") }
+    if (c == "code_func") {
+        var funcs = 0
+        for l in split(code, "\n") { if (startsWith(trim(l), "func ")) { funcs = funcs + 1 } }
+        return funcs >= 2
+    }
+    return false
+}
+
+// ---------- прогрес ----------
+
+func loadProgress(path) {
+    if (!fileExists(path)) { return [] }
+    try {
+        var d = fromJson(readFile(path))
+        var out = []
+        for t in d { append(out, toString(t)) }
+        return out
+    } catch (e) { return [] }
+}
+
+func saveProgress(path, done) { writeFile(path, toJson(done)) }
+
+// ---------- приклади ----------
+
+var EXAMPLES = [
+    ["Вгадай число.nxb", "Програма загадує число, ти вгадуєш. Змінні, повторення, умови."],
+    ["Таблиця множення.nxb", "Питає число і показує таблицю множення на нього."],
+    ["Зворотний відлік.nxb", "Рахує від 10 до 0 з паузою в секунду."],
+    ["Сонечко.nxb", "Малюнок: будиночок, сонце, трава. Блоки «Малювання»."],
+    ["Керуй колом.nxb", "Гра: рухай коло стрілками на клавіатурі."],
+    ["привіт.nx", "Перша програма кодом: print, readLine, цикл for."]
+]
+
+// ---------- панель ----------
+
+func wrapText(text, maxW, size) {
+    var lines = []
+    for para in split(text, "\n") {
+        if (len(trim(para)) == 0) {
+            append(lines, "")
+            continue
+        }
+        var cur = ""
+        for word in split(para, " ") {
+            var cand = word
+            if (cur != "") { cand = cur + " " + word }
+            if (textWidth(cand, size) > maxW && cur != "") {
+                append(lines, cur)
+                cur = word
+            } else { cur = cand }
+        }
+        if (cur != "") { append(lines, cur) }
+    }
+    return lines
+}
+
+var GUIDE_W = 400
+
+// state: [вкладка ("lessons"/"examples"), відкритий урок (-1 - список), done (масив назв), ctx]
+func drawGuide(tab, open, done, ctx, x, y, h) {
+    var w = GUIDE_W
+    surfaceRect(S, x, y, w, h, C_PANEL)
+    surfaceRect(S, x, y, 1, h, C_ACCENT)
+    var lk = "tab"
+    var ek = "tab"
+    if (tab == "lessons") { lk = "tabOn" } else { ek = "tabOn" }
+    uiButton("g.tab.lessons", "Уроки", x + 1, y, 130, 40, lk)
+    uiButton("g.tab.examples", "Приклади", x + 131, y, 130, 40, ek)
+    uiButton("g.close", "×", x + w - 44, y + 4, 36, 32, "flat")
+    var cy = y + 52
+    surfaceClip(S, x, y + 40, w, h - 40)
+
+    if (tab == "examples") {
+        surfaceText(S, "Відкрий приклад - він скопіюється в твої програми.", x + 16, cy, 14, C_SUBTEXT)
+        cy = cy + 28
+        for ex in EXAMPLES {
+            var name = ex[0]
+            var title = substring(name, 0, indexOf(name, "."))
+            var lines = wrapText(ex[1], w - 40, 14)
+            var boxH = 40 + len(lines) * 18
+            var hover = uiHover(x + 12, cy, w - 24, boxH)
+            var bg = C_SURFACE
+            if (hover) { bg = C_SURFACE2 }
+            surfaceRoundRect(S, x + 12, cy, w - 24, boxH, 8, bg)
+            var tag = "блоки"
+            var tagC = C_PEACH
+            if (endsWith(name, ".nx")) {
+                tag = "код"
+                tagC = C_ACCENT
+            }
+            surfaceText(S, title, x + 24, cy + 10, 16, C_TEXT, true)
+            surfaceText(S, tag, x + w - 24 - textWidth(tag, 14) - 4, cy + 12, 14, tagC)
+            var ly = cy + 34
+            for l in lines {
+                surfaceText(S, l, x + 24, ly, 14, C_SUBTEXT)
+                ly = ly + 18
+            }
+            uiRegion("g.ex:" + name, x + 12, cy, w - 24, boxH)
+            cy = cy + boxH + 10
+        }
+        surfaceUnclip(S)
+        return
+    }
+
+    initLessons()
+    if (open < 0) {
+        surfaceText(S, "Проходь по черзі - кожен урок перевіряється сам.", x + 16, cy, 14, C_SUBTEXT)
+        cy = cy + 28
+        var i = 0
+        while (i < len(LESSONS)) {
+            var les = LESSONS[i]
+            if (i == 7) {
+                surfaceText(S, "Режим «Код»", x + 16, cy + 6, 14, C_DIM, true)
+                cy = cy + 30
+            } else if (i == 0) {
+                surfaceText(S, "Режим «Блоки»", x + 16, cy + 6, 14, C_DIM, true)
+                cy = cy + 30
+            }
+            var isDone = indexOf(done, les.title) >= 0
+            if (uiHover(x + 8, cy, w - 16, 34)) { surfaceRoundRect(S, x + 8, cy, w - 16, 34, 6, C_SURFACE) }
+            if (isDone) {
+                surfaceCircle(S, x + 26, cy + 17, 9, C_GREEN)
+                surfaceText(S, "√", x + 22, cy + 9, 16, 0x11111b, true)
+            } else { surfaceCircleLine(S, x + 26, cy + 17, 9, C_DIM, 2) }
+            surfaceText(S, les.title, x + 46, cy + 9, 16, C_TEXT)
+            uiRegion("g.open:" + toString(i), x + 8, cy, w - 16, 34)
+            cy = cy + 36
+            i = i + 1
+        }
+        surfaceUnclip(S)
+        return
+    }
+
+    var les2 = LESSONS[open]
+    uiButton("g.back", "← Усі уроки", x + 12, cy - 4, 130, 30, "flat")
+    cy = cy + 34
+    for l in wrapText(les2.title, w - 32, 20) {
+        surfaceText(S, l, x + 16, cy, 20, C_TEXT, true)
+        cy = cy + 26
+    }
+    cy = cy + 6
+    for l in wrapText(les2.text, w - 32, 16) {
+        surfaceText(S, l, x + 16, cy, 16, C_SUBTEXT)
+        cy = cy + 20
+    }
+    cy = cy + 10
+    var ok = lessonDone(les2, ctx) || indexOf(done, les2.title) >= 0
+    var goalLines = wrapText("Мета: " + les2.goal, w - 56, 16)
+    var gh = 20 + len(goalLines) * 20 + 30
+    var gc = C_SURFACE
+    if (ok) { gc = 0x2a4a35 }
+    surfaceRoundRect(S, x + 12, cy, w - 24, gh, 8, gc)
+    var gy = cy + 10
+    for l in goalLines {
+        surfaceText(S, l, x + 26, gy, 16, C_TEXT)
+        gy = gy + 20
+    }
+    if (ok) { surfaceText(S, "√ Виконано! Молодець!", x + 26, gy + 4, 16, C_GREEN, true) }
+    else { surfaceText(S, "Ще не виконано - спробуй!", x + 26, gy + 4, 16, C_DIM) }
+    cy = cy + gh + 14
+    var bx = x + 12
+    if (len(les2.demo) > 0) {
+        uiButton("g.demo", "▶ Покажи мені", bx, cy, 160, 34, "normal")
+        bx = bx + 170
+    }
+    if (open + 1 < len(LESSONS)) { uiButton("g.next", "Далі →", bx, cy, 110, 34, "primary") }
+    surfaceUnclip(S)
+}

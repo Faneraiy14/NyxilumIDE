@@ -1,0 +1,123 @@
+// Створює приклади з блоків (examples/*.nxb) - щоб їх було видно в коді
+// й легко змінювати. Запуск з кореня репо:
+//   nx tools/make_examples.nx
+import "../src/blocks_model.nx"
+
+func b(id) { return newBlock(id) }
+
+// Блок з аргументами: a(id, [арг1, арг2, ...])
+func a(id, args) {
+    var x = newBlock(id)
+    var k = 0
+    while (k < len(args)) {
+        x.args[k] = args[k]
+        k = k + 1
+    }
+    return x
+}
+
+func v(name) { return a("var", [name]) }
+
+// Ланцюжок: перший блок, потім кожен наступний під попереднім.
+func chain(list) {
+    var k = 0
+    while (k < len(list) - 1) {
+        list[k].next = list[k + 1]
+        k = k + 1
+    }
+    return list[0]
+}
+
+func save(name, stacks) {
+    for s in stacks {
+        if (s.x == 0) { s.x = 40 }
+        if (s.y == 0) { s.y = 40 }
+    }
+    writeFile("examples/" + name + ".nxb", stacksToJson(stacks))
+    // перевірка: код генерується
+    var g = generateCode(stacks, name)
+    writeFile("examples/.gen/" + name + ".nx", g[0])
+    print("✓ " + name)
+}
+
+func guessNumber() {
+    var ifWin = a("if", [a("eq", [v("відповідь"), v("число")])])
+    ifWin.body = chain([a("say", [a("join", ["Вгадав! Спроб: ", v("спроби")])]), b("stop")])
+    var ifLess = a("if", [a("lt", [v("відповідь"), v("число")])])
+    ifLess.body = a("say", ["Більше!"])
+    var ifMore = a("if", [a("gt", [v("відповідь"), v("число")])])
+    ifMore.body = a("say", ["Менше!"])
+    var loop = b("forever")
+    loop.body = chain([a("ask", ["Твоє число?", "відповідь"]), a("change", ["спроби", "1"]), ifWin, ifLess, ifMore])
+    save("Вгадай число", [chain([b("start"),
+        a("say", ["Я загадав число від 1 до 100. Вгадай!"]),
+        a("set", ["число", a("random", ["1", "100"])]),
+        a("set", ["спроби", "0"]),
+        loop])])
+}
+
+func timesTable() {
+    var line = a("join", [v("n"), a("join", [" × ", a("join", [v("i"), a("join", [" = ", a("mul", [v("n"), v("i")])])])])])
+    var rep = a("repeat", ["10"])
+    rep.body = chain([a("say", [line]), a("change", ["i", "1"])])
+    save("Таблиця множення", [chain([b("start"),
+        a("ask", ["Таблицю якого числа показати?", "n"]),
+        a("set", ["i", "1"]),
+        rep,
+        a("say", ["Готово!"])])])
+}
+
+func sunny() {
+    save("Сонечко", [chain([b("start"),
+        a("scene", ["480", "360"]),
+        a("clear", ["блакитний"]),
+        a("circle", ["380", "80", "50", "жовтий"]),
+        a("rect", ["0", "280", "480", "80", "зелений"]),
+        a("rect", ["120", "180", "120", "100", "коричневий"]),
+        a("rect", ["160", "220", "40", "60", "жовтий"]),
+        a("line", ["110", "180", "180", "120", "червоний"]),
+        a("line", ["180", "120", "250", "180", "червоний"]),
+        a("text", ["Мій будиночок", "20", "20", "білий"]),
+        b("show")])])
+}
+
+func moveCircle() {
+    var r = a("if", [a("key", ["Right"])])
+    r.body = a("change", ["x", "5"])
+    var l = a("if", [a("key", ["Left"])])
+    l.body = a("change", ["x", "-5"])
+    var u = a("if", [a("key", ["Up"])])
+    u.body = a("change", ["y", "-5"])
+    var d = a("if", [a("key", ["Down"])])
+    d.body = a("change", ["y", "5"])
+    var loop = b("forever")
+    loop.body = chain([r, l, u, d,
+        a("clear", ["чорний"]),
+        a("text", ["Керуй стрілками!", "20", "20", "білий"]),
+        a("circle", [v("x"), v("y"), "25", "червоний"]),
+        b("show"),
+        a("wait", ["0.02"])])
+    save("Керуй колом", [chain([b("start"),
+        a("scene", ["480", "360"]),
+        a("set", ["x", "240"]),
+        a("set", ["y", "180"]),
+        loop])])
+}
+
+func countdown() {
+    var rep = a("repeat", ["10"])
+    rep.body = chain([a("say", [v("секунди")]), a("change", ["секунди", "-1"]), a("wait", ["1"])])
+    save("Зворотний відлік", [chain([b("start"),
+        a("set", ["секунди", "10"]),
+        rep,
+        a("say", ["Старт!"])])])
+}
+
+func main() {
+    if (!dirExists("examples/.gen")) { makeDir("examples/.gen") }
+    guessNumber()
+    timesTable()
+    sunny()
+    moveCircle()
+    countdown()
+}

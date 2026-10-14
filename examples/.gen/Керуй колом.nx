@@ -1,0 +1,88 @@
+// Програма з блоків «Керуй колом» - код створено Nyx IDE.
+
+// Відповідь-число стає числом (щоб з нею можна було рахувати).
+func _відповідь(t) {
+    var s = trim(t)
+    try {
+        return toDouble(s)
+    } catch (e) {
+        return s
+    }
+}
+
+// Сцена для блоків «Малювання».
+var _s = null
+func _сцена(w, h) {
+    if (_s == null) { _s = surfaceOpen("Сцена", toInt(w), toInt(h)) }
+}
+func _готово() {
+    if (_s == null) { _сцена(480, 360) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _очистити(c) {
+    _готово()
+    surfaceClear(_s, c)
+}
+func _коло(x, y, r, c) {
+    _готово()
+    surfaceCircle(_s, toInt(x), toInt(y), toInt(r), c)
+}
+func _прямокутник(x, y, w, h, c) {
+    _готово()
+    surfaceRect(_s, toInt(x), toInt(y), toInt(w), toInt(h), c)
+}
+func _лінія(x1, y1, x2, y2, c) {
+    _готово()
+    surfaceLine(_s, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 3)
+}
+func _текст(t, x, y, c) {
+    _готово()
+    surfaceText(_s, toString(t), toInt(x), toInt(y), 20, c)
+}
+func _показати() {
+    _готово()
+    surfacePresent(_s)
+    var e = surfaceNextEvent(_s, 0)
+    while (e != null) { e = surfaceNextEvent(_s, 0) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _клавіша(k) {
+    _готово()
+    return surfaceKeyDown(_s, k)
+}
+func _мишаX() {
+    _готово()
+    return surfaceMouseX(_s)
+}
+func _мишаY() {
+    _готово()
+    return surfaceMouseY(_s)
+}
+
+func main() {
+    var x = 0
+    var y = 0
+    _сцена(480, 360)
+    x = 240
+    y = 180
+    while (true) {
+        if (_клавіша("Right")) {
+            x = x + 5
+        }
+        if (_клавіша("Left")) {
+            x = x - 5
+        }
+        if (_клавіша("Up")) {
+            y = y - 5
+        }
+        if (_клавіша("Down")) {
+            y = y + 5
+        }
+        _очистити(0)
+        _текст("Керуй стрілками!", 20, 20, 16777215)
+        _коло(x, y, 25, 15216688)
+        _показати()
+        sleep(toInt(0.02 * 1000))
+    }
+    while (_s != null && surfaceIsOpen(_s)) { _показати()  sleep(30) }
+}

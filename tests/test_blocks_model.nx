@@ -83,5 +83,46 @@ func main() {
     check(len(back) == 2, "збережено 2 стопки")
     var g2 = generateCode(back, "тест")
     check(g2[0] == code, "після завантаження той самий код")
+    // Малювання: сцена, фігури, клавіша, миша, повторення з анімацією
+    var st = newBlock("start")
+    var sc = newBlock("scene")
+    var rp = newBlock("repeat")
+    rp.args[0] = "3"
+    var cl = newBlock("clear")
+    var ci = newBlock("circle")
+    var mx = newBlock("mousex")
+    ci.args[0] = mx
+    var rc = newBlock("rect")
+    var ln = newBlock("line")
+    var tx = newBlock("text")
+    var sh = newBlock("show")
+    var wt = newBlock("wait")
+    wt.args[0] = "0.05"
+    var cond2 = newBlock("if")
+    cond2.args[0] = newBlock("key")
+    var say3 = newBlock("say")
+    say3.args[0] = "натиснуто"
+    cond2.body = say3
+    cl.next = ci
+    ci.next = rc
+    rc.next = ln
+    ln.next = tx
+    tx.next = sh
+    sh.next = wt
+    wt.next = cond2
+    rp.body = cl
+    var fin = newBlock("say")
+    fin.args[0] = "намальовано"
+    var stop = newBlock("stop")
+    st.next = sc
+    sc.next = rp
+    rp.next = fin
+    fin.next = stop
+    var gd = generateCode([st], "малюнок")
+    writeFile(dir + "/draw.nx", gd[0])
+    var r = procRun(nxPath(), [dir + "/draw.nx"])
+    print(r.stdout + r.stderr)
+    check(r.exitCode == 0 && contains(r.stdout, "намальовано"), "блоки малювання працюють (сцена без вікна)")
+
     print("МОДЕЛЬ БЛОКІВ: УСЕ ГАРАЗД")
 }

@@ -1,0 +1,87 @@
+// Сценарій навчання: перший запуск відкриває урок 1 у блоках; "Покажи мені"
+// сама збирає програму й запускає її; урок зараховується; приклади.
+// NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction }
+import "../src/guide.nx" { LESSONS }
+import "../src/blocks_model.nx" { generateCode }
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+func typeConsole(t) {
+    var i = 0
+    while (i < len(t)) {
+        var m = newMap()
+        mapSet(m, "type", "text")
+        mapSet(m, "text", t[i])
+        surfacePostEvent(S, m)
+        i = i + 1
+    }
+    var k = newMap()
+    mapSet(k, "type", "key") mapSet(k, "key", "Enter") mapSet(k, "ctrl", false) mapSet(k, "shift", false)
+    surfacePostEvent(S, k)
+}
+
+// Прокрутити показ до кінця (і запуск програми), відповідаючи на питання.
+func playDemo(answer, maxMs) {
+    doAction("g.demo")
+    var t0 = timeMs()
+    var answered = false
+    while (timeMs() - t0 < maxMs && (app.demo != null || app.con.running)) {
+        ideStep(16)
+        if (answer != "" && !answered && app.demo == null && app.con.running && contains(toString(app.con.lines), "?")) {
+            typeConsole(answer)
+            answered = true
+        }
+    }
+    ideStep(0)
+    ideStep(0)
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    var out = scriptArgs()[1]
+    ideInit(dir)
+    ideStep(0)
+    check(app.guideOpen && app.guideLesson == 0 && app.mode == "blocks", "перший запуск: урок 1 у режимі блоків")
+    surfaceSave(S, out + "/g01_lesson1.png")
+
+    // перший запуск створює "мої блоки" зі «сказати» - для чистоти уроку прибираємо
+    var ws = currentBlocks()
+    ws.stacks[0].next = null
+
+    playDemo("", 20000)
+    print(generateCode(ws.stacks, "x")[0])
+    print(app.con.lines)
+    check(contains(app.con.lastOutput, "Привіт, світе!"), "показ уроку 1 зібрав і запустив програму")
+    check(indexOf(app.done, LESSONS[0].title) >= 0, "урок 1 зараховано")
+    surfaceSave(S, out + "/g02_lesson1_done.png")
+
+    doAction("g.next")
+    ws.stacks[0].next = null
+    playDemo("Сева", 30000)
+    print(generateCode(ws.stacks, "x")[0])
+    check(contains(app.con.lastOutput, "Привіт, Сева"), "показ уроку 2: питання й відповідь")
+    check(indexOf(app.done, LESSONS[1].title) >= 0, "урок 2 зараховано")
+
+    doAction("g.next")
+    ws.stacks[0].next = null
+    playDemo("", 30000)
+    print(generateCode(ws.stacks, "x")[0])
+    check(indexOf(app.done, LESSONS[2].title) >= 0, "урок 3 (повторення) зараховано")
+    surfaceSave(S, out + "/g03_lesson3.png")
+
+    doAction("g.tab.examples")
+    ideStep(0)
+    surfaceSave(S, out + "/g04_examples.png")
+    doAction("g.ex:Вгадай число.nxb")
+    check(app.mode == "blocks" && endsWith(app.currentB, "Вгадай число.nxb"), "приклад відкрито в блоках")
+    doAction("g.ex:привіт.nx")
+    check(app.mode == "code" && contains(app.current, "привіт"), "приклад коду відкрито")
+
+    ideShutdown()
+    check(contains(readFile(dir + "/.nyx/уроки.json"), "Повторення"), "прогрес збережено")
+    print("СЦЕНАРІЙ НАВЧАННЯ ПРОЙДЕНО")
+}

@@ -1,0 +1,24 @@
+// Програма з блоків «Таблиця множення» - код створено Nyx IDE.
+
+// Відповідь-число стає числом (щоб з нею можна було рахувати).
+func _відповідь(t) {
+    var s = trim(t)
+    try {
+        return toDouble(s)
+    } catch (e) {
+        return s
+    }
+}
+
+func main() {
+    var n = 0
+    var i = 0
+    printNoNewLine("Таблицю якого числа показати?" + " ")
+    n = _відповідь(readLine())
+    i = 1
+    for крок1 in 0..10 {
+        print(toString(n) + toString((" × " + toString((toString(i) + toString((" = " + toString((n * i)))))))))
+        i = i + 1
+    }
+    print("Готово!")
+}

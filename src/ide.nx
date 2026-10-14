@@ -10,6 +10,7 @@ import "editor.nx"
 import "console.nx"
 import "blocks_model.nx"
 import "blocks_view.nx"
+import "guide.nx"
 
 var TOP_H = 48
 var LEFT_W = 230
@@ -24,6 +25,13 @@ struct App {
     blocks: map
     currentB: string
     genMap: array
+    guideOpen: bool
+    guideTab: string
+    guideLesson: i32
+    done: array
+    demo: any
+    cursorX: i32
+    cursorY: i32
     con: any
     focus: string
     drag: string
@@ -306,9 +314,11 @@ func drawTopBar(W) {
     uiButton("mode.code", "Код", tx + 110, 0, 110, TOP_H, codeKind)
 
     var x = W - 16
-    var helpW = uiButtonW("Довідка")
+    var helpW = uiButtonW("Навчання")
     x = x - helpW
-    uiButton("help", "Довідка", x, 8, helpW, 32, "normal")
+    var helpKind = "normal"
+    if (app.guideOpen) { helpKind = "primary" }
+    uiButton("help", "Навчання", x, 8, helpW, 32, helpKind)
     var saveW = uiButtonW("Зберегти")
     x = x - saveW - 8
     uiButton("save", "Зберегти", x, 8, saveW, 32, "normal")
@@ -390,6 +400,7 @@ func draw() {
 
     var cx = LEFT_W
     var cw = W - LEFT_W
+    if (app.guideOpen) { cw = cw - GUIDE_W }
     var conH = layoutConsoleH(H)
     var edY = TOP_H
     var edH = H - TOP_H - STATUS_H - conH
@@ -402,8 +413,13 @@ func draw() {
     }
     conDraw(app.con, cx, edY + edH, cw, conH)
     uiRegion("split", cx, edY + edH - 3, cw, 7)
+    if (app.guideOpen) {
+        checkLessons()
+        drawGuide(app.guideTab, app.guideLesson, app.done, lessonCtx(), W - GUIDE_W, TOP_H, H - TOP_H - STATUS_H)
+    }
     drawStatus(W, H)
     if (app.dialog != null) { drawDialog() }
+    if (app.demo != null) { drawDemoCursor() }
     surfacePresent(S)
 }
 
@@ -427,7 +443,8 @@ func doAction(id) {
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
-    else if (id == "help") { setStatus("Довідку й гайд додамо разом з режимом блоків") }
+    else if (id == "help") { app.guideOpen = !app.guideOpen }
+    else if (startsWith(id, "g.")) { guideAction(id) }
     else if (startsWith(id, "file:")) {
         saveAll()
         var path = substring(id, 5, len(id) - 5)
@@ -544,6 +561,13 @@ func onWheel(e) {
 
 func onKey(e) {
     var k = e.key
+    if (app.demo != null && !_synthetic) {
+        if (k == "Escape") {
+            app.demo = null
+            setStatus("Показ зупинено")
+        }
+        return
+    }
     if (app.dialog != null) {
         dialogKey(e)
         return
@@ -599,6 +623,8 @@ func onText(e) {
 
 func handle(e) {
     var t = e.type
+    // Під час "Покажи мені" миша й клавіші людини ігноруються (крім Escape).
+    if (app.demo != null && !_synthetic && t != "key") { return }
     if (t == "mousemove") { onMouseMove(e) }
     else if (t == "mousedown") { onMouseDown(e) }
     else if (t == "mouseup") { onMouseUp(e) }
@@ -607,11 +633,318 @@ func handle(e) {
     else if (t == "text") { onText(e) }
 }
 
+// ---------- навчання ----------
+
+func lessonCtx() {
+    var stacks = []
+    var ws = currentBlocks()
+    if (ws != null) { stacks = ws.stacks }
+    var code = ""
+    var ed = currentEditor()
+    if (ed != null) { code = edText(ed) }
+    var cur = app.current
+    if (app.mode == "blocks") { cur = app.currentB }
+    return [stacks, code, app.con.lastOk, app.con.lastOutput, app.mode, fileName(cur), app.con.runs]
+}
+
+// Позначити виконані уроки (перевіряється відкритий урок).
+func checkLessons() {
+    if (app.guideLesson < 0) { return }
+    initLessons()
+    var les = LESSONS[app.guideLesson]
+    if (indexOf(app.done, les.title) < 0 && lessonDone(les, lessonCtx())) {
+        append(app.done, les.title)
+        saveProgress(joinPath(joinPath(app.dir, ".nyx"), "уроки.json"), app.done)
+        setStatus("Урок пройдено: " + les.title + "!")
+    }
+}
+
+func openExample(name) {
+    var src = joinPath(joinPath(ideHome(), "examples"), name)
+    if (!fileExists(src)) {
+        setStatus("Нема прикладу " + name)
+        return
+    }
+    var dot = indexOf(name, ".")
+    var base = substring(name, 0, dot)
+    var extn = substring(name, dot, len(name) - dot)
+    var target = name
+    var i = 2
+    while (fileExists(joinPath(app.dir, target))) {
+        target = base + " " + toString(i) + extn
+        i = i + 1
+    }
+    writeFile(joinPath(app.dir, target), readFile(src))
+    if (extn == ".nxb") {
+        setMode("blocks")
+        refreshFiles()
+        openBlocks(joinPath(app.dir, target))
+    } else {
+        setMode("code")
+        refreshFiles()
+        openFile(joinPath(app.dir, target))
+    }
+    setStatus("Приклад «" + base + "» відкрито - натисни «Запустити»!")
+}
+
+func guideAction(id) {
+    initLessons()
+    if (id == "g.close") { app.guideOpen = false }
+    else if (id == "g.tab.lessons") { app.guideTab = "lessons" }
+    else if (id == "g.tab.examples") { app.guideTab = "examples" }
+    else if (id == "g.back") { app.guideLesson = -1 }
+    else if (startsWith(id, "g.open:")) {
+        app.guideLesson = toInt(substring(id, 7, len(id) - 7))
+        var les = LESSONS[app.guideLesson]
+        if (les.mode != app.mode) { setMode(les.mode) }
+    }
+    else if (id == "g.next") {
+        app.guideLesson = min(app.guideLesson + 1, len(LESSONS) - 1)
+        var les2 = LESSONS[app.guideLesson]
+        if (les2.mode != app.mode) { setMode(les2.mode) }
+    }
+    else if (id == "g.demo") { startDemo(LESSONS[app.guideLesson].demo) }
+    else if (startsWith(id, "g.ex:")) { openExample(substring(id, 5, len(id) - 5)) }
+}
+
+// ---------- "Покажи мені": IDE сама рухає курсор ----------
+//
+// Кожен крок уроку розкладається на прості дії (рух курсора, натиснути,
+// відпустити, надрукувати), які подаються в ТІ САМІ обробники, що й
+// справжня миша - тож показ і справжня робота не розходяться.
+
+struct Ev {
+    type: string
+    x: i32
+    y: i32
+    button: i32
+    shift: bool
+    ctrl: bool
+    alt: bool
+    dx: i32
+    dy: i32
+    key: string
+    text: string
+}
+
+// true, поки demoTick подає власні (штучні) події в handle().
+var _synthetic = false
+
+func _feed(e) {
+    _synthetic = true
+    handle(e)
+    _synthetic = false
+}
+
+struct Demo {
+    steps: array
+    i: i32
+    queue: array
+    t0: i32
+    fromX: i32
+    fromY: i32
+}
+
+func _ev(type, x, y) {
+    return Ev { type: type, x: x, y: y, button: 1, shift: false, ctrl: false, alt: false, dx: 0, dy: 0, key: "", text: "" }
+}
+
+func startDemo(steps) {
+    if (len(steps) == 0) { return }
+    if (app.mode != "blocks") { setMode("blocks") }
+    // програма уроку - біля лівого верхнього кута робочої області, щоб усе
+    // потрібне для показу було видно
+    var ws = currentBlocks()
+    for s in ws.stacks {
+        if (s.spec == "start") {
+            ws.panX = 30 - s.x
+            ws.panY = 30 - s.y
+        }
+    }
+    app.demo = Demo { steps: steps, i: 0, queue: [], t0: timeMs(), fromX: uiMouseX, fromY: uiMouseY }
+    app.cursorX = max(uiMouseX, LEFT_W + 200)
+    app.cursorY = max(uiMouseY, TOP_H + 200)
+    setStatus("Дивись! (Escape - зупинити)")
+}
+
+// Останній блок ланцюжка під першою шапкою.
+func _demoChainEnd(ws) {
+    for s in ws.stacks {
+        if (s.spec == "start") { return lastOfChain(s) }
+    }
+    return null
+}
+
+// Останній "обіймаючий" блок у ланцюжку під шапкою.
+func _demoLastC(ws) {
+    var found = null
+    for s in ws.stacks {
+        if (s.spec == "start") {
+            var b = s
+            while (b != null) {
+                var k = specOf(b.spec).kind
+                if (k == "c" || k == "c2") { found = b }
+                b = b.next
+            }
+        }
+    }
+    return found
+}
+
+func _demoRef(ws, ref) {
+    if (ref == "end") { return _demoChainEnd(ws) }
+    if (ref == "body") {
+        var c = _demoLastC(ws)
+        if (c == null) { return null }
+        return c.body
+    }
+    for b in liveBlocks(ws.stacks) { if (b.spec == ref) { return b } }
+    return null
+}
+
+func _palPos(id) {
+    var k = 0
+    while (k < len(_pHits)) {
+        if (_pHits[k] == id) { return [_pHits[k + 1], _pHits[k + 2]] }
+        k = k + 5
+    }
+    return null
+}
+
+func _slotCenter(b, idx) {
+    var k = 0
+    while (k < len(_sHits)) {
+        if (_sHits[k] == b && _sHits[k + 1] == idx) { return [_sHits[k + 3], _sHits[k + 4], _sHits[k + 5], _sHits[k + 6]] }
+        k = k + 7
+    }
+    return null
+}
+
+// Наступний крок уроку -> черга простих дій.
+func _demoPlan(step) {
+    var ws = currentBlocks()
+    var q = []
+    var kind = step[0]
+    if (kind == "cat") {
+        var ci = indexOf(CATEGORIES, step[1])
+        append(q, ["move", LEFT_W + 42, TOP_H + 10 + ci * 62 + 14, 500])
+        append(q, ["down"]) append(q, ["up"]) append(q, ["wait", 300])
+    } else if (kind == "drag") {
+        var src = _palPos(step[1])
+        var anchor = null
+        if (step[2] == "end") {
+            var last = _demoChainEnd(ws)
+            anchor = [last.sx, last.sy + last.h]
+        } else {
+            var c = _demoLastC(ws)
+            anchor = [c.sx + ARM_W, c.sy + c.hh]
+        }
+        if (src == null || anchor == null) { return q }
+        append(q, ["move", src[0] + 10, src[1] + 10, 600])
+        append(q, ["down"])
+        append(q, ["move", anchor[0] + 12, anchor[1] + 14, 900])
+        append(q, ["up"]) append(q, ["wait", 300])
+    } else if (kind == "dropin") {
+        var src2 = _palPos(step[1])
+        var host = _demoRef(ws, step[2])
+        if (src2 == null || host == null) { return q }
+        var sl = _slotCenter(host, step[3])
+        if (sl == null) { return q }
+        append(q, ["move", src2[0] + 5, src2[1] + 10, 600])
+        append(q, ["down"])
+        append(q, ["move", sl[0] + 4, sl[1] + toInt(sl[3] / 2) - 4, 900])
+        append(q, ["up"]) append(q, ["wait", 300])
+    } else if (kind == "type") {
+        var host2 = _demoRef(ws, step[1])
+        if (host2 == null) { return q }
+        var sl2 = _slotCenter(host2, step[2])
+        if (sl2 == null) { return q }
+        append(q, ["move", sl2[0] + toInt(sl2[2] / 2), sl2[1] + toInt(sl2[3] / 2), 600])
+        append(q, ["down"]) append(q, ["up"])
+        var old = toString(host2.args[step[2]])
+        var n = 0
+        while (n < len(old)) {
+            append(q, ["key", "Backspace"])
+            n = n + 1
+        }
+        var t = step[3]
+        var j = 0
+        while (j < len(t)) {
+            append(q, ["text", t[j]]) append(q, ["wait", 60])
+            j = j + 1
+        }
+        append(q, ["key", "Enter"]) append(q, ["wait", 300])
+    } else if (kind == "click") {
+        var r = uiFind(step[1])
+        if (r == null) { return q }
+        append(q, ["move", r[0] + toInt(r[2] / 2), r[1] + toInt(r[3] / 2), 700])
+        append(q, ["down"]) append(q, ["up"]) append(q, ["wait", 400])
+    }
+    return q
+}
+
+func demoTick() {
+    var d = app.demo
+    if (len(d.queue) == 0) {
+        if (d.i >= len(d.steps)) {
+            app.demo = null
+            setStatus("Ось так! Тепер спробуй сам(а).")
+            return
+        }
+        d.queue = _demoPlan(d.steps[d.i])
+        d.i = d.i + 1
+        d.t0 = timeMs()
+        d.fromX = app.cursorX
+        d.fromY = app.cursorY
+        return
+    }
+    var a = d.queue[0]
+    var done = true
+    if (a[0] == "move") {
+        var t = min(1, (timeMs() - d.t0) / a[3])
+        // плавний старт і зупинка
+        var e = t * t * (3 - 2 * t)
+        app.cursorX = toInt(d.fromX + (a[1] - d.fromX) * e)
+        app.cursorY = toInt(d.fromY + (a[2] - d.fromY) * e)
+        _feed(_ev("mousemove", app.cursorX, app.cursorY))
+        done = t >= 1
+    } else if (a[0] == "down") {
+        _feed(_ev("mousedown", app.cursorX, app.cursorY))
+    } else if (a[0] == "up") {
+        _feed(_ev("mouseup", app.cursorX, app.cursorY))
+    } else if (a[0] == "key") {
+        var ke = _ev("key", 0, 0)
+        ke.key = a[1]
+        _feed(ke)
+    } else if (a[0] == "text") {
+        var te = _ev("text", 0, 0)
+        te.text = a[1]
+        _feed(te)
+    } else if (a[0] == "wait") {
+        done = timeMs() - d.t0 >= a[1]
+    }
+    if (done && app.demo != null) {
+        removeAt(d.queue, 0)
+        d.t0 = timeMs()
+        d.fromX = app.cursorX
+        d.fromY = app.cursorY
+    }
+}
+
+func drawDemoCursor() {
+    var x = app.cursorX
+    var y = app.cursorY
+    surfacePolygon(S, [x + 2, y + 2, x + 2, y + 26, x + 9, y + 20, x + 14, y + 31, x + 19, y + 29, x + 14, y + 18, x + 23, y + 18], 0x66000000)
+    surfacePolygon(S, [x, y, x, y + 24, x + 7, y + 18, x + 12, y + 29, x + 17, y + 27, x + 12, y + 16, x + 21, y + 16], C_YELLOW)
+    surfaceCircleLine(S, x, y, 14, 0x88f9e2af, 2)
+}
+
 // ---------- старт і цикл ----------
 
 func ideInit(dir) {
     if (!dirExists(dir)) { makeDir(dir) }
-    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], con: newConsole(),
+    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], guideOpen: false, guideTab: "lessons", guideLesson: -1, done: [], demo: null,
+        cursorX: 0, cursorY: 0, con: newConsole(),
         focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
         clickCount: 0, dialog: null, status: "", statusTime: 0 }
 
@@ -626,6 +959,16 @@ func ideInit(dir) {
         refreshFiles()
     }
     openFile(joinPath(dir, app.files[0]))
+    // прогрес уроків; перший запуск - одразу відкрити перший урок у блоках
+    var progressPath = joinPath(joinPath(dir, ".nyx"), "уроки.json")
+    if (fileExists(progressPath)) { app.done = loadProgress(progressPath) }
+    else {
+        app.guideOpen = true
+        app.guideLesson = 0
+        setMode("blocks")
+        if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }
+        saveProgress(progressPath, [])
+    }
     draw()
     return s
 }
@@ -635,6 +978,7 @@ func ideInit(dir) {
 // false - вікно закрили.
 func ideStep(wait) {
     if (app.con.running && (wait < 0 || wait > 40)) { wait = 40 }
+    if (app.demo != null && (wait < 0 || wait > 16)) { wait = 16 }
     var e = surfaceNextEvent(S, wait)
     var dirty = false
     while (e != null) {
@@ -646,6 +990,10 @@ func ideStep(wait) {
     if (app.con.proc != null && (app.con.running || dirty)) {
         if (conPoll(app.con)) { dirty = true }
         afterPoll()
+    }
+    if (app.demo != null) {
+        demoTick()
+        dirty = true
     }
     if (app.status != "" && timeMs() - app.statusTime > 4000 && timeMs() - app.statusTime < 4100) { dirty = true }
     if (dirty) { draw() }

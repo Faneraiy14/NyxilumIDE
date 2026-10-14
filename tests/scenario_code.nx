@@ -47,6 +47,10 @@ func main() {
     var a = scriptArgs()
     var dir = a[0]
     outDir = a[1]
+    // не перший запуск (інакше IDE відкриє уроки) - див. scenario_guide.nx
+    if (!dirExists(dir)) { makeDir(dir) }
+    if (!dirExists(dir + "/.nyx")) { makeDir(dir + "/.nyx") }
+    writeFile(dir + "/.nyx/уроки.json", "[]")
     ideInit(dir)
     step()
     shot("01_start")

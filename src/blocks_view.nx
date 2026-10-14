@@ -424,7 +424,8 @@ func drawPalette(ws, x, y, h) {
         contentW = max(contentW, measureBlock(tv)[0])
     }
     contentW = contentW + 28
-    _palW = clamp(contentW, PAL_MIN, PAL_MAX)
+    // не більше третини місця - робочій області теж треба простір
+    _palW = clamp(contentW, PAL_MIN, max(PAL_MIN, min(PAL_MAX, toInt((ws.w - STRIP_W) / 3))))
 
     var px = x + STRIP_W
     surfaceRect(S, px, y, _palW, h, C_PANEL)

@@ -39,6 +39,16 @@ func uiHit(x, y) {
     return ""
 }
 
+// Де намальовано область id: [x, y, w, h] або null.
+func uiFind(id) {
+    var k = len(_regions) - 5
+    while (k >= 0) {
+        if (_regions[k + 4] == id) { return [_regions[k], _regions[k + 1], _regions[k + 2], _regions[k + 3]] }
+        k = k - 5
+    }
+    return null
+}
+
 func uiHover(x, y, w, h) {
     return uiMouseX >= x && uiMouseY >= y && uiMouseX < x + w && uiMouseY < y + h
 }

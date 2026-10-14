@@ -398,7 +398,8 @@ func _genChain(b, indent) {
     while (b != null) {
         var sp = specOf(b.spec)
         if (sp.kind == "cmd") {
-            for part in split(_fill(sp, b), "\n") { _emit(pad + part, b) }
+            // "збільшити на -1" -> "x = x - 1", а не "x + -1"
+            for part in split(replace(_fill(sp, b), " + -", " - "), "\n") { _emit(pad + part, b) }
         } else if (sp.kind == "c" || sp.kind == "c2") {
             _genId = _genId + 1
             var head = _fill(sp, b)
