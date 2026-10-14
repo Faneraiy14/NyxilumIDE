@@ -125,6 +125,13 @@ func termExec(t, line) {
     var opts = newMap()
     mapSet(opts, "interactive", true)
     mapSet(opts, "cwd", t.cwd)
+    // git у терміналі IDE: кирилиця в назвах файлів - як є, а не \320\277...
+    // (лише для команд звідси; глобальні налаштування git не чіпаються)
+    var env = newMap()
+    mapSet(env, "GIT_CONFIG_COUNT", "1")
+    mapSet(env, "GIT_CONFIG_KEY_0", "core.quotePath")
+    mapSet(env, "GIT_CONFIG_VALUE_0", "false")
+    mapSet(opts, "env", env)
     try {
         if (termIsWindows()) { t.proc = procStart("cmd.exe", ["/c", cmd], opts) }
         else { t.proc = procStart("/bin/sh", ["-c", cmd], opts) }

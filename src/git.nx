@@ -100,6 +100,7 @@ func gitRefresh(g, dir) {
     }
     g.isRepo = true
     g.root = trim(r[1])
+    _gitExcludeNyx(g.root)
     g.branch = trim(gitRun(dir, ["branch", "--show-current"])[1])
     if (g.branch == "") { g.branch = "(без гілки)" }
     var files = []
@@ -133,6 +134,18 @@ func gitRefresh(g, dir) {
             g.ahead = toInt(parts[len(parts) - 1])
         }
     }
+}
+
+// Службова тека IDE (.nyx/ - уроки, сесія, сцена) не має потрапляти в
+// коміти - і тоді, коли репозиторій створено не кнопкою, а в терміналі.
+// Локально (.git/info/exclude), без .gitignore у проєкті.
+func _gitExcludeNyx(root) {
+    var ex = root + "/.git/info/exclude"
+    if (!dirExists(root + "/.git/info")) { return }
+    var cur = ""
+    if (fileExists(ex)) { cur = readFile(ex) }
+    if (contains(cur, ".nyx/")) { return }
+    try { appendFile(ex, "\n# Nx IDE\n.nyx/\n") } catch (e) { }
 }
 
 // Назва в лапках (є \" чи \\): прибрати екранування.
