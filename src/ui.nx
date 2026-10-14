@@ -76,6 +76,20 @@ func uiButton(id, label, x, y, w, h, kind) {
         else { surfaceRoundRect(S, x, y, w, h, 6, bg) }
     }
     if (kind == "tabOn") { surfaceRect(S, x, y + h - 2, w, 2, C_ACCENT) }
+    // "‹" / "›" - стрілка-шеврон (згорнути / розгорнути панель).
+    if (label == "‹" || label == "›") {
+        var mx = x + toInt(w / 2)
+        var my = y + toInt(h / 2)
+        if (label == "‹") {
+            surfaceLine(S, mx + 3, my - 6, mx - 3, my, fg, 2)
+            surfaceLine(S, mx - 3, my, mx + 3, my + 6, fg, 2)
+        } else {
+            surfaceLine(S, mx - 3, my - 6, mx + 3, my, fg, 2)
+            surfaceLine(S, mx + 3, my, mx - 3, my + 6, fg, 2)
+        }
+        uiRegion(id, x, y, w, h)
+        return
+    }
     // "▶ " / "■ " на початку підпису - іконка фігурою (гліфи шрифту дрібні).
     var icon = ""
     if (startsWith(label, "▶ ") || startsWith(label, "■ ")) {

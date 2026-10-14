@@ -237,6 +237,8 @@ func drawGuide(tab, open, done, ctx, x, y, h) {
 
     initLessons()
     if (open < 0) {
+        uiButton("g.tour", "Знайомство з IDE (екскурсія)", x + 12, cy - 4, w - 24, 34, "normal")
+        cy = cy + 42
         surfaceText(S, "Проходь по черзі - кожен урок перевіряється сам.", x + 16, cy, 14, C_SUBTEXT)
         cy = cy + 28
         var i = 0

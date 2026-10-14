@@ -194,6 +194,7 @@ func conDraw(con, x, y, w, h) {
     con.h = h
     surfaceRect(S, x, y, w, h, C_PANEL2)
     surfaceRect(S, x, y, w, 1, C_BORDER)
+    uiRegion("con.area", x, y, w, h)
 
     // заголовок
     surfaceText(S, "Консоль", x + 12, y + 8, 16, C_SUBTEXT, true)

@@ -1,7 +1,7 @@
 // Сценарій навчання: перший запуск відкриває урок 1 у блоках; "Покажи мені"
 // сама збирає програму й запускає її; урок зараховується; приклади.
 // NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw }
 import "../src/guide.nx" { LESSONS }
 import "../src/blocks_model.nx" { generateCode }
 
@@ -45,7 +45,34 @@ func main() {
     var out = scriptArgs()[1]
     ideInit(dir)
     ideStep(0)
-    check(app.guideOpen && app.guideLesson == 0 && app.mode == "blocks", "перший запуск: урок 1 у режимі блоків")
+
+    // екскурсія: перший запуск починається з неї
+    check(app.tour == 0, "перший запуск: екскурсія")
+    surfaceSave(S, out + "/t00.png")
+    doAction("t.next")
+    draw()
+    surfaceSave(S, out + "/t01_files.png")
+    doAction("t.next")
+    // крок зі стрілкою: показ сам згортає й розгортає панель
+    var sawCollapsed = false
+    var t0 = timeMs()
+    while (timeMs() - t0 < 8000 && app.demo != null) {
+        ideStep(16)
+        if (app.filesCollapsed) {
+            if (!sawCollapsed) { surfaceSave(S, out + "/t02_collapsed.png") }
+            sawCollapsed = true
+        }
+    }
+    check(sawCollapsed && !app.filesCollapsed, "показ згорнув і розгорнув панель програм")
+    var step = 3
+    while (step < 12) {
+        doAction("t.next")
+        draw()
+        if (step == 5 || step == 8) { surfaceSave(S, out + "/t0" + toString(step) + ".png") }
+        step = step + 1
+    }
+    check(app.tour == -1, "екскурсію пройдено")
+    check(app.guideOpen && app.guideLesson == 0 && app.mode == "blocks", "після екскурсії - урок 1 у режимі блоків")
     surfaceSave(S, out + "/g01_lesson1.png")
 
     var ws = currentBlocks()

@@ -392,6 +392,7 @@ func _palTemplate(id) {
 func drawPalette(ws, x, y, h) {
     // смуга категорій
     surfaceRect(S, x, y, STRIP_W, h, C_PANEL2)
+    uiRegion("bcatstrip", x, y, STRIP_W, h)
     var cy = y + 10
     var i = 0
     while (i < len(CATEGORIES)) {
