@@ -3,7 +3,7 @@
 // палітра команд, історія версій.
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_code.nx <тека> <тека-для-png>
 import "helpers.nx"
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, currentBlocks, doAction, draw, openPath, setMode }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, currentBlocks, doAction, draw, openPath, setMode, saveAll }
 import "../src/editor.nx" { edText, edHasSel }
 
 func main() {
@@ -183,7 +183,7 @@ func main() {
     check(fileExists(dir + "/ігри/пітон.nxb") && !fileExists(dir + "/ігри/змійка.nxb"), "файл перейменовано")
     check(endsWith(app.active, "пітон.nxb") && indexOf(app.tabs, dir + "/ігри/пітон.nxb") >= 0, "вкладка теж перейменувалась")
     // F2 по виділеній теці
-    app.exSel = dir + "/ігри"
+    clickId("dir:" + dir + "/ігри")
     key("F2", false, false)
     step()
     check(app.entry != null && app.entry.target == dir + "/ігри", "F2 - перейменувати виділене")
@@ -229,6 +229,60 @@ func main() {
     t2 = timeMs()
     while (timeMs() - t2 < 2000 && app.con.running) { ideStep(50) }
     check(!app.con.running && contains(toString(app.con.lines), "Зупинено"), "F5 / «Зупинити» зупинили програму")
+
+    // F12 - до визначення, F2 - перейменувати всюди (з областю видимості)
+    writeFile(dir + "/помічник.nx", "func допомога(r) {\n    return r + 1\n}\n")
+    writeFile(dir + "/символи.nx", "import \"помічник.nx\"\n\nfunc подвоїти(x) {\n    var r = x * 2\n    return r\n}\n\nfunc main() {\n    var r = подвоїти(5)\n    print(допомога(r))\n    // подвоїти в коментарі не чіпаємо\n    print(\"r\")\n}\n")
+    setMode("code")
+    openPath(dir + "/символи.nx")
+    var se = currentEditor()
+    se.cy = 8
+    se.cx = 14
+    key("F12", false, false)
+    step()
+    check(se.cy == 2 && se.cx == 5, "F12 - до функції «подвоїти» в тому ж файлі")
+    se.cy = 9
+    se.cx = 12
+    key("F12", false, false)
+    step()
+    check(endsWith(app.current, "помічник.nx") && currentEditor().cy == 0, "F12 - до функції в іншому файлі")
+    openPath(dir + "/символи.nx")
+    se = currentEditor()
+    se.cy = 9
+    se.cx = 20
+    draw()
+    shot("c10_occurrences")
+    // локальна r у main: лише в main
+    se.cx = 19
+    key("F2", false, false)
+    step()
+    check(app.dialog != null && app.dialog.text == "r", "F2 - діалог з поточною назвою")
+    key("Backspace", false, false)
+    typeText("результат")
+    key("Enter", false, false)
+    step()
+    check(se.lines[8] == "    var результат = подвоїти(5)" && se.lines[9] == "    print(допомога(результат))", "локальну змінну перейменовано в main")
+    check(se.lines[3] == "    var r = x * 2" && se.lines[11] == "    print(\"r\")", "r в іншій функції й у тексті не чіпали")
+    // глобальна функція: в усіх файлах
+    se.cy = 9
+    se.cx = 12
+    key("F2", false, false)
+    step()
+    var n = 0
+    while (n < 10) {
+        key("Backspace", false, false)
+        n = n + 1
+    }
+    typeText("підказка")
+    key("Enter", false, false)
+    step()
+    check(se.lines[9] == "    print(підказка(результат))", "функцію перейменовано тут")
+    var other = mapGet(app.editors, dir + "/помічник.nx")
+    check(other.lines[0] == "func підказка(r) {", "і в іншому файлі")
+    key("z", true, false)
+    step()
+    check(se.lines[9] == "    print(допомога(результат))", "Ctrl+Z повертає перейменування")
+    saveAll()
 
     // код -> блоки: проста програма відкривається блоками й працює так само
     writeFile(dir + "/рахунок.nx", "func main() {\n    var n = 0\n    for i in 0..3 {\n        n = n + 2\n    }\n    print(\"Вийшло \" + toString(n))\n}\n")

@@ -1,0 +1,184 @@
+// Символи в коді: слово під курсором, усі його входження, де воно
+// визначене (F12) і де його перейменовувати (F2) - як у VS Code.
+//
+// Входження шукаються за токенами підсвітки (highlight.nx), тож слово в
+// тексті "..." чи в коментарі не рахується. Область видимості проста, як у
+// мові: локальна змінна чи параметр - від "func" до її закривної "}" на
+// початку рядка; інакше - глобальне ім'я (функція, struct, var зовні).
+
+import "highlight.nx"
+
+// Токени всіх рядків (зі станом багаторядкових коментарів).
+func symTokens(lines) {
+    var out = []
+    var inC = false
+    for l in lines {
+        var r = hlLine(l, inC)
+        append(out, r[0])
+        inC = r[1]
+    }
+    return out
+}
+
+func _isNameKind(k) { return k == HL_TEXT || k == HL_FUNC || k == HL_TYPE }
+
+// Ім'я під позицією col рядка: [початок, кінець, слово] або null.
+// Курсор одразу за словом теж рахується (як у VS Code).
+func symWordAt(line, toks, col) {
+    var k = 0
+    while (k < len(toks)) {
+        var ts = toks[k]
+        var te = toks[k + 1]
+        if (_isNameKind(toks[k + 2]) && col >= ts && col <= te) {
+            var w = substring(line, ts, te - ts)
+            if (len(w) > 0 && isIdentStart(charCode(w[0]))) { return [ts, te, w] }
+        }
+        k = k + 3
+    }
+    return null
+}
+
+// Усі входження word у рядках from..to (включно): масив [рядок, початок].
+func symOccurrences(lines, toks, word, from, to) {
+    var out = []
+    var i = max(0, from)
+    while (i <= to && i < len(lines)) {
+        var t = toks[i]
+        var k = 0
+        while (k < len(t)) {
+            if (_isNameKind(t[k + 2]) && t[k + 1] - t[k] == len(word) && substring(lines[i], t[k], len(word)) == word) {
+                // поле чи метод через крапку (x.word) - інша річ
+                if (t[k] == 0 || lines[i][t[k] - 1] != ".") { append(out, [i, t[k]]) }
+            }
+            k = k + 3
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Функція, у якій рядок li: [перший рядок, останній рядок] або null.
+func symFuncRange(lines, li) {
+    var s = min(li, len(lines) - 1)
+    while (s >= 0) {
+        var l = lines[s]
+        if (startsWith(l, "func ")) { break }
+        if (startsWith(l, "}") && s != li) { return null }
+        s = s - 1
+    }
+    if (s < 0) { return null }
+    var e = s + 1
+    if (endsWith(trim(lines[s]), "}") && _count(lines[s], "{") == _count(lines[s], "}")) { e = s }
+    else {
+        while (e < len(lines) && !startsWith(lines[e], "}")) { e = e + 1 }
+    }
+    if (e < li) { return null }
+    return [s, min(e, len(lines) - 1)]
+}
+
+func _count(s, c) {
+    var n = 0
+    for ch in s { if (ch == c) { n = n + 1 } }
+    return n
+}
+
+// Перший токен-ім'я після позиції p у рядку: [початок, слово] або null.
+func _nameAfter(line, t, p) {
+    var k = 0
+    while (k < len(t)) {
+        if (t[k] >= p && _isNameKind(t[k + 2])) { return [t[k], substring(line, t[k], t[k + 1] - t[k])] }
+        k = k + 3
+    }
+    return null
+}
+
+// Локальне визначення word для рядка li (змінна "var" у функції до li чи
+// параметр): [рядок, стовпець, [початок функції, кінець]] або null.
+func symLocalDef(lines, toks, word, li) {
+    var fr = symFuncRange(lines, li)
+    if (fr == null) { return null }
+    // параметри: func назва(a, b) {
+    var head = lines[fr[0]]
+    var open = indexOf(head, "(")
+    var close = indexOf(head, ")")
+    if (open > 0 && close > open) {
+        for o in symOccurrences(lines, toks, word, fr[0], fr[0]) {
+            if (o[1] > open && o[1] < close) { return [fr[0], o[1], fr] }
+        }
+    }
+    var i = fr[0] + 1
+    while (i <= min(li, fr[1])) {
+        var l = lines[i]
+        var at = indexOf(l, "var ")
+        while (at >= 0) {
+            var nm = _nameAfter(l, toks[i], at + 4)
+            if (nm != null && nm[1] == word) { return [i, nm[0], fr] }
+            var rest = indexOf(substring(l, at + 4, len(l) - at - 4), "var ")
+            if (rest < 0) { at = -1 } else { at = at + 4 + rest }
+        }
+        // for x in ...
+        var ft = trim(l)
+        if (startsWith(ft, "for ")) {
+            var nm2 = _nameAfter(l, toks[i], indexOf(l, "for ") + 4)
+            if (nm2 != null && nm2[1] == word) { return [i, nm2[0], fr] }
+        }
+        i = i + 1
+    }
+    return null
+}
+
+// Глобальне визначення word у файлі: [рядок, стовпець] або null.
+// func word / func Struct.word / struct word / var word (на початку рядка).
+func symGlobalDef(lines, toks, word) {
+    var i = 0
+    while (i < len(lines)) {
+        var l = lines[i]
+        var kw = ""
+        if (startsWith(l, "func ")) { kw = "func " }
+        else if (startsWith(l, "struct ")) { kw = "struct " }
+        else if (startsWith(l, "var ")) { kw = "var " }
+        if (kw != "") {
+            var nm = _nameAfter(l, toks[i], len(kw))
+            if (nm != null) {
+                if (nm[1] == word) { return [i, nm[0]] }
+                // метод: func Кіт.нявкнути(...)
+                var dot = nm[0] + len(nm[1])
+                if (kw == "func " && dot < len(l) && l[dot] == ".") {
+                    var m = _nameAfter(l, toks[i], dot + 1)
+                    if (m != null && m[1] == word) { return [i, m[0]] }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return null
+}
+
+// Чи текст - правильне нове ім'я (і не слово мови).
+func symValidName(s) {
+    if (s == "") { return false }
+    if (!isIdentStart(charCode(s[0]))) { return false }
+    var i = 0
+    while (i < len(s)) {
+        var c = s[i]
+        if (!isIdentPart(charCode(c)) && !(c == "'" && i > 0 && i + 1 < len(s))) { return false }
+        i = i + 1
+    }
+    var toks = hlLine(s, false)[0]
+    return len(toks) == 3 && _isNameKind(toks[2])
+}
+
+// Замінити входження (масив [рядок, початок]) слова word на nw у рядках.
+// Повертає нові рядки (старі не чіпає).
+func symReplace(lines, occ, word, nw) {
+    var out = slice(lines, 0)
+    // з кінця, щоб позиції в рядку не зсувались
+    var k = len(occ) - 1
+    while (k >= 0) {
+        var o = occ[k]
+        var l = out[o[0]]
+        out[o[0]] = substring(l, 0, o[1]) + nw + substring(l, o[1] + len(word), len(l) - o[1] - len(word))
+        k = k - 1
+    }
+    return out
+}

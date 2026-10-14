@@ -19,6 +19,7 @@ import "history.nx"
 import "tour.nx"
 import "explain.nx"
 import "code_to_blocks.nx"
+import "symbols.nx"
 
 var TITLE_H = 36
 var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
@@ -89,6 +90,7 @@ struct App {
     cfg: any
     askLevel: bool
     offer: any
+    exFocus: bool
 }
 
 var app = null
@@ -225,6 +227,7 @@ func openFile(path) {
 // Відкрити будь-який файл у відповідному редакторі.
 func openPath(path) {
     saveAll()
+    app.exFocus = false
     if (fileKind(path) == "blocks") { openBlocks(path) } else { openFile(path) }
 }
 
@@ -432,6 +435,115 @@ func syncDebugView() {
     }
 }
 
+// ---------- перейти до визначення (F12) і перейменувати всюди (F2) ----------
+
+// Файли коду проєкту (для імен, визначених в іншому файлі).
+func _projectCode() {
+    var out = []
+    for p in filesOfKind("code") { append(out, p) }
+    return out
+}
+
+func _linesOf(path) {
+    if (mapHas(app.editors, path)) { return mapGet(app.editors, path).lines }
+    return split(normalizeText(readFile(path)), "\n")
+}
+
+func goToDefinition() {
+    var ed = currentEditor()
+    if (ed == null) { return }
+    var w = edWordAtCursor(ed)
+    if (w == null) {
+        setStatus("Постав курсор на назву (функції, змінної), щоб перейти до визначення")
+        return
+    }
+    var word = w[2]
+    var toks = edAllTokens(ed)
+    var loc = symLocalDef(ed.lines, toks, word, ed.cy)
+    if (loc != null) {
+        edJumpTo(ed, loc[0], loc[1])
+        setStatus("«" + word + "» - рядок " + toString(loc[0] + 1))
+        return
+    }
+    var g = symGlobalDef(ed.lines, toks, word)
+    if (g != null) {
+        edJumpTo(ed, g[0], g[1])
+        setStatus("«" + word + "» - рядок " + toString(g[0] + 1))
+        return
+    }
+    for p in _projectCode() {
+        if (p == ed.path) { continue }
+        var lines = _linesOf(p)
+        var g2 = symGlobalDef(lines, symTokens(lines), word)
+        if (g2 != null) {
+            openPath(p)
+            var ed2 = currentEditor()
+            if (ed2 != null) { edJumpTo(ed2, g2[0], g2[1]) }
+            setStatus("«" + word + "» - " + fileName(p) + ", рядок " + toString(g2[0] + 1))
+            return
+        }
+    }
+    if (indexOf(BUILTIN_NAMES, word) >= 0) { setStatus("«" + word + "» - вбудована функція мови (наведи мишу - підказка)") }
+    else { setStatus("Не знайшов, де визначено «" + word + "»") }
+}
+
+func askRenameSymbol() {
+    var ed = currentEditor()
+    if (ed == null) { return }
+    var w = edWordAtCursor(ed)
+    if (w == null) {
+        setStatus("Постав курсор на назву, яку треба перейменувати")
+        return
+    }
+    if (indexOf(BUILTIN_NAMES, w[2]) >= 0 && symGlobalDef(ed.lines, edAllTokens(ed), w[2]) == null) {
+        setStatus("«" + w[2] + "» - вбудована функція мови, її не перейменуєш")
+        return
+    }
+    openDialog("Перейменувати «" + w[2] + "» всюди", w[2], "renamesym")
+    app.dialog.target = w[2]
+}
+
+// Перейменувати word -> nw: локальну змінну/параметр - у її функції,
+// глобальне ім'я - в усіх файлах коду проєкту (окрім місць, де таке саме
+// ім'я - своя локальна змінна).
+func renameSymbol(word, nw) {
+    var ed = currentEditor()
+    if (ed == null || nw == word) { return }
+    if (!symValidName(nw)) {
+        setStatus("«" + nw + "» - не годиться як назва (букви, цифри, _; не слово мови)")
+        return
+    }
+    var toks = edAllTokens(ed)
+    var loc = symLocalDef(ed.lines, toks, word, ed.cy)
+    if (loc != null) {
+        var occ = symOccurrences(ed.lines, toks, word, loc[2][0], loc[2][1])
+        edReplaceLines(ed, symReplace(ed.lines, occ, word, nw))
+        setStatus("Перейменовано «" + word + "» → «" + nw + "»: " + toString(len(occ)) + " місць у функції")
+        return
+    }
+    var total = 0
+    var files = 0
+    var paths = _projectCode()
+    if (indexOf(paths, ed.path) < 0) { append(paths, ed.path) }
+    for p in paths {
+        var lines = _linesOf(p)
+        var tk = symTokens(lines)
+        var occ2 = []
+        for o in symOccurrences(lines, tk, word, 0, len(lines) - 1) {
+            // своя локальна змінна з таким ім'ям - не наша
+            var ld = symLocalDef(lines, tk, word, o[0])
+            if (ld == null) { append(occ2, o) }
+        }
+        if (len(occ2) == 0) { continue }
+        var nl = symReplace(lines, occ2, word, nw)
+        if (mapHas(app.editors, p)) { edReplaceLines(mapGet(app.editors, p), nl) }
+        else { writeFile(p, join(nl, "\n")) }
+        total = total + len(occ2)
+        files = files + 1
+    }
+    setStatus("Перейменовано «" + word + "» → «" + nw + "»: " + toString(total) + " місць у " + toString(files) + " файл(ах)")
+}
+
 // "Відкрити як блоки": проста програма кодом стає програмою з блоків
 // (code_to_blocks.nx). Чого блоками не скласти - пояснення в консолі.
 func codeToBlocksFile(path) {
@@ -595,6 +707,10 @@ func openDialog(title, text, action) {
         suffix = ""
     }
     if (action == "newblock") { suffix = "" }
+    if (action == "renamesym") {
+        okLabel = "Перейменувати"
+        suffix = ""
+    }
     app.dialog = Dialog { title: title, text: text, action: action, okLabel: okLabel, suffix: suffix, target: "" }
     app.focus = "dialog"
 }
@@ -607,6 +723,7 @@ func closeDialog(ok) {
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
     if (ok && d.action == "delete") { deletePath(d.target) }
+    if (ok && d.action == "renamesym") { renameSymbol(d.target, trim(d.text)) }
     if (ok && d.action == "newblock") {
         var ws = currentBlocks()
         if (ws != null) {
@@ -692,6 +809,8 @@ func commandList() {
         ["act:ext", "Розширення", ""],
         ["act:settings", "Налаштування", ""],
         ["find", "Знайти у файлі", "Ctrl+F"],
+        ["gotodef", "Перейти до визначення", "F12"],
+        ["renamesym", "Перейменувати всюди", "F2"],
         ["zoomin", "Збільшити шрифт", "Ctrl+="],
         ["zoomout", "Зменшити шрифт", "Ctrl+-"],
         ["btogglecode", "Блоки: показати/сховати код", ""],
@@ -1403,7 +1522,10 @@ func openCtx(path, x, y) {
         items = [["Відкрити", "open"], ["Перейменувати", "rename"], ["Видалити", "delete"], ["Копіювати шлях", "copypath"]]
         if (endsWith(path, ".nx") && app.cfg.blocks) { insert(items, 1, ["Відкрити як блоки", "toblocks"]) }
     }
-    if (path != "") { app.exSel = path }
+    if (path != "") {
+        app.exSel = path
+        app.exFocus = true
+    }
     app.ctx = Ctx { items: items, x: x, y: y, path: path }
 }
 
@@ -1901,6 +2023,8 @@ func doAction(id) {
     }
     else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
     else if (id == "codetoblocks") { codeToBlocksFile(app.current) }
+    else if (id == "gotodef") { if (app.mode == "code") { goToDefinition() } }
+    else if (id == "renamesym") { if (app.mode == "code") { askRenameSymbol() } }
     else if (id == "bnewblock") { if (currentBlocks() != null) { openDialog("Новий блок", "", "newblock") } }
     else if (id == "bclear") {
         var ws2 = currentBlocks()
@@ -1951,6 +2075,7 @@ func doAction(id) {
     else if (startsWith(id, "dir:")) {
         var d = substring(id, 4, len(id) - 4)
         app.exSel = d
+        app.exFocus = true
         if (mapHas(app.expanded, d)) { mapRemove(app.expanded, d) } else { mapSet(app.expanded, d, true) }
         refreshFiles()
     }
@@ -1978,6 +2103,7 @@ func doAction(id) {
     else if (startsWith(id, "file:")) {
         app.exSel = substring(id, 5, len(id) - 5)
         openPath(app.exSel)
+        app.exFocus = true
     }
     else if (id == "ex.newfile" || id == "ex.newfile2") { startEntry("newfile", targetDir(), "", "") }
     else if (id == "ex.newdir") { startEntry("newdir", targetDir(), "", "") }
@@ -2076,7 +2202,13 @@ func onMouseDown(e) {
         ed.cy = pos[0]
         ed.cx = pos[1]
         ed.wantCol = ed.cx
-        if (app.clickCount == 2) { edSelectWord(ed) }
+        app.exFocus = false
+        if (e.ctrl == true && app.clickCount == 1) {
+            // Ctrl+клік - до визначення (як у VS Code)
+            ed.ay = -1
+            goToDefinition()
+        }
+        else if (app.clickCount == 2) { edSelectWord(ed) }
         else if (app.clickCount >= 3) {
             ed.ay = ed.cy
             ed.ax = 0
@@ -2274,8 +2406,17 @@ func onKey(e) {
         setStatus("Збережено √")
         return
     }
-    if (k == "F2" && app.exSel != "" && app.side == "files") {
+    // F2: у Провіднику - перейменувати файл, у коді - ім'я всюди
+    if (k == "F2" && app.exFocus && app.exSel != "" && app.side == "files") {
         startEntry("rename", parentDir(app.exSel), fileName(app.exSel), app.exSel)
+        return
+    }
+    if (k == "F2" && app.mode == "code" && currentEditor() != null) {
+        askRenameSymbol()
+        return
+    }
+    if (k == "F12" && app.mode == "code" && currentEditor() != null) {
+        goToDefinition()
         return
     }
     if (e.ctrl && k == "n") {
@@ -2353,7 +2494,10 @@ func onText(e) {
         return
     }
     var ed = currentEditor()
-    if (ed != null && app.mode == "code") { edTextInput(ed, e.text) }
+    if (ed != null && app.mode == "code") {
+        app.exFocus = false
+        edTextInput(ed, e.text)
+    }
 }
 
 func handle(e) {
@@ -2856,7 +3000,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)

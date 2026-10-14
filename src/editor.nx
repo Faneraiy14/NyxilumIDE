@@ -8,6 +8,7 @@ import "theme.nx"
 import "ui.nx"
 import "highlight.nx"
 import "builtins.nx"
+import "symbols.nx"
 
 struct Editor {
     lines: array
@@ -473,6 +474,35 @@ func edScroll(ed, lines) {
     ed.top = clamp(ed.top + lines, 0, max(0, len(ed.lines) - 3))
 }
 
+// Ім'я під курсором: [початок, кінець, слово] або null.
+func edWordAtCursor(ed) {
+    if (ed.plain || ed.cy >= len(ed.lines)) { return null }
+    _warmTokens(ed, ed.cy)
+    return symWordAt(ed.lines[ed.cy], ed.hlTok[ed.cy], ed.cx)
+}
+
+// Токени всіх рядків (підсвітка вже рахує їх і кешує).
+func edAllTokens(ed) {
+    _warmTokens(ed, len(ed.lines) - 1)
+    return ed.hlTok
+}
+
+// Курсор на (рядок, стовпець), рядок - приблизно на третині екрана.
+func edJumpTo(ed, line, col) {
+    edGoToLine(ed, line)
+    ed.cx = clamp(col, 0, len(ed.lines[ed.cy]))
+    ed.wantCol = ed.cx
+}
+
+// Нові рядки однією дією скасування (перейменування тощо).
+func edReplaceLines(ed, lines) {
+    edBeginEdit(ed, "other")
+    ed.lines = lines
+    ed.cy = min(ed.cy, len(ed.lines) - 1)
+    ed.cx = min(ed.cx, len(ed.lines[ed.cy]))
+    ed.ay = -1
+}
+
 func edGoToLine(ed, line) {
     ed.cy = clamp(line, 0, len(ed.lines) - 1)
     ed.cx = leadingSpaces(ed.lines[ed.cy])
@@ -854,6 +884,22 @@ func edDraw(ed, x, y, w, h, focused) {
     _warmTokens(ed, last)
     var sel = [-1, 0, -1, 0]
     if (edHasSel(ed)) { sel = edSelRange(ed) }
+    var hiWord = ""
+    var hiFrom = 0
+    var hiTo = len(ed.lines)
+    if (focused && !edHasSel(ed)) {
+        var wa = edWordAtCursor(ed)
+        if (wa != null) {
+            hiWord = wa[2]
+            // локальна змінна - лише в своїй функції
+            _warmTokens(ed, max(last, ed.cy))
+            var ld = symLocalDef(ed.lines, ed.hlTok, hiWord, ed.cy)
+            if (ld != null) {
+                hiFrom = ld[2][0]
+                hiTo = ld[2][1]
+            }
+        }
+    }
 
     var row = 0
     while (row < rows) {
@@ -876,9 +922,21 @@ func edDraw(ed, x, y, w, h, focused) {
             }
         }
 
+        // інші входження імені під курсором (як у VS Code)
+        var toks = ed.hlTok[li]
+        if (hiWord != "" && li >= hiFrom && li <= hiTo) {
+            var q = 0
+            while (q < len(toks)) {
+                if (toks[q + 1] - toks[q] == len(hiWord) && (toks[q + 2] == HL_TEXT || toks[q + 2] == HL_FUNC || toks[q + 2] == HL_TYPE)
+                    && substring(line, toks[q], len(hiWord)) == hiWord && toks[q + 1] > ed.left) {
+                    surfaceRect(S, textX + (toks[q] - ed.left) * cw, ly - 2, len(hiWord) * cw, lh, C_WORDHI)
+                }
+                q = q + 3
+            }
+        }
+
         // текст за токенами
         surfaceClip(S, textX - 2, y, w - ed.gutterW + 2, h)
-        var toks = ed.hlTok[li]
         var k = 0
         var nt = len(toks)
         while (k < nt) {

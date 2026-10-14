@@ -17,6 +17,7 @@ var C_PEACH = 0xfab387
 var C_MAUVE = 0xcba6f7
 var C_TEAL = 0x94e2d5
 var C_SELECTION = 0x3e4060
+var C_WORDHI = 0x3a3f58     // інші входження слова під курсором
 var C_CURLINE = 0x262637
 var C_ERRLINE = 0x3b2433
 
