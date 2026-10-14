@@ -206,5 +206,54 @@ func main() {
     check(contains(rl.stdout, "є яблуко"), "список містить яблуко")
     check(contains(rl.stdout, "упіймав"), "герой торкається предмета")
 
+    // мої блоки: "привітати (ім'я) (скільки)" - функція з параметрами;
+    // змінні програми спільні (функція бачить "всього")
+    var pc = parseCustomBlock("  привітати друга (ім'я) (скільки) ")
+    check(pc[0] == "привітати друга" && len(pc[1]) == 2 && pc[1][1] == "скільки", "розбір назви й параметрів")
+    var def = newBlock(customId("def", pc[0], pc[1]))
+    check(specOf(def.spec).kind == "hat" && specOf(def.spec).label == "визначити привітати друга (ім'я) (скільки)", "шапка «визначити»")
+    var rp = newBlock("repeat")
+    var pv = newBlock("param")
+    pv.args[0] = "скільки"
+    rp.args[0] = pv
+    var sp1 = newBlock("say")
+    var jn = newBlock("join")
+    jn.args[0] = "Привіт, "
+    var pn = newBlock("param")
+    pn.args[0] = "ім'я"
+    jn.args[1] = pn
+    sp1.args[0] = jn
+    rp.body = sp1
+    var inc = newBlock("change")
+    inc.args[0] = "всього"
+    inc.args[1] = pv
+    def.next = rp
+    rp.next = inc
+    var st2 = newBlock("start")
+    var c1 = newBlock(customId("call", pc[0], pc[1]))
+    c1.args[0] = "Сева"
+    c1.args[1] = "2"
+    var c2 = newBlock(customId("call", pc[0], pc[1]))
+    c2.args[0] = "Вова"
+    c2.args[1] = "1"
+    var sayAll = newBlock("say")
+    var va = newBlock("var")
+    va.args[0] = "всього"
+    sayAll.args[0] = va
+    st2.next = c1
+    c1.next = c2
+    c2.next = sayAll
+    // збереження: специфікації відновлюються з id
+    var back = stacksFromJson(stacksToJson([def, st2]))
+    var gc = generateCode(back, "мої блоки")
+    print(gc[0])
+    check(contains(gc[0], "func привітати_друга(ім'я, скільки) {") && contains(gc[0], "\nvar всього = 0"), "функція з параметрами і спільна змінна")
+    check(len(gc[1]) >= len(split(gc[0], "\n")) - 1, "карта рядок->блок з функцією")
+    writeFile(dir + "/custom.nx", gc[0])
+    var rc = procRun(nxPath(), [dir + "/custom.nx"])
+    print(rc.stdout + rc.stderr)
+    var oc = split(trim(rc.stdout), "\n")
+    check(rc.exitCode == 0 && len(oc) == 4 && oc[0] == "Привіт, Сева" && oc[2] == "Привіт, Вова" && oc[3] == "3", "мої блоки працюють")
+
     print("МОДЕЛЬ БЛОКІВ: УСЕ ГАРАЗД")
 }

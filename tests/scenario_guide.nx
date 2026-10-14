@@ -4,8 +4,8 @@
 // NYX_IDE_CONFIG=<новий файл> NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
 import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind, offerOnce }
-import "../src/guide.nx" { LESSONS }
-import "../src/blocks_model.nx" { generateCode }
+import "../src/guide.nx" { LESSONS, lessonDone, loadProgress }
+import "../src/blocks_model.nx" { generateCode, newBlock, customId }
 
 func typeConsole(t) {
     typeText(t)
@@ -162,5 +162,25 @@ func main() {
 
     ideShutdown()
     check(contains(readFile(dir + "/.nyx/уроки.json"), "Повторення"), "прогрес уроків збережено")
+    // урок «Мої блоки»: свій блок визначено (з блоками під шапкою) і викликано
+    var mi = -1
+    var li = 0
+    while (li < len(LESSONS)) {
+        if (LESSONS[li].check == "custom") { mi = li }
+        li = li + 1
+    }
+    check(mi >= 0, "є урок «Мої блоки»")
+    var mdef = newBlock(customId("def", "помахати", ["раз"]))
+    var mst = newBlock("start")
+    mst.next = newBlock(customId("call", "помахати", ["раз"]))
+    var mctx = [[mdef, mst], "", true, "", "blocks", "", 1, false]
+    check(!lessonDone(LESSONS[mi], mctx), "порожній «визначити» - урок ще не пройдено")
+    mdef.next = newBlock("say")
+    check(lessonDone(LESSONS[mi], mctx), "урок «Мої блоки» зараховується")
+    // перенумеровані уроки: прогрес за старою назвою не губиться
+    writeFile(dir + "/old_progress.json", "[\"10. Від блоків до коду\", \"15. Масиви (списки) в коді\"]")
+    var op = loadProgress(dir + "/old_progress.json")
+    check(op[0] == "11. Від блоків до коду" && op[1] == "16. Масиви (списки) в коді", "старий прогрес перенесено на нові номери")
+
     print("СЦЕНАРІЙ НАВЧАННЯ ПРОЙДЕНО")
 }

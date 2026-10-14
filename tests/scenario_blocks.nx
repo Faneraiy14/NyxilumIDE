@@ -2,6 +2,7 @@
 // з прилипанням, віконця, змінна, запуск з введенням, панель коду.
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_blocks.nx <тека> <тека-для-png>
 import "helpers.nx"
+import "../src/blocks_model.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks }
 import "../src/blocks_view.nx" { _pHits, _sHits }
 
@@ -92,6 +93,29 @@ func main() {
     step()
     step()
     check(contains(toString(app.con.lines), "Радий бачити, Сева"), "програма з блоків працює")
+
+    // мої блоки: «Створити блок» -> шапка «визначити», блок у палітрі
+    clickId("bcat:Мої блоки")
+    clickId("bnewblock")
+    check(app.dialog != null, "діалог нового блока")
+    typeText("помахати (раз)")
+    key("Enter", false, false)
+    step()
+    var defB = null
+    for st in ws.stacks { if (st.spec == "def:помахати|раз") { defB = st } }
+    check(defB != null, "шапка «визначити помахати (раз)» на робочій області")
+    draw()
+    var cp = palPos("call:помахати|раз")
+    check(cp[0] > 0, "блок «помахати» у палітрі")
+    palPos("param:раз")
+    var nStacks = len(ws.stacks)
+    click(cp[0] + 5, cp[1] + 8)
+    check(len(ws.stacks) == nStacks + 1 && ws.stacks[nStacks].spec == "call:помахати|раз", "блок «помахати» на робочій області")
+    check(contains(generateCode(ws.stacks, "x")[0], "func помахати(раз) {"), "мій блок став функцією")
+    shot("b04_custom")
+    // прибираємо, щоб не заважав наступним перевіркам
+    removeAt(ws.stacks, nStacks)
+    removeAt(ws.stacks, indexOf(ws.stacks, defB))
 
     clickId("btogglecode")
     check(ws.showCode, "панель коду відкрито")

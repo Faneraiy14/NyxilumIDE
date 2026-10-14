@@ -36,8 +36,8 @@ struct Spec {
     gen: string
 }
 
-var CATEGORIES = ["Події", "Рух", "Вигляд", "Вивід", "Керування", "Змінні", "Оператори", "Малювання"]
-var CAT_COLORS = [0xd4a000, 0x2f9fd0, 0xc05ad8, 0x4c8fe8, 0xe8901a, 0xe8642c, 0x3faa4a, 0x8a5cf0]
+var CATEGORIES = ["Події", "Рух", "Вигляд", "Вивід", "Керування", "Змінні", "Оператори", "Малювання", "Мої блоки"]
+var CAT_COLORS = [0xd4a000, 0x2f9fd0, 0xc05ad8, 0x4c8fe8, 0xe8901a, 0xe8642c, 0x3faa4a, 0x8a5cf0, 0xe0508a]
 
 // Костюми героя (віконце %h).
 var COSTUMES = ["кіт", "м'яч", "ракета", "зірка", "робот"]
@@ -126,12 +126,100 @@ func initSpecs() {
     _spec("item", "cmd", "Вигляд", "поставити предмет %h в x %n y %n", ["зірка", "100", "100"], "_предмет($1, $2, $3)")
     _spec("hideitem", "cmd", "Вигляд", "сховати предмет", [], "_сховатиПредмет()")
 
+    // Мої блоки: значення параметра всередині "визначити" (самі блоки
+    // "визначити ..." і виклики - def:/call:, див. customSpec)
+    _spec("param", "rep", "Мої блоки", "%v", ["значення"], "$1")
+
     for sp in SPECS { mapSet(_specById, sp.id, sp) }
 }
 
 func specOf(id) {
     initSpecs()
-    return mapGet(_specById, id)
+    var sp = mapGet(_specById, id)
+    if (sp == null && (startsWith(id, "def:") || startsWith(id, "call:"))) {
+        sp = customSpec(id)
+        mapSet(_specById, id, sp)
+    }
+    return sp
+}
+
+// ---------- мої блоки (як «Створити блок» у Scratch) ----------
+//
+// Власний блок - це функція. Назва й параметри записані прямо в id
+// специфікації: "def:стрибнути|висота" - шапка «визначити стрибнути
+// (висота)», під нею - що блок робить; "call:стрибнути|висота" - сам
+// блок-команда з віконцем на кожен параметр. Окремо нічого не зберігається:
+// специфікація створюється з id, коли блок трапляється вперше.
+
+// Назва для id: без символів, що мають особливе значення в id і підписі.
+func _customClean(s) {
+    var out = ""
+    for c in trim(toString(s)) {
+        if (c != "|" && c != "%" && c != "(" && c != ")") { out = out + c }
+    }
+    return trim(out)
+}
+
+// "стрибнути (висота) (швидкість)" -> [назва, [параметри]]; назва "" - нема.
+func parseCustomBlock(text) {
+    var name = ""
+    var params = []
+    var cur = ""
+    var inParen = false
+    for c in toString(text) {
+        if (c == "(" && !inParen) {
+            name = name + " " + cur
+            cur = ""
+            inParen = true
+        } else if (c == ")" && inParen) {
+            var p = _customClean(cur)
+            if (p != "" && indexOf(params, p) < 0 && len(params) < 9) { append(params, p) }
+            cur = ""
+            inParen = false
+        } else { cur = cur + c }
+    }
+    if (!inParen) { name = name + " " + cur }
+    name = _customClean(join(split(name, " "), " "))
+    while (contains(name, "  ")) { name = replace(name, "  ", " ") }
+    return [name, params]
+}
+
+func customId(kind, name, params) {
+    var id = kind + ":" + name
+    for p in params { id = id + "|" + p }
+    return id
+}
+
+// [назва, [параметри]] з id "def:..." / "call:...".
+func customParts(id) {
+    var parts = split(substring(id, indexOf(id, ":") + 1, len(id) - indexOf(id, ":") - 1), "|")
+    return [parts[0], slice(parts, 1)]
+}
+
+func customFuncIdent(name) { return varIdent(name) }
+
+func customSpec(id) {
+    var cp = customParts(id)
+    var name = cp[0]
+    var params = cp[1]
+    if (startsWith(id, "def:")) {
+        var lab = "визначити " + name
+        for p in params { lab = lab + " (" + p + ")" }
+        return Spec { id: id, kind: "hat", cat: "Мої блоки", label: lab, defs: [], gen: "" }
+    }
+    var lab2 = name
+    var defs = []
+    var gen = customFuncIdent(name) + "("
+    var k = 0
+    while (k < len(params)) {
+        if (len(params) > 1) { lab2 = lab2 + " " + params[k] }
+        lab2 = lab2 + " %s"
+        append(defs, "")
+        if (k > 0) { gen = gen + ", " }
+        gen = gen + "$" + toString(k + 1)
+        k = k + 1
+    }
+    return Spec { id: id, kind: "cmd", cat: "Мої блоки", label: lab2, defs: defs, gen: gen + ")" }
 }
 
 func catColor(cat) {
@@ -370,8 +458,12 @@ func _genArg(a, t) {
     return _quote(s)
 }
 
+var _genParams = null
+
 func _useVar(name) {
     var id = varIdent(name)
+    // параметр власного блока - не змінна програми
+    if (_genParams != null && mapHas(_genParams, id)) { return id }
     if (!mapHas(_genVars, id)) { mapSet(_genVars, id, true) }
     return id
 }
@@ -481,6 +573,41 @@ func generateCode(stacks, title) {
     _usesLists = false
     _genLists = newMap()
 
+    _genParams = null
+
+    // мої блоки -> функції (генеруються першими: їхні змінні теж мають
+    // потрапити в оголошення)
+    var funcs = []
+    var funcBlocks = []
+    var seen = newMap()
+    for s in stacks {
+        if (startsWith(s.spec, "def:")) {
+            var cp = customParts(s.spec)
+            var fid = customFuncIdent(cp[0])
+            if (mapHas(seen, fid)) { continue }
+            mapSet(seen, fid, true)
+            _genParams = newMap()
+            var pids = []
+            for p in cp[1] {
+                var pid = varIdent(p)
+                append(pids, pid)
+                mapSet(_genParams, pid, true)
+            }
+            _genLines = []
+            _genBlocks = []
+            _genChain(s.next, 1)
+            append(funcs, "func " + fid + "(" + join(pids, ", ") + ") {")
+            append(funcBlocks, s)
+            for l in _genLines { append(funcs, l) }
+            for bb in _genBlocks { append(funcBlocks, bb) }
+            append(funcs, "}")
+            append(funcBlocks, null)
+            append(funcs, "")
+            append(funcBlocks, null)
+            _genParams = null
+        }
+    }
+
     var body = []
     var bodyBlocks = []
     for s in stacks {
@@ -505,12 +632,30 @@ func generateCode(stacks, title) {
     if (_usesLists) {
         for l in split(preludeText("списки.nx"), "\n") { append(lines, l)  append(blocks, null) }
     }
+    // з моїми блоками змінні спільні для всієї програми (як у Scratch):
+    // оголошуються зовні, щоб їх бачили й функції
+    var hasFuncs = len(funcs) > 0
+    var vpad = "    "
+    if (hasFuncs) { vpad = "" }
+    var decl = []
+    for v in mapKeys(_genVars) {
+        if (mapHas(_genLists, v)) { append(decl, vpad + "var " + v + " = []") }
+        else { append(decl, vpad + "var " + v + " = 0") }
+    }
+    if (hasFuncs) {
+        for l in decl { append(lines, l)  append(blocks, null) }
+        if (len(decl) > 0) { append(lines, "")  append(blocks, null) }
+        var fk = 0
+        while (fk < len(funcs)) {
+            append(lines, funcs[fk])
+            append(blocks, funcBlocks[fk])
+            fk = fk + 1
+        }
+    }
     append(lines, "func main() {")
     append(blocks, null)
-    for v in mapKeys(_genVars) {
-        if (mapHas(_genLists, v)) { append(lines, "    var " + v + " = []") }
-        else { append(lines, "    var " + v + " = 0") }
-        append(blocks, null)
+    if (!hasFuncs) {
+        for l in decl { append(lines, l)  append(blocks, null) }
     }
     // герой видно одразу, ще до першого блока руху
     if (_usesSprites) {

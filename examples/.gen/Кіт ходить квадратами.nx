@@ -1,0 +1,281 @@
+// Програма з блоків «Кіт ходить квадратами» - код створено Nyx IDE.
+
+// Відповідь-число стає числом (щоб з нею можна було рахувати).
+func _відповідь(t) {
+    var s = trim(t)
+    try {
+        return toDouble(s)
+    } catch (e) {
+        return s
+    }
+}
+
+// Сцена для блоків «Малювання» (додається до коду програми з блоків).
+var _s = null
+func _сцена(w, h) {
+    if (_s == null) { _s = surfaceOpen("Сцена", toInt(w), toInt(h)) }
+}
+func _готово() {
+    if (_s == null) { _сцена(480, 360) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _очистити(c) {
+    _готово()
+    surfaceClear(_s, c)
+}
+func _коло(x, y, r, c) {
+    _готово()
+    surfaceCircle(_s, toInt(x), toInt(y), toInt(r), c)
+}
+func _прямокутник(x, y, w, h, c) {
+    _готово()
+    surfaceRect(_s, toInt(x), toInt(y), toInt(w), toInt(h), c)
+}
+func _лінія(x1, y1, x2, y2, c) {
+    _готово()
+    surfaceLine(_s, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 3)
+}
+func _текст(t, x, y, c) {
+    _готово()
+    surfaceText(_s, toString(t), toInt(x), toInt(y), 20, c)
+}
+func _показати() {
+    _готово()
+    surfacePresent(_s)
+    var e = surfaceNextEvent(_s, 0)
+    while (e != null) { e = surfaceNextEvent(_s, 0) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _клавіша(k) {
+    _готово()
+    return surfaceKeyDown(_s, k)
+}
+func _мишаX() {
+    _готово()
+    return surfaceMouseX(_s)
+}
+func _мишаY() {
+    _готово()
+    return surfaceMouseY(_s)
+}
+func _мишаНатиснута() {
+    _готово()
+    return surfaceMouseDown(_s)
+}
+
+// Герой (спрайт) для блоків «Рух» і «Вигляд»: стан, костюми фігурами,
+// автоматичне перемальовування після кожного блока (як у Scratch).
+// Координати - як у «Малюванні»: x вправо, y вниз; кут 0 - вправо, 90 - вниз.
+var _герX = 240
+var _герY = 180
+var _герКут = 0
+var _герКостюм = "кіт"
+var _герВидно = true
+var _герРозмір = 100
+var _герСлова = ""
+var _тлоКолір = 0x87ceeb
+var _останнійКадр = 0
+// предмет - друга фігура на сцені (зірка, м'яч...), яку можна "упіймати"
+var _предВидно = false
+var _предX = 100
+var _предY = 100
+var _предКостюм = "зірка"
+
+func _рад(кут) { return кут * 3.14159265 / 180 }
+
+// Многокутник [x1, y1, x2, y2, ...] (відносно центру), повернутий і збільшений.
+func _повернутий(точки, cx, cy, кут, k) {
+    var c = cos(_рад(кут))
+    var s = sin(_рад(кут))
+    var out = []
+    var i = 0
+    while (i < len(точки)) {
+        var px = точки[i] * k
+        var py = точки[i + 1] * k
+        append(out, cx + px * c - py * s)
+        append(out, cy + px * s + py * c)
+        i = i + 2
+    }
+    return out
+}
+
+func _костюмКіт(x, y, k, ліворуч) {
+    var d = 1
+    if (ліворуч) { d = -1 }
+    surfaceCircle(_s, toInt(x), toInt(y + 12 * k), toInt(22 * k), 0xf0a040)
+    surfaceCircle(_s, toInt(x + 14 * d * k), toInt(y - 12 * k), toInt(17 * k), 0xf0a040)
+    surfacePolygon(_s, _повернутий([4 * d, -24, 10 * d, -40, 18 * d, -26], x, y, 0, k), 0xf0a040)
+    surfacePolygon(_s, _повернутий([20 * d, -26, 28 * d, -40, 30 * d, -20], x, y, 0, k), 0xf0a040)
+    surfaceCircle(_s, toInt(x + 10 * d * k), toInt(y - 15 * k), toInt(3 * k + 1), 0x202020)
+    surfaceCircle(_s, toInt(x + 22 * d * k), toInt(y - 15 * k), toInt(3 * k + 1), 0x202020)
+    surfaceCircle(_s, toInt(x + 18 * d * k), toInt(y - 7 * k), toInt(2 * k + 1), 0xe05070)
+    surfaceLine(_s, toInt(x - 20 * d * k), toInt(y + 20 * k), toInt(x - 34 * d * k), toInt(y + 2 * k), 0xf0a040, toInt(5 * k + 1))
+}
+
+func _намалюватиГероя() { _намалюватиКостюм(_герКостюм, _герX, _герY, _герКут, _герРозмір / 100) }
+
+func _намалюватиКостюм(кос, x, y, кут, k) {
+    if (кос == "м'яч") {
+        surfaceCircle(_s, toInt(x), toInt(y), toInt(22 * k), 0xe03c3c)
+        surfacePolygon(_s, _повернутий([-22, -4, 22, -4, 22, 4, -22, 4], x, y, кут, k), 0xffffff)
+    } else if (кос == "ракета") {
+        surfacePolygon(_s, _повернутий([34, 0, 14, -12, -22, -12, -22, 12, 14, 12], x, y, кут, k), 0xd8dde8)
+        surfacePolygon(_s, _повернутий([34, 0, 20, -9, 20, 9], x, y, кут, k), 0xe03c3c)
+        surfacePolygon(_s, _повернутий([-22, -12, -34, -22, -14, -12], x, y, кут, k), 0xe03c3c)
+        surfacePolygon(_s, _повернутий([-22, 12, -34, 22, -14, 12], x, y, кут, k), 0xe03c3c)
+        surfacePolygon(_s, _повернутий([-22, -6, -36, 0, -22, 6], x, y, кут, k), 0xffb020)
+    } else if (кос == "зірка") {
+        var pts = []
+        var i = 0
+        while (i < 10) {
+            var r = 26
+            if (i % 2 == 1) { r = 11 }
+            var a = _рад(i * 36 - 90)
+            append(pts, cos(a) * r)
+            append(pts, sin(a) * r)
+            i = i + 1
+        }
+        surfacePolygon(_s, _повернутий(pts, x, y, кут, k), 0xffd23c)
+    } else if (кос == "робот") {
+        surfaceRect(_s, toInt(x - 18 * k), toInt(y - 30 * k), toInt(36 * k), toInt(26 * k), 0x9aa4b4)
+        surfaceRect(_s, toInt(x - 22 * k), toInt(y - 2 * k), toInt(44 * k), toInt(32 * k), 0x7a8494)
+        surfaceCircle(_s, toInt(x - 8 * k), toInt(y - 18 * k), toInt(4 * k + 1), 0x40e0ff)
+        surfaceCircle(_s, toInt(x + 8 * k), toInt(y - 18 * k), toInt(4 * k + 1), 0x40e0ff)
+        surfaceLine(_s, toInt(x), toInt(y - 30 * k), toInt(x), toInt(y - 40 * k), 0x9aa4b4, 2)
+        surfaceCircle(_s, toInt(x), toInt(y - 41 * k), toInt(3 * k + 1), 0xe03c3c)
+    } else {
+        var кн = ((кут % 360) + 360) % 360
+        _костюмКіт(x, y, k, кн > 90 && кн < 270)
+    }
+}
+
+// Бульбашка з репліками героя.
+func _намалюватиСлова() {
+    var t = toString(_герСлова)
+    var w = textWidth(t, 16) + 20
+    // бульбашка не виходить за краї сцени
+    var bx = clamp(toInt(_герX + 20), 4, max(4, surfaceWidth(_s) - w - 4))
+    var by = clamp(toInt(_герY - 70), 4, max(4, surfaceHeight(_s) - 46))
+    surfaceRoundRect(_s, bx, by, w, 30, 10, 0xffffff)
+    surfacePolygon(_s, [bx + 10, by + 28, bx + 22, by + 28, bx + 4, by + 42], 0xffffff)
+    surfaceText(_s, t, bx + 10, by + 7, 16, 0x202020)
+}
+
+// Перемалювати сцену з героєм і показати (не частіше ~60 кадрів/с).
+func _кадр() {
+    _готово()
+    surfaceClear(_s, _тлоКолір)
+    if (_предВидно) { _намалюватиКостюм(_предКостюм, _предX, _предY, 0, 0.8) }
+    if (_герВидно) { _намалюватиГероя() }
+    if (_герВидно && toString(_герСлова) != "") { _намалюватиСлова() }
+    _показати()
+    var dt = timeMs() - _останнійКадр
+    if (dt < 16) { sleep(16 - dt) }
+    _останнійКадр = timeMs()
+}
+
+func _іти(n) {
+    _герX = _герX + cos(_рад(_герКут)) * n
+    _герY = _герY + sin(_рад(_герКут)) * n
+    _кадр()
+}
+func _повернути(n) {
+    _герКут = _герКут + n
+    _кадр()
+}
+func _перейти(x, y) {
+    _герX = x
+    _герY = y
+    _кадр()
+}
+func _змінитиX(n) {
+    _герX = _герX + n
+    _кадр()
+}
+func _змінитиY(n) {
+    _герY = _герY + n
+    _кадр()
+}
+func _напрям(n) {
+    _герКут = n
+    _кадр()
+}
+func _наКраю() {
+    _готово()
+    return _герX < 25 || _герY < 25 || _герX > surfaceWidth(_s) - 25 || _герY > surfaceHeight(_s) - 25
+}
+func _відбитися() {
+    _готово()
+    var w = surfaceWidth(_s)
+    var h = surfaceHeight(_s)
+    var dx = cos(_рад(_герКут))
+    var dy = sin(_рад(_герКут))
+    if ((_герX < 25 && dx < 0) || (_герX > w - 25 && dx > 0)) { _герКут = 180 - _герКут }
+    if ((_герY < 25 && dy < 0) || (_герY > h - 25 && dy > 0)) { _герКут = 0 - _герКут }
+    _герX = clamp(_герX, 25, w - 25)
+    _герY = clamp(_герY, 25, h - 25)
+    _кадр()
+}
+func _костюм(c) {
+    _герКостюм = c
+    _герВидно = true
+    _кадр()
+}
+func _сховати() {
+    _герВидно = false
+    _кадр()
+}
+func _каже(t) {
+    _герСлова = t
+    _кадр()
+}
+func _розмір(n) {
+    _герРозмір = n
+    _кадр()
+}
+func _тло(c) {
+    _тлоКолір = c
+    _кадр()
+}
+func _предмет(c, x, y) {
+    _предКостюм = c
+    _предX = x
+    _предY = y
+    _предВидно = true
+    _кадр()
+}
+func _сховатиПредмет() {
+    _предВидно = false
+    _кадр()
+}
+func _торкається() {
+    if (!_предВидно || !_герВидно) { return false }
+    var dx = _герX - _предX
+    var dy = _герY - _предY
+    var r = 22 * _герРозмір / 100 + 18
+    return dx * dx + dy * dy < r * r
+}
+
+func квадрат(сторона) {
+    for крок1 in 0..4 {
+        for крок2 in 0..10 {
+            _іти(сторона / 10)
+            sleep(toInt(0.05 * 1000))
+        }
+        _повернути(90)
+    }
+}
+
+func main() {
+    _кадр()
+    _костюм("кіт")
+    _перейти(140, 260)
+    _каже("Я вмію ходити квадратами!")
+    while (true) {
+        квадрат(60)
+        квадрат(120)
+        _каже("Ще раз!")
+        квадрат(180)
+    }
+    while (_s != null && surfaceIsOpen(_s)) { _показати()  sleep(30) }
+}

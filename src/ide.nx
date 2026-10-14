@@ -558,6 +558,7 @@ func openDialog(title, text, action) {
         okLabel = "Видалити"
         suffix = ""
     }
+    if (action == "newblock") { suffix = "" }
     app.dialog = Dialog { title: title, text: text, action: action, okLabel: okLabel, suffix: suffix, target: "" }
     app.focus = "dialog"
 }
@@ -570,6 +571,14 @@ func closeDialog(ok) {
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
     if (ok && d.action == "delete") { deletePath(d.target) }
+    if (ok && d.action == "newblock") {
+        var ws = currentBlocks()
+        if (ws != null) {
+            if (blocksNewCustom(ws, d.text)) {
+                setStatus("Готово! Збери під «визначити», що робить блок, і став його з «Мої блоки»")
+            } else { setStatus("Потрібна назва блока (і такого ще не має бути)") }
+        }
+    }
 }
 
 func drawDialog() {
@@ -579,6 +588,7 @@ func drawDialog() {
     surfaceRect(S, 0, 0, W, H, 0x99000000)
     var w = 460
     var h = 170
+    if (d.action == "newblock") { h = 200 }
     var x = toInt((W - w) / 2)
     var y = toInt((H - h) / 2)
     surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
@@ -595,6 +605,9 @@ func drawDialog() {
     var tw = surfaceText(S, d.text, x + 32, y + 68, 16, C_TEXT)
     surfaceRect(S, x + 33 + tw, y + 66, 2, 20, C_ACCENT)
     surfaceText(S, d.suffix, x + w - 30 - textWidth(d.suffix, 16), y + 68, 16, C_DIM)
+    if (d.action == "newblock") {
+        surfaceText(S, "Назва, параметри - у дужках: стрибнути (висота)", x + 20, y + 104, 14, C_DIM)
+    }
     uiButton("dialog.cancel", "Скасувати", x + w - 250, y + h - 52, 110, 34, "normal")
     uiButton("dialog.ok", d.okLabel, x + w - 130, y + h - 52, 110, 34, "primary")
 }
@@ -1848,6 +1861,7 @@ func doAction(id) {
         if (ws != null && app.mode == "blocks") { ws.showCode = !ws.showCode }
     }
     else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
+    else if (id == "bnewblock") { if (currentBlocks() != null) { openDialog("Новий блок", "", "newblock") } }
     else if (id == "bclear") {
         var ws2 = currentBlocks()
         if (ws2 != null) {

@@ -175,6 +175,28 @@ func shoppingList() {
         a("say", [a("join", ["Усього: ", a("listlen", ["покупки"])])])])])
 }
 
+// Мої блоки: свій блок «квадрат (сторона)» - кіт обходить квадрат.
+func catSquares() {
+    var side = a("param", ["сторона"])
+    var r4 = a("repeat", ["4"])
+    var wait = a("wait", ["0.05"])
+    var steps = a("repeat", ["10"])
+    steps.body = chain([a("go", [a("div", [side, "10"])]), wait])
+    r4.body = chain([steps, a("turn", ["90"])])
+    var def = b(customId("def", "квадрат", ["сторона"]))
+    def.x = 40
+    def.y = 360
+    def.next = r4
+    var sq = customId("call", "квадрат", ["сторона"])
+    var loop = b("forever")
+    loop.body = chain([a(sq, ["60"]), a(sq, ["120"]), a("say2", ["Ще раз!"]), a(sq, ["180"])])
+    save("Кіт ходить квадратами", [chain([b("start"),
+        a("costume", ["кіт"]),
+        a("goto", ["140", "260"]),
+        a("say2", ["Я вмію ходити квадратами!"]),
+        loop]), def])
+}
+
 func main() {
     if (!dirExists("examples/.gen")) { makeDir("examples/.gen") }
     guessNumber()
@@ -186,4 +208,5 @@ func main() {
     rocket()
     catchStar()
     shoppingList()
+    catSquares()
 }
