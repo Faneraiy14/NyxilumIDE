@@ -335,7 +335,7 @@ func drawGuide(tab, open, done, ctx, x, y, w, h) {
     var goalLines = wrapText("Мета: " + les2.goal, w - 56, 16)
     var gh = 20 + len(goalLines) * 20 + 30
     var gc = C_SURFACE
-    if (ok) { gc = 0x2a4a35 }
+    if (ok) { gc = C_OKBG }
     surfaceRoundRect(S, x + 12, cy, w - 24, gh, 8, gc)
     var gy = cy + 10
     for l in goalLines {

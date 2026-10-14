@@ -1,4 +1,5 @@
-// Кольори IDE (темна тема). Одне місце - щоб змінити вигляд усієї IDE.
+// Кольори IDE. Одне місце - щоб змінити вигляд усієї IDE; теми (темна,
+// світла, контрастна) - applyTheme нижче, переписує ці змінні.
 
 var C_BG = 0x1e1e2e          // фон редактора
 var C_PANEL = 0x181825       // бічні панелі
@@ -20,6 +21,13 @@ var C_SELECTION = 0x3e4060
 var C_WORDHI = 0x3a3f58     // інші входження слова під курсором
 var C_CURLINE = 0x262637
 var C_ERRLINE = 0x3b2433
+var C_DIFF_ADD = 0x1f3b2a    // тло доданого рядка в порівнянні
+var C_DIFF_DEL = 0x3d2230    // тло прибраного рядка
+var C_DBGLINE = 0x4a4520     // рядок паузи налагодження
+var C_GRID = 0x2c2d40        // точки сітки робочої області блоків
+var C_OKBG = 0x2a4a35        // тло пройденого уроку
+var C_ON_ACCENT = 0x11111b   // текст на кольоровому (акцентному) тлі
+var THEME = "dark"
 
 // Підсвітка коду: вид токена -> колір
 var HL_COLORS = [0xcdd6f4, 0xcba6f7, 0xa6e3a1, 0xfab387, 0x6c7086, 0x89b4fa, 0xf9e2af, 0x94e2d5, 0x9399b2, 0xfab387]
@@ -33,3 +41,108 @@ var HL_FUNC = 6
 var HL_TYPE = 7
 var HL_PUNCT = 8
 var HL_INTERP = 9
+
+var THEMES = [["dark", "Темна"], ["light", "Світла"], ["contrast", "Контрастна"]]
+
+// Тема: усі кольори одразу (наступний кадр уже в новій темі).
+func applyTheme(name) {
+    THEME = name
+    if (name == "light") {
+        // Catppuccin Latte
+        C_BG = 0xeff1f5
+        C_PANEL = 0xe6e9ef
+        C_PANEL2 = 0xdce0e8
+        C_SURFACE = 0xccd0da
+        C_SURFACE2 = 0xbcc0cc
+        C_BORDER = 0xc6cad6
+        C_TEXT = 0x4c4f69
+        C_SUBTEXT = 0x5c5f77
+        C_DIM = 0x8c8fa1
+        C_ACCENT = 0x1e66f5
+        C_GREEN = 0x40a02b
+        C_RED = 0xd20f39
+        C_YELLOW = 0xdf8e1d
+        C_PEACH = 0xfe640b
+        C_MAUVE = 0x8839ef
+        C_TEAL = 0x179299
+        C_SELECTION = 0xc5d4f5
+        C_WORDHI = 0xd6dcec
+        C_CURLINE = 0xe4e7ee
+        C_ERRLINE = 0xf6d6dc
+        C_DIFF_ADD = 0xd5ecd0
+        C_DIFF_DEL = 0xf5d3da
+        C_DBGLINE = 0xf7e8c0
+        C_GRID = 0xd0d4de
+        C_OKBG = 0xd5ecd0
+        C_ON_ACCENT = 0xffffff
+        _setHl([0x4c4f69, 0x8839ef, 0x40a02b, 0xfe640b, 0x8c8fa1, 0x1e66f5, 0xdf8e1d, 0x179299, 0x7c7f93, 0xfe640b])
+        return
+    }
+    if (name == "contrast") {
+        // висока контрастність: чорне тло, яскравий текст, жовтий акцент
+        C_BG = 0x000000
+        C_PANEL = 0x0a0a0a
+        C_PANEL2 = 0x000000
+        C_SURFACE = 0x262626
+        C_SURFACE2 = 0x404040
+        C_BORDER = 0x6f6f6f
+        C_TEXT = 0xffffff
+        C_SUBTEXT = 0xf0f0f0
+        C_DIM = 0xc8c8c8
+        C_ACCENT = 0xffd700
+        C_GREEN = 0x4eff7a
+        C_RED = 0xff5c5c
+        C_YELLOW = 0xffe600
+        C_PEACH = 0xffa94d
+        C_MAUVE = 0xd59bff
+        C_TEAL = 0x5cf2e6
+        C_SELECTION = 0x264f78
+        C_WORDHI = 0x3a3a3a
+        C_CURLINE = 0x161616
+        C_ERRLINE = 0x5a0000
+        C_DIFF_ADD = 0x004d1a
+        C_DIFF_DEL = 0x5a0010
+        C_DBGLINE = 0x5a4a00
+        C_GRID = 0x333333
+        C_OKBG = 0x004d1a
+        C_ON_ACCENT = 0x000000
+        _setHl([0xffffff, 0xd59bff, 0x4eff7a, 0xffa94d, 0xb0b0b0, 0x7cc4ff, 0xffe600, 0x5cf2e6, 0xd0d0d0, 0xffa94d])
+        return
+    }
+    THEME = "dark"
+    C_BG = 0x1e1e2e
+    C_PANEL = 0x181825
+    C_PANEL2 = 0x11111b
+    C_SURFACE = 0x313244
+    C_SURFACE2 = 0x45475a
+    C_BORDER = 0x2a2b3c
+    C_TEXT = 0xcdd6f4
+    C_SUBTEXT = 0xa6adc8
+    C_DIM = 0x6c7086
+    C_ACCENT = 0x89b4fa
+    C_GREEN = 0xa6e3a1
+    C_RED = 0xf38ba8
+    C_YELLOW = 0xf9e2af
+    C_PEACH = 0xfab387
+    C_MAUVE = 0xcba6f7
+    C_TEAL = 0x94e2d5
+    C_SELECTION = 0x3e4060
+    C_WORDHI = 0x3a3f58
+    C_CURLINE = 0x262637
+    C_ERRLINE = 0x3b2433
+    C_DIFF_ADD = 0x1f3b2a
+    C_DIFF_DEL = 0x3d2230
+    C_DBGLINE = 0x4a4520
+    C_GRID = 0x2c2d40
+    C_OKBG = 0x2a4a35
+    C_ON_ACCENT = 0x11111b
+    _setHl([0xcdd6f4, 0xcba6f7, 0xa6e3a1, 0xfab387, 0x6c7086, 0x89b4fa, 0xf9e2af, 0x94e2d5, 0x9399b2, 0xfab387])
+}
+
+func _setHl(cols) {
+    var i = 0
+    while (i < len(cols)) {
+        HL_COLORS[i] = cols[i]
+        i = i + 1
+    }
+}

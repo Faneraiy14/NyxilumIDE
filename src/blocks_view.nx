@@ -653,7 +653,7 @@ func blocksDraw(ws, x, y, w, h, title) {
     while (gx < wx + ww) {
         var gy = y + ((ws.panY % 32) + 32) % 32
         while (gy < y + h) {
-            surfaceRect(S, gx, gy, 2, 2, 0x2c2d40)
+            surfaceRect(S, gx, gy, 2, 2, C_GRID)
             gy = gy + 32
         }
         gx = gx + 32

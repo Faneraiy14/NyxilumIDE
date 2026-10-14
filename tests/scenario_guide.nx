@@ -5,6 +5,7 @@
 import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind, offerOnce }
 import "../src/guide.nx" { LESSONS, lessonDone, loadProgress }
+import "../src/theme.nx"
 import "../src/blocks_model.nx" { generateCode, newBlock, customId }
 
 func typeConsole(t) {
@@ -118,6 +119,19 @@ func main() {
     check(app.cfg.uiScale == 150 && surfaceWidth(S) == 853, "масштаб 150%")
     draw()
     shot("s01b_scale150")
+    // теми: світла і контрастна змінюють кольори, темна - повертає
+    clickId("set.theme:light")
+    check(app.cfg.theme == "light" && C_BG == 0xeff1f5, "світла тема")
+    clickId("act:files")
+    draw()
+    shot("s01c_light")
+    clickId("act:settings")
+    clickId("set.theme:contrast")
+    check(C_BG == 0 && C_ACCENT == 0xffd700, "контрастна тема")
+    draw()
+    shot("s01d_contrast")
+    clickId("set.theme:dark")
+    check(app.cfg.theme == "dark" && C_BG == 0x1e1e2e, "темна тема знову")
     clickId("set.scale:100")
     check(app.cfg.uiScale == 100 && surfaceWidth(S) == 1280, "масштаб назад 100%")
     clickId("set.level:middle")

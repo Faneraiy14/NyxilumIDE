@@ -1191,6 +1191,7 @@ struct Settings {
     extOff: array
     pixelFont: bool
     uiScale: i32
+    theme: string
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1199,6 +1200,11 @@ func configPath() {
     var p = osEnv("NYX_IDE_CONFIG")
     if (p != null && p != "") { return p }
     return joinPath(joinPath(homeDir(), ".nyx-ide"), "налаштування.json")
+}
+
+func _themeOf(m) {
+    if (!mapHas(m, "theme")) { return "dark" }
+    return toString(mapGet(m, "theme"))
 }
 
 func _scaleOf(m) {
@@ -1217,7 +1223,7 @@ func loadSettings() {
         if (mapHas(m, "extOff")) { for x2 in mapGet(m, "extOff") { append(extOff, toString(x2)) } }
         return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
             lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
-            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m) }
+            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m), theme: _themeOf(m) }
     } catch (e) { return null }
 }
 
@@ -1233,6 +1239,7 @@ func saveSettings() {
     mapSet(m, "extOff", c.extOff)
     mapSet(m, "pixelFont", c.pixelFont)
     mapSet(m, "uiScale", c.uiScale)
+    mapSet(m, "theme", c.theme)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1242,7 +1249,7 @@ func saveSettings() {
 
 func defaultSettings(level) {
     var adv = level == "advanced"
-    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100 }
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100, theme: "dark" }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1255,7 +1262,9 @@ func applyLevel(level, firstRun) {
     var extOff = []
     var pixelFont = false
     var uiScale = 100
+    var theme = "dark"
     if (app.cfg != null) {
+        theme = app.cfg.theme
         seen = app.cfg.seen
         extOff = app.cfg.extOff
         pixelFont = app.cfg.pixelFont
@@ -1266,6 +1275,7 @@ func applyLevel(level, firstRun) {
     app.cfg.extOff = extOff
     app.cfg.pixelFont = pixelFont
     app.cfg.uiScale = uiScale
+    app.cfg.theme = theme
     app.askLevel = false
     saveSettings()
     if (!firstRun) { return }
@@ -1445,6 +1455,17 @@ func drawSettingsView(x, y, w, h) {
     cy = cy + 34
     _toggle("set.pixelfont", "Піксельний шрифт", c.pixelFont, x + 6, cy, w - 12)
     cy = cy + 40
+    surfaceText(S, "Тема", x + 14, cy, 14, C_SUBTEXT, true)
+    cy = cy + 22
+    var tw3 = toInt((w - 28) / len(THEMES))
+    var ti = 0
+    while (ti < len(THEMES)) {
+        var tk = "normal"
+        if (c.theme == THEMES[ti][0]) { tk = "primary" }
+        uiButton("set.theme:" + THEMES[ti][0], THEMES[ti][1], x + 14 + ti * tw3, cy, tw3 - 4, 28, tk)
+        ti = ti + 1
+    }
+    cy = cy + 40
     surfaceText(S, "Масштаб інтерфейсу", x + 14, cy, 14, C_SUBTEXT, true)
     cy = cy + 22
     var scales = [100, 125, 150, 175, 200]
@@ -1482,6 +1503,10 @@ func settingsAction(id) {
     if (id == "set.hints") { c.hints = !c.hints }
     if (id == "set.offers") { c.offers = !c.offers }
     if (id == "set.pixelfont") { c.pixelFont = !c.pixelFont }
+    if (startsWith(id, "set.theme:")) {
+        c.theme = substring(id, 10, len(id) - 10)
+        applyTheme(c.theme)
+    }
     if (startsWith(id, "set.scale:")) {
         c.uiScale = toInt(substring(id, 10, len(id) - 10))
         surfaceScale(c.uiScale / 100)
@@ -1847,7 +1872,7 @@ func drawCtx() {
         if (uiHover(x, iy, w, 26)) { surfaceRoundRect(S, x + 4, iy, w - 8, 26, 4, C_ACCENT) }
         var col = C_TEXT
         if (it[1] == "delete") { col = C_RED }
-        if (uiHover(x, iy, w, 26)) { col = 0x11111b }
+        if (uiHover(x, iy, w, 26)) { col = C_ON_ACCENT }
         surfaceText(S, it[0], x + 14, iy + 6, 14, col)
         uiRegion("ctx:" + it[1], x, iy, w, 26)
         iy = iy + 26
@@ -3557,6 +3582,7 @@ func ideInit(dir) {
     }
     reloadExtensions()
     surfaceScale(app.cfg.uiScale / 100)
+    applyTheme(app.cfg.theme)
     refreshFiles()
     // порожня тека - приклад першої програми
     if (len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {

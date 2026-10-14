@@ -224,11 +224,11 @@ func drawHistory(file, list, counts, sel, diff, scroll, x, y, w, h) {
             var bg2 = -1
             var fg = C_DIM
             if (r[0] == "+") {
-                bg2 = 0x1f3b2a
+                bg2 = C_DIFF_ADD
                 fg = C_GREEN
             }
             if (r[0] == "-") {
-                bg2 = 0x3d2230
+                bg2 = C_DIFF_DEL
                 fg = C_RED
             }
             if (bg2 >= 0) { surfaceRect(S, x + 8, cy - 1, w - 16, lh, bg2) }

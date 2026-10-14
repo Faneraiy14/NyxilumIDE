@@ -911,7 +911,7 @@ func edDraw(ed, x, y, w, h, focused) {
         if (li >= len(ed.lines)) { break }
         var ly = y + 4 + row * lh
         var line = ed.lines[li]
-        if (li == ed.dbgLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, 0x4a4520) }
+        if (li == ed.dbgLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_DBGLINE) }
         else if (li == ed.errLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_ERRLINE) }
         else if (li == ed.cy && focused && !edHasSel(ed)) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_CURLINE) }
 
