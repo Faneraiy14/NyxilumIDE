@@ -165,6 +165,16 @@ func uiButton(id, label, x, y, w, h, kind) {
     uiRegion(id, x, y, w, h)
 }
 
+// Рядок без останнього символу (Backspace у полі вводу): емодзі - дві
+// "половинки" в рядку, стираються разом.
+func uiDropLast(s) {
+    var n = len(s)
+    if (n == 0) { return s }
+    var k = 1
+    if (n >= 2 && charCode(s[n - 1]) >= 0xDC00 && charCode(s[n - 1]) <= 0xDFFF && charCode(s[n - 2]) >= 0xD800 && charCode(s[n - 2]) <= 0xDBFF) { k = 2 }
+    return substring(s, 0, n - k)
+}
+
 // Ширина кнопки під підпис з полями.
 func uiButtonW(label) { return textWidth(label, FONT) + 24 }
 

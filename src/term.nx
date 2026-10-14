@@ -98,6 +98,8 @@ func _termCd(t, arg) {
     }
     var res = join(parts, "/")
     if (!(len(res) > 1 && res[1] == ":")) { res = "/" + res }
+    // корінь диска Windows: "C:" -> "C:/"
+    if (len(res) == 2 && res[1] == ":") { res = res + "/" }
     if (!dirExists(res)) { return "" }
     return res
 }
@@ -120,8 +122,16 @@ func termExec(t, line) {
         else { t.cwd = nd }
         return
     }
-    // "nx ..." - той самий nx, що й IDE (на Windows його може не бути в PATH)
-    if (cmd == "nx" || startsWith(cmd, "nx ")) { cmd = "\"" + nxPath() + "\"" + substring(cmd, 2, len(cmd) - 2) }
+    // NYX_IDE_NO_SHELL=1 - команди системи вимкнено (випадкові тести:
+    // набраний навмання текст не має виконатись як команда)
+    if (osEnv("NYX_IDE_NO_SHELL") == "1") {
+        termAdd(t, "(команди системи вимкнено: NYX_IDE_NO_SHELL)", "info")
+        return
+    }
+    var win = termIsWindows()
+    // "nx ..." - той самий nx, що й IDE: на Linux/Mac - підставляємо шлях,
+    // на Windows - тека nx першою в PATH (лапки в cmd.exe - окрема історія)
+    if (!win && (cmd == "nx" || startsWith(cmd, "nx "))) { cmd = "\"" + nxPath() + "\"" + substring(cmd, 2, len(cmd) - 2) }
     var opts = newMap()
     mapSet(opts, "interactive", true)
     mapSet(opts, "cwd", t.cwd)
@@ -131,9 +141,24 @@ func termExec(t, line) {
     mapSet(env, "GIT_CONFIG_COUNT", "1")
     mapSet(env, "GIT_CONFIG_KEY_0", "core.quotePath")
     mapSet(env, "GIT_CONFIG_VALUE_0", "false")
+    if (win) {
+        var np = replace(nxPath(), "/", "\\")
+        var cut2 = 0
+        var k = 0
+        while (k < len(np)) {
+            if (np[k] == "\\") { cut2 = k }
+            k = k + 1
+        }
+        var path = osEnv("PATH")
+        if (path == null) { path = "" }
+        mapSet(env, "PATH", substring(np, 0, cut2) + ";" + path)
+        // /s /c "...": cmd бере рядок між першою й останньою лапкою як є -
+        // git commit -m "два слова" доходить без зіпсованих лапок
+        mapSet(opts, "rawArgs", "/d /s /c \"" + cmd + "\"")
+    }
     mapSet(opts, "env", env)
     try {
-        if (termIsWindows()) { t.proc = procStart("cmd.exe", ["/c", cmd], opts) }
+        if (win) { t.proc = procStart("cmd.exe", [], opts) }
         else { t.proc = procStart("/bin/sh", ["-c", cmd], opts) }
         t.running = true
         t.outLen = 0
@@ -210,7 +235,7 @@ func termKey(t, e) {
         return true
     }
     if (k == "Backspace") {
-        if (len(t.input) > 0) { t.input = substring(t.input, 0, len(t.input) - 1) }
+        if (len(t.input) > 0) { t.input = uiDropLast(t.input) }
         return true
     }
     if ((k == "Up" || k == "Down") && !t.running && len(t.history) > 0) {

@@ -76,9 +76,18 @@ func main() {
     for l in app.term.lines { tt = tt + l[0] + "\n" }
     check(contains(tt, "Привіт з розширення!") && app.panelTab == "terminal", "команда розширення працює в терміналі")
 
+    // «Відкрити» вбудованого - своя копія, не файли IDE
+    if (app.side != "ext") { doAction("act:ext") }
+    draw()
+    clickId("ext.open:anylint")
+    check(startsWith(app.current, userExtDir() + "/anylint/") && !extById("anylint").builtIn, "вбудоване відкривається як своя копія")
+    if (app.side != "ext") { doAction("act:ext") }
+    draw()
+
     // вимкнути - знахідки зникають, налаштування пам'ятає
     if (app.side != "ext") { doAction("act:ext") }
     draw()
+    my = extById("мій-лінтер")
     clickId("ext.toggle:мій-лінтер")
     check(!my.enabled && len(problemsFrom("Мій лінтер")) == 0 && indexOf(app.cfg.extOff, "мій-лінтер") >= 0, "вимкнене розширення прибирає знахідки")
 

@@ -56,5 +56,20 @@ func main() {
     edUndo(ed)
     edUndo(ed)
     check(same(ed), "Ctrl+Z")
+    // емодзі (дві половинки) - Backspace/Delete/стрілки разом
+    var e2 = newEditor("a😀b", "e.nx")
+    e2.cx = 3
+    edBackspace(e2)
+    check(e2.lines[0] == "ab" && e2.cx == 1, "Backspace стирає емодзі цілим")
+    var e3 = newEditor("a😀b", "e.nx")
+    e3.cx = 1
+    edDelete(e3)
+    check(e3.lines[0] == "ab", "Delete стирає емодзі цілим")
+    var e4 = newEditor("a😀b", "e.nx")
+    e4.cx = 1
+    edMoveKey(e4, "Right", false, false)
+    check(e4.cx == 3, "стрілка переступає емодзі")
+    edMoveKey(e4, "Left", false, false)
+    check(e4.cx == 1, "і назад")
     print("ПІДСВІТКА: УСЕ ГАРАЗД")
 }

@@ -105,10 +105,35 @@ func edText(ed) { return join(ed.lines, "\n") }
 
 // ---------- виділення ----------
 
+// Емодзі й деякі рідкісні символи - дві "половинки" (сурогатна пара):
+// стрілки, Backspace і Delete переступають і стирають їх разом, інакше
+// лишилась би половинка, яку вже не збережеш у файл.
+func _isHighSur(s, i) { return i >= 0 && i < len(s) && charCode(s[i]) >= 0xD800 && charCode(s[i]) <= 0xDBFF }
+func _isLowSur(s, i) { return i >= 0 && i < len(s) && charCode(s[i]) >= 0xDC00 && charCode(s[i]) <= 0xDFFF }
+
+func _clampSel(ed) {
+    var n = len(ed.lines)
+    if (n == 0) {
+        ed.lines = [""]
+        n = 1
+    }
+    ed.cy = clamp(ed.cy, 0, n - 1)
+    ed.cx = clamp(ed.cx, 0, len(ed.lines[ed.cy]))
+    // курсор не між половинками емодзі (клік мишею міг туди поставити)
+    if (_isLowSur(ed.lines[ed.cy], ed.cx)) { ed.cx = ed.cx - 1 }
+    if (ed.ay >= 0) {
+        ed.ay = clamp(ed.ay, 0, n - 1)
+        ed.ax = clamp(ed.ax, 0, len(ed.lines[ed.ay]))
+    }
+}
+
 func edHasSel(ed) { return ed.ay >= 0 && (ed.ay != ed.cy || ed.ax != ed.cx) }
 
 // [y1, x1, y2, x2] - початок і кінець виділення в порядку тексту.
 func edSelRange(ed) {
+    // межі - завжди в межах тексту (рядок під позначкою міг зникнути:
+    // вирізали рядок, скасували правку...)
+    _clampSel(ed)
     if (ed.ay < ed.cy || (ed.ay == ed.cy && ed.ax <= ed.cx)) { return [ed.ay, ed.ax, ed.cy, ed.cx] }
     return [ed.cy, ed.cx, ed.ay, ed.ax]
 }
@@ -239,6 +264,7 @@ func edBackspace(ed) {
                 }
             }
         }
+        if (n == 1 && _isLowSur(line, ed.cx - 1) && _isHighSur(line, ed.cx - 2)) { n = 2 }
         ed.lines[ed.cy] = cut(line, 0, ed.cx - n) + cut(line, ed.cx, len(line))
         ed.cx = ed.cx - n
     } else if (ed.cy > 0) {
@@ -256,7 +282,9 @@ func edDelete(ed) {
     if (edHasSel(ed)) { edDeleteSel(ed)  return }
     var line = ed.lines[ed.cy]
     if (ed.cx < len(line)) {
-        ed.lines[ed.cy] = cut(line, 0, ed.cx) + cut(line, ed.cx + 1, len(line))
+        var n = 1
+        if (_isHighSur(line, ed.cx) && _isLowSur(line, ed.cx + 1)) { n = 2 }
+        ed.lines[ed.cy] = cut(line, 0, ed.cx) + cut(line, ed.cx + n, len(line))
     } else if (ed.cy < len(ed.lines) - 1) {
         ed.lines[ed.cy] = line + ed.lines[ed.cy + 1]
         removeAt(ed.lines, ed.cy + 1)
@@ -455,12 +483,18 @@ func edMoveKey(ed, key, ctrl, shift) {
     if (key == "Left") {
         if (hadSel && !shift) { ed.cy = r[0]  ed.cx = r[1] }
         else if (ctrl) { edWordLeft(ed) }
-        else if (ed.cx > 0) { ed.cx = ed.cx - 1 }
+        else if (ed.cx > 0) {
+            ed.cx = ed.cx - 1
+            if (_isLowSur(ed.lines[ed.cy], ed.cx) && _isHighSur(ed.lines[ed.cy], ed.cx - 1)) { ed.cx = ed.cx - 1 }
+        }
         else if (ed.cy > 0) { ed.cy = ed.cy - 1  ed.cx = len(ed.lines[ed.cy]) }
     } else if (key == "Right") {
         if (hadSel && !shift) { ed.cy = r[2]  ed.cx = r[3] }
         else if (ctrl) { edWordRight(ed) }
-        else if (ed.cx < len(ed.lines[ed.cy])) { ed.cx = ed.cx + 1 }
+        else if (ed.cx < len(ed.lines[ed.cy])) {
+            ed.cx = ed.cx + 1
+            if (_isLowSur(ed.lines[ed.cy], ed.cx)) { ed.cx = ed.cx + 1 }
+        }
         else if (ed.cy < len(ed.lines) - 1) { ed.cy = ed.cy + 1  ed.cx = 0 }
     } else if (key == "Up" || key == "Down" || key == "PageUp" || key == "PageDown") {
         var step = 1
@@ -751,7 +785,7 @@ func edKey(ed, e) {
             return true
         }
         if (k == "Backspace") {
-            if (len(ed.findText) > 0) { ed.findText = substring(ed.findText, 0, len(ed.findText) - 1) }
+            if (len(ed.findText) > 0) { ed.findText = uiDropLast(ed.findText) }
             return true
         }
         if (e.ctrl && k == "v") {
@@ -794,6 +828,7 @@ func edKey(ed, e) {
                 edDeleteSel(ed)
             } else {
                 clipboardSet(ed.lines[ed.cy] + "\n")
+                ed.ay = -1
                 if (len(ed.lines) > 1) {
                     removeAt(ed.lines, ed.cy)
                     ed.cy = min(ed.cy, len(ed.lines) - 1)

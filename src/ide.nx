@@ -235,7 +235,8 @@ func openFile(path) {
         var ed = newEditor(text, path)
         ed.plain = fileKind(path) == "text"
         mapSet(app.editors, path, ed)
-        lintFile(path)
+        // при відновленні сесії - лише активний файл (не 15 перевірок разом)
+        if (!_restoring) { lintFile(path) }
     }
     app.current = path
     app.mode = "code"
@@ -1009,7 +1010,7 @@ func dialogKey(e) {
         return
     }
     if (d.action == "delete") { return }
-    if (e.key == "Backspace" && len(d.text) > 0) { d.text = substring(d.text, 0, len(d.text) - 1) }
+    if (e.key == "Backspace" && len(d.text) > 0) { d.text = uiDropLast(d.text) }
 }
 
 // ---------- палітра команд (Ctrl+Shift+P) і швидке відкриття (Ctrl+P) ----------
@@ -1103,7 +1104,7 @@ func paletteKey(e) {
         }
     }
     else if (k == "Backspace" && len(p.text) > 0) {
-        p.text = substring(p.text, 0, len(p.text) - 1)
+        p.text = uiDropLast(p.text)
         refreshPalette()
     }
 }
@@ -1816,7 +1817,7 @@ func entryKey(e) {
         app.entry = null
         app.focus = "editor"
     }
-    else if (e.key == "Backspace" && len(app.entry.text) > 0) { app.entry.text = substring(app.entry.text, 0, len(app.entry.text) - 1) }
+    else if (e.key == "Backspace" && len(app.entry.text) > 0) { app.entry.text = uiDropLast(app.entry.text) }
 }
 
 // Контекстне меню Провідника (права кнопка).
@@ -2174,6 +2175,21 @@ func extAction(id) {
     if (startsWith(id, "ext.open:")) {
         var e2 = _extById(substring(id, 9, len(id) - 9))
         if (e2 == null) { return }
+        // вбудоване - не правимо на місці (тека встановлення IDE): своя копія
+        // в «розширення» з тим самим id замінює вбудоване
+        if (e2.builtIn) {
+            var copyDir = userExtDir() + "/" + e2.id
+            if (!dirExists(copyDir)) {
+                if (!dirExists(userExtDir())) { makeDir(userExtDir()) }
+                makeDir(copyDir)
+                for f in listDir(e2.dir) {
+                    if (fileExists(e2.dir + "/" + f)) { copyFile(e2.dir + "/" + f, copyDir + "/" + f) }
+                }
+            }
+            reloadExtensions()
+            e2 = _extById(substring(id, 9, len(id) - 9))
+            setStatus("Відкрито свою копію розширення (вбудоване лишається недоторканим)")
+        }
         if (e2.lintScript != "" && fileExists(e2.dir + "/" + e2.lintScript)) { openPath(e2.dir + "/" + e2.lintScript) }
         openPath(e2.dir + "/extension.json")
         return
@@ -3083,7 +3099,7 @@ func onKey(e) {
     if (app.focus == "search") {
         if (k == "Escape") { app.focus = "editor" }
         else if (k == "Backspace" && len(app.searchText) > 0) {
-            app.searchText = substring(app.searchText, 0, len(app.searchText) - 1)
+            app.searchText = uiDropLast(app.searchText)
             runSearch()
         }
         else if (k == "Enter") { runSearch() }
@@ -3795,8 +3811,18 @@ func saveSession() {
     } catch (e) { }
 }
 
+var _restoring = false
+
 // true - сесію відновлено (хоч одна вкладка відкрилась).
 func restoreSession() {
+    _restoring = true
+    var ok = _restoreSession()
+    _restoring = false
+    if (ok && app.active != "") { lintFile(app.active) }
+    return ok
+}
+
+func _restoreSession() {
     var p = sessionPath()
     if (!fileExists(p)) { return false }
     try {

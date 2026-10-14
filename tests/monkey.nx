@@ -1,0 +1,137 @@
+// «Мавпа»: випадкові дії, яких ніхто не передбачав - кліки куди завгодно
+// (по кнопках і повз), права кнопка, перетягування, колесо, будь-які
+// клавіші й комбінації, друк (і кирилицею), зміна розміру вікна. IDE не
+// має впасти чи зависнути. Випадковість відтворювана (seed).
+//   NYX_IDE_NO_SHELL=1 NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/monkey.nx <тека> [seed] [кроків]
+import "helpers.nx"
+import "../src/ui.nx" { _regions }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app }
+
+var _seed = 1
+
+// Свій генератор (LCG) - щоб той самий seed давав ті самі дії.
+func rnd(n) {
+    _seed = (_seed * 1103515245 + 12345) % 2147483648
+    return toInt(_seed / 65536) % n
+}
+
+func pick(arr) { return arr[rnd(len(arr))] }
+
+var KEYS = ["Enter", "Backspace", "Delete", "Tab", "Escape", "Left", "Right", "Up", "Down", "Home", "End",
+            "PageUp", "PageDown", "F2", "F5", "F10", "F11", "F12", "a", "z", "y", "x", "c", "v", "s", "d", "f",
+            "p", "b", "j", "w", "n", "r", "/", "=", "-", "`", "\\", "ґ", "1", "Space"]
+var TEXTS = ["a", "Привіт", "ї", "{", "}", "(", "\"", "'", " ", "func", "var x = 1", "\n", "print(", "😀", "$" + "{", "\t", "ґЄ"]
+
+func mouse(type, x, y, button) {
+    var m = newMap()
+    mapSet(m, "type", type)
+    mapSet(m, "x", x) mapSet(m, "y", y) mapSet(m, "button", button)
+    mapSet(m, "shift", rnd(5) == 0) mapSet(m, "ctrl", rnd(8) == 0) mapSet(m, "alt", false)
+    surfacePostEvent(S, m)
+}
+
+// Точка: найчастіше - середина випадкової кнопки/області, інколи - будь-де.
+func target() {
+    var W = surfaceWidth(S)
+    var H = surfaceHeight(S)
+    var n = len(_regions) / 5
+    if (n > 0 && rnd(10) < 7) {
+        var k = rnd(n) * 5
+        return [_regions[k] + toInt(_regions[k + 2] / 2), _regions[k + 1] + toInt(_regions[k + 3] / 2), _regions[k + 4]]
+    }
+    return [rnd(max(1, W)), rnd(max(1, H)), "(будь-де)"]
+}
+
+func main() {
+    var a = scriptArgs()
+    var dir = a[0]
+    if (len(a) > 1) { _seed = toInt(a[1]) }
+    var steps = 1500
+    if (len(a) > 2) { steps = toInt(a[2]) }
+    if (osEnv("NYX_IDE_NO_SHELL") != "1") { throw "Запускай з NYX_IDE_NO_SHELL=1 - щоб випадковий текст не виконався в терміналі" }
+    var startSeed = _seed
+    presetConfig(pick(["beginner", "middle", "advanced"]), true, true, true)
+    ideInit(dir)
+    var log = []
+    var slow = 0
+    var i = 0
+    while (i < steps) {
+        var r = rnd(100)
+        var desc = ""
+        if (r < 35) {
+            var t = target()
+            var b = 1
+            if (rnd(8) == 0) { b = 3 }
+            if (rnd(15) == 0) { b = 2 }
+            mouse("mousedown", t[0], t[1], b)
+            mouse("mouseup", t[0], t[1], b)
+            desc = "клік " + toString(b) + " " + t[2]
+        } else if (r < 45) {
+            var t1 = target()
+            var t2 = target()
+            mouse("mousedown", t1[0], t1[1], 1)
+            var s = 1
+            while (s <= 4) {
+                mouse("mousemove", t1[0] + (t2[0] - t1[0]) * s / 4, t1[1] + (t2[1] - t1[1]) * s / 4, 1)
+                ideStep(0)
+                s = s + 1
+            }
+            mouse("mouseup", t2[0], t2[1], 1)
+            desc = "тягнути " + t1[2] + " -> " + t2[2]
+        } else if (r < 50) {
+            var tw = target()
+            var m = newMap()
+            mapSet(m, "type", "wheel")
+            mapSet(m, "x", tw[0]) mapSet(m, "y", tw[1]) mapSet(m, "dy", rnd(7) - 3) mapSet(m, "dx", rnd(3) - 1)
+            mapSet(m, "ctrl", rnd(6) == 0) mapSet(m, "shift", false)
+            surfacePostEvent(S, m)
+            desc = "колесо " + tw[2]
+        } else if (r < 75) {
+            var k = pick(KEYS)
+            var ctrl = rnd(3) == 0
+            var shift = rnd(4) == 0
+            key(k, ctrl, shift)
+            desc = "клавіша " + k
+            if (ctrl) { desc = desc + " +ctrl" }
+            if (shift) { desc = desc + " +shift" }
+        } else if (r < 97) {
+            var tx = pick(TEXTS)
+            if (tx == "😀") {
+                // справжня клавіатура шле емодзі одним символом, а не половинками
+                var te = newMap()
+                mapSet(te, "type", "text")
+                mapSet(te, "text", tx)
+                surfacePostEvent(S, te)
+            } else { typeText(tx) }
+            desc = "друк «" + tx + "»"
+        } else {
+            var w = 320 + rnd(1400)
+            var h = 240 + rnd(900)
+            var rs = newMap()
+            mapSet(rs, "type", "resize")
+            mapSet(rs, "width", w) mapSet(rs, "height", h)
+            surfacePostEvent(S, rs)
+            desc = "розмір " + toString(w) + "x" + toString(h)
+        }
+        append(log, toString(i) + ": " + desc)
+        if (len(log) > 25) { removeAt(log, 0) }
+        var t0 = timeMs()
+        try {
+            ideStep(0)
+        } catch (e) {
+            print("ПОМИЛКА на кроці " + toString(i) + " (seed " + toString(startSeed) + "): " + toString(e))
+            print("Останні дії:")
+            for l in log { print("  " + l) }
+            throw e
+        }
+        var dt = timeMs() - t0
+        if (dt > 3000) {
+            print("ЗАВИСАННЯ " + toString(dt) + " мс на кроці " + toString(i) + ": " + desc)
+            slow = slow + 1
+        }
+        i = i + 1
+    }
+    ideShutdown()
+    check(slow == 0, "без зависань")
+    print("МАВПА: УСЕ ГАРАЗД - " + toString(steps) + " випадкових дій (seed " + toString(startSeed) + "), IDE не впала")
+}

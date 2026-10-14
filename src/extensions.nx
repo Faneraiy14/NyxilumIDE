@@ -148,7 +148,7 @@ func extCreateTemplate(userDir, name) {
     var id = ""
     for c in toLower(trim(name)) {
         var code = charCode(c)
-        if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57) || (code >= 0x430 && code <= 0x45f)) { id = id + c }
+        if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57) || (code >= 0x430 && code <= 0x45f) || code == 0x491) { id = id + c }
         else if (c == " " || c == "-" || c == "_") { id = id + "-" }
     }
     if (id == "") { id = "моє-розширення" }

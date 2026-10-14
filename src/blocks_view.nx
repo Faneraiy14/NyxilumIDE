@@ -1236,7 +1236,7 @@ func blocksKey(ws, e) {
         var b = ws.edit
         var s = toString(b.args[ws.editIdx])
         if (e.key == "Backspace") {
-            if (len(s) > 0) { b.args[ws.editIdx] = substring(s, 0, len(s) - 1) }
+            if (len(s) > 0) { b.args[ws.editIdx] = uiDropLast(s) }
             ws.dirty = true
             return true
         }

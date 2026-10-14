@@ -286,7 +286,7 @@ func conSubmit(con) {
 func conKey(con, e) {
     if (e.key == "Enter") { conSubmit(con)  return true }
     if (e.key == "Backspace") {
-        if (len(con.input) > 0) { con.input = substring(con.input, 0, len(con.input) - 1) }
+        if (len(con.input) > 0) { con.input = uiDropLast(con.input) }
         return true
     }
     if (e.ctrl && e.key == "v") { con.input = con.input + replace(clipboardGet(), "\n", " ")  return true }
