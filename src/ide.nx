@@ -21,6 +21,7 @@ import "explain.nx"
 import "code_to_blocks.nx"
 import "symbols.nx"
 import "term.nx"
+import "extensions.nx"
 
 var TITLE_H = 36
 var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
@@ -98,6 +99,9 @@ struct App {
     splitRect: array
     renameGroup: any
     term: any
+    exts: array
+    lintJobs: array
+    extScroll: i32
 }
 
 var app = null
@@ -224,6 +228,7 @@ func openFile(path) {
         var ed = newEditor(text, path)
         ed.plain = fileKind(path) == "text"
         mapSet(app.editors, path, ed)
+        lintFile(path)
     }
     app.current = path
     app.mode = "code"
@@ -284,6 +289,7 @@ func saveEditor(ed) {
     if (ed == null || !ed.dirty) { return }
     writeFile(ed.path, edText(ed))
     ed.dirty = false
+    lintFile(ed.path)
 }
 
 func saveAll() {
@@ -827,7 +833,7 @@ func openDialog(title, text, action) {
         okLabel = "Видалити"
         suffix = ""
     }
-    if (action == "newblock") { suffix = "" }
+    if (action == "newblock" || action == "newext") { suffix = "" }
     if (action == "renamesym") {
         okLabel = "Перейменувати"
         suffix = ""
@@ -844,6 +850,13 @@ func closeDialog(ok) {
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
     if (ok && d.action == "delete") { deletePath(d.target) }
+    if (ok && d.action == "newext" && trim(d.text) != "") {
+        var edir = extCreateTemplate(userExtDir(), d.text)
+        reloadExtensions()
+        openPath(edir + "/extension.json")
+        openPath(edir + "/lint.nx")
+        setStatus("Розширення «" + trim(d.text) + "» створено - зміни lint.nx і збережи будь-який .nx")
+    }
     if (ok && d.action == "renamesym") { renameSymbol(d.target, trim(d.text)) }
     if (ok && d.action == "newblock") {
         var ws = currentBlocks()
@@ -943,6 +956,10 @@ func commandList() {
         ["stage.toggle", "Показати/сховати сцену", ""],
         ["quickopen", "Відкрити файл…", "Ctrl+P"]
     ]
+    for e in app.exts {
+        if (!e.enabled) { continue }
+        for c in e.commands { append(list, ["extcmd:" + e.id + ":" + c[0], e.name + ": " + c[1], ""]) }
+    }
     return list
 }
 
@@ -1077,6 +1094,7 @@ struct Settings {
     hints: bool
     offers: bool
     seen: array
+    extOff: array
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1094,9 +1112,11 @@ func loadSettings() {
         var m = fromJson(readFile(path))
         var seen = []
         if (mapHas(m, "seen")) { for x in mapGet(m, "seen") { append(seen, toString(x)) } }
+        var extOff = []
+        if (mapHas(m, "extOff")) { for x2 in mapGet(m, "extOff") { append(extOff, toString(x2)) } }
         return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
             lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
-            offers: mapGet(m, "offers") == true, seen: seen }
+            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff }
     } catch (e) { return null }
 }
 
@@ -1109,6 +1129,7 @@ func saveSettings() {
     mapSet(m, "hints", c.hints)
     mapSet(m, "offers", c.offers)
     mapSet(m, "seen", c.seen)
+    mapSet(m, "extOff", c.extOff)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1118,7 +1139,7 @@ func saveSettings() {
 
 func defaultSettings(level) {
     var adv = level == "advanced"
-    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [] }
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [] }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1128,9 +1149,14 @@ var LEVELS = [["beginner", "Новачок", "Ніколи не програму
 // Вибір рівня (перший запуск або в Налаштуваннях): виставляє налаштування.
 func applyLevel(level, firstRun) {
     var seen = []
-    if (app.cfg != null) { seen = app.cfg.seen }
+    var extOff = []
+    if (app.cfg != null) {
+        seen = app.cfg.seen
+        extOff = app.cfg.extOff
+    }
     app.cfg = defaultSettings(level)
     app.cfg.seen = seen
+    app.cfg.extOff = extOff
     app.askLevel = false
     saveSettings()
     if (!firstRun) { return }
@@ -1825,7 +1851,177 @@ func drawSearchView(x, y, w, h) {
 }
 
 func drawExtensionsView(x, y, w, h) {
-    surfaceText(S, "Розширення - незабаром.", x + 14, y + 8, 14, C_DIM)
+    // контейнер - до кнопок, інакше перекрив би їх
+    uiRegion("ext.panel", x, y, w, h)
+    var contentH = drawExtensions(app.exts, userExtDir(), x, y, w, h, app.extScroll)
+    app.extScroll = clamp(app.extScroll, 0, max(0, contentH - h + 20))
+}
+
+// ---------- розширення ----------
+
+// Свої розширення - поруч з налаштуваннями: ~/.nyx-ide/розширення.
+func userExtDir() {
+    var path = configPath()
+    var parts = split(replace(path, "\\", "/"), "/")
+    return substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1) + "/розширення"
+}
+
+func reloadExtensions() {
+    var off = []
+    if (app.cfg != null) { off = app.cfg.extOff }
+    app.exts = extLoadAll(joinPath(ideHome(), "extensions"), userExtDir(), off)
+}
+
+func _extById(id) {
+    for e in app.exts { if (e.id == id) { return e } }
+    return null
+}
+
+// Фонова перевірка файла розширеннями (після збереження й відкриття).
+func lintFile(path) {
+    if (path == "" || !fileExists(path)) { return }
+    for e in app.exts {
+        if (!extLints(e, path)) { continue }
+        // попередня перевірка цього ж файла цим розширенням - вже не потрібна
+        var k = len(app.lintJobs) - 1
+        while (k >= 0) {
+            var j = app.lintJobs[k]
+            if (j[0] == e && j[1] == path) {
+                try { procKill(j[2]) } catch (err) { }
+                removeAt(app.lintJobs, k)
+            }
+            k = k - 1
+        }
+        var opts = newMap()
+        mapSet(opts, "cwd", e.dir)
+        var env = newMap()
+        mapSet(env, "NX_EXIT_WITH_PARENT", "1")
+        mapSet(opts, "env", env)
+        try {
+            append(app.lintJobs, [e, path, procStart(nxPath(), [e.dir + "/" + e.lintScript, path], opts)])
+            e.status = "перевіряє " + fileName(path) + "…"
+            e.statusKind = "info"
+        } catch (err2) {
+            e.status = "не вдалося запустити: " + toString(err2)
+            e.statusKind = "err"
+        }
+    }
+}
+
+// Готові перевірки -> «ПРОБЛЕМИ». true - щось змінилось.
+func pollLint() {
+    var changed = false
+    var k = len(app.lintJobs) - 1
+    while (k >= 0) {
+        var j = app.lintJobs[k]
+        if (!procIsRunning(j[2])) {
+            removeAt(app.lintJobs, k)
+            var e = j[0]
+            var path = j[1]
+            var out = procOutput(j[2])
+            var res = extParseLint(out)
+            if (res[1] != "") {
+                // скрипт розширення впав - рядок з його помилкою
+                for l in split(procErrorOutput(j[2]) + "\n" + out, "\n") {
+                    if (contains(l, "Error") || contains(l, "помилка") || contains(l, "ПОМИЛКА")) {
+                        res = [[], "скрипт упав: " + replace(trim(l), "Runtime Error: ", "")]
+                        break
+                    }
+                }
+            }
+            setExtProblems(e.name, path, res[0])
+            if (res[1] != "") {
+                e.status = res[1]
+                e.statusKind = "err"
+            } else {
+                e.status = fileName(path) + ": " + toString(len(res[0])) + " знахідок"
+                e.statusKind = "ok"
+            }
+            changed = true
+        }
+        k = k - 1
+    }
+    return changed
+}
+
+// Замінити проблеми одного розширення для одного файла.
+func setExtProblems(source, path, found) {
+    var keep = []
+    for p in app.problems {
+        if (!(p[4] == source && p[0] == path)) { append(keep, p) }
+    }
+    for f in found {
+        var msg = f[2]
+        if (f[3] != "") { msg = msg + " [" + f[3] + "]" }
+        append(keep, [path, f[0], msg, f[1], source])
+    }
+    app.problems = keep
+    syncMarks()
+}
+
+// Позначки проблем на жолобі відкритих редакторів.
+func syncMarks() {
+    for p in mapKeys(app.editors) {
+        var marks = []
+        for pr in app.problems {
+            if (pr[0] == p && pr[1] >= 0) { append(marks, [pr[1], pr[3]]) }
+        }
+        mapGet(app.editors, p).marks = marks
+    }
+}
+
+func extAction(id) {
+    if (id == "ext.reload") {
+        reloadExtensions()
+        setStatus("Розширень: " + toString(len(app.exts)))
+        return
+    }
+    if (id == "ext.new") {
+        openDialog("Нове розширення: назва", "", "newext")
+        return
+    }
+    if (startsWith(id, "ext.toggle:")) {
+        var e = _extById(substring(id, 11, len(id) - 11))
+        if (e == null) { return }
+        e.enabled = !e.enabled
+        var off = []
+        for x in app.cfg.extOff { if (x != e.id) { append(off, x) } }
+        if (!e.enabled) {
+            append(off, e.id)
+            // його проблеми - геть
+            var keep = []
+            for p in app.problems { if (p[4] != e.name) { append(keep, p) } }
+            app.problems = keep
+            syncMarks()
+            e.status = ""
+        } else if (app.current != "") { lintFile(app.current) }
+        app.cfg.extOff = off
+        saveSettings()
+        return
+    }
+    if (startsWith(id, "ext.open:")) {
+        var e2 = _extById(substring(id, 9, len(id) - 9))
+        if (e2 == null) { return }
+        if (e2.lintScript != "" && fileExists(e2.dir + "/" + e2.lintScript)) { openPath(e2.dir + "/" + e2.lintScript) }
+        openPath(e2.dir + "/extension.json")
+        return
+    }
+    if (startsWith(id, "extcmd:")) {
+        var rest = substring(id, 7, len(id) - 7)
+        var sep = indexOf(rest, ":")
+        var e3 = _extById(substring(rest, 0, sep))
+        if (e3 == null) { return }
+        var cid = substring(rest, sep + 1, len(rest) - sep - 1)
+        for c in e3.commands {
+            if (c[0] == cid) {
+                app.panelOpen = true
+                app.panelTab = "terminal"
+                app.focus = "terminal"
+                if (app.term.running) { termStop(app.term) }
+                termExec(app.term, "nx \"" + e3.dir + "/" + c[2] + "\" \"" + app.dir + "\" \"" + app.active + "\"")
+            }
+        }
+    }
 }
 
 func drawTabs(x, y, w) {
@@ -2013,7 +2209,7 @@ func drawStatus(W, H) {
     x = x + 22 + surfaceText(S, toString(warns), x + 22, y + 5, 14, fg)
     uiRegion("status.problems", 0, y, x + 10, STATUS_H)
     if (app.status != "" && timeMs() - app.statusTime < 4000) {
-        surfaceText(S, uiFit(app.status, W - x - 420, 14), x + 24, y + 5, 14, fg)
+        surfaceText(S, uiFit(app.status, W - x - 480, 14), x + 24, y + 5, 14, fg)
     } else if (app.con.running && app.con.paused) {
         surfaceText(S, "Пауза: рядок " + toString(app.con.pauseLine + 1) + "   F10 крок · F11 всередину · F5 далі", x + 24, y + 5, 14, fg)
     } else if (app.con.running) {
@@ -2155,6 +2351,7 @@ func doAction(id) {
     else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
     else if (id == "codetoblocks") { codeToBlocksFile(app.current) }
     else if (id == "split.close") { app.split = "" }
+    else if (startsWith(id, "ext.") || startsWith(id, "extcmd:")) { extAction(id) }
     else if (id == "terminal") {
         app.panelOpen = true
         app.panelTab = "terminal"
@@ -2464,6 +2661,8 @@ func onWheel(e) {
         if (e.ctrl) { edZoom(ed, -e.dy) } else { edScroll(ed, e.dy * 3) }
     } else if (id == "console") {
         app.con.scroll = max(0, app.con.scroll - e.dy * 3)
+    } else if (startsWith(id, "ext.")) {
+        app.extScroll = max(0, app.extScroll + e.dy * 48)
     } else if (id == "term.area") {
         app.term.scroll = max(0, app.term.scroll - e.dy * 3)
     }
@@ -3182,7 +3381,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir) }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0 }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
@@ -3192,6 +3391,7 @@ func ideInit(dir) {
         app.cfg = defaultSettings("beginner")
         app.askLevel = true
     }
+    reloadExtensions()
     refreshFiles()
     // порожня тека - приклад першої програми
     if (len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {
@@ -3220,7 +3420,7 @@ func ideInit(dir) {
 // ВСІ, що назбирались, і лише потім один раз перемалювати.
 // false - вікно закрили.
 func ideStep(wait) {
-    if ((app.con.running || app.term.running) && (wait < 0 || wait > 40)) { wait = 40 }
+    if ((app.con.running || app.term.running || len(app.lintJobs) > 0) && (wait < 0 || wait > 40)) { wait = 40 }
     if (app.con.running && app.stageOpen && (wait < 0 || wait > 16)) { wait = 16 }
     if (app.demo != null && (wait < 0 || wait > 16)) { wait = 16 }
     var e = surfaceNextEvent(S, wait)
@@ -3236,6 +3436,7 @@ func ideStep(wait) {
         afterPoll()
     }
     if (app.term.running && termPoll(app.term)) { dirty = true }
+    if (len(app.lintJobs) > 0 && pollLint()) { dirty = true }
     // програма на сцені - кадр оновлюється безперервно; перший кадр -
     // перемалювати, щоб сцена відкрилась навіть без руху миші
     if (app.stageOpen && app.con.running) { dirty = true }

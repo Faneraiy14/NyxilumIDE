@@ -46,6 +46,7 @@ struct Editor {
     plain: bool
     breaks: array
     dbgLine: i32
+    marks: array
 }
 
 func newEditor(text, path) {
@@ -53,7 +54,7 @@ func newEditor(text, path) {
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
         x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
-        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1 }
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1, marks: [] }
     edSetText(ed, text)
     return ed
 }
@@ -956,6 +957,15 @@ func edDraw(ed, x, y, w, h, focused) {
         if (li == ed.errLine) {
             numColor = C_RED
             surfaceCircle(S, x + 8, ly + toInt(lh / 2) - 2, 4, C_RED)
+        }
+        // знахідки розширень (Anylint...) - кольорова смужка біля тексту
+        for mk in ed.marks {
+            if (mk[0] == li) {
+                var mc = C_YELLOW
+                if (mk[1] == "error") { mc = C_RED }
+                if (mk[1] == "info") { mc = C_ACCENT }
+                surfaceRect(S, x + ed.gutterW - 10, ly - 1, 3, lh - 2, mc)
+            }
         }
         // точка зупинки - червоне коло на жолобі; поточний рядок паузи - жовта стрілка
         if (indexOf(ed.breaks, li) >= 0) { surfaceCircle(S, x + 9, ly + toInt(lh / 2) - 1, 6, 0xe5484d) }

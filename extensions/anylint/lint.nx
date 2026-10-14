@@ -1,0 +1,33 @@
+// Anylint для Nx IDE: IDE запускає  nx lint.nx <файл>  після збереження,
+// а скрипт друкує знахідки JSON-масивом [{line, severity, message, rule}].
+import "anylint.nx"
+
+func main() {
+    var file = scriptArgs()[0]
+    var r = anylintRun([file, "--json"])
+    if (r[2] != "") {
+        var e = newMap()
+        mapSet(e, "error", r[2])
+        print(toJson(e))
+        return
+    }
+    var out = trim(r[1])
+    var at = indexOf(out, "{")
+    if (at < 0) {
+        var e2 = newMap()
+        mapSet(e2, "error", "Anylint нічого не відповів (код " + toString(r[0]) + ")")
+        print(toJson(e2))
+        return
+    }
+    var res = fromJson(substring(out, at, len(out) - at))
+    var found = []
+    for f in mapGet(res, "findings") {
+        var m = newMap()
+        mapSet(m, "line", mapGet(f, "line"))
+        mapSet(m, "severity", mapGet(f, "severity"))
+        mapSet(m, "message", mapGet(f, "message"))
+        mapSet(m, "rule", mapGet(f, "rule"))
+        append(found, m)
+    }
+    print(toJson(found))
+}

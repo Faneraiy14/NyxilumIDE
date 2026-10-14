@@ -1,0 +1,15 @@
+// Команда «Anylint: Перевірити весь проєкт» - у терміналі IDE:
+//   nx project.nx <тека проєкту> <поточний файл>
+import "anylint.nx"
+
+func main() {
+    var dir = scriptArgs()[0]
+    print("Anylint перевіряє " + dir + " ...")
+    var r = anylintRun([dir])
+    if (r[2] != "") {
+        print(r[2])
+        exit(1)
+    }
+    print(r[1])
+    if (r[0] == 0) { print("Знахідок нема - чисто!") }
+}

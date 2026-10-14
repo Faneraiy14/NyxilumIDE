@@ -1,0 +1,10 @@
+{
+    "id": "anylint",
+    "name": "Anylint",
+    "version": "1.0",
+    "description": "Статичний аналіз коду: порожні catch, мертвий код після return, TODO, секрети в коді... Перевіряє файл після кожного збереження. Потрібні php і Anylint (github.com/Faneraiy14/anylint); шлях - змінна ANYLINT_BIN, інакше шукає ~/Projects/anylint.",
+    "lint": { "files": [".nx", ".php", ".js", ".ts", ".py", ".cs", ".java", ".c", ".cpp", ".go", ".rs"], "script": "lint.nx" },
+    "commands": [
+        { "id": "project", "title": "Перевірити весь проєкт", "script": "project.nx" }
+    ]
+}

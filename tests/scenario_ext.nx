@@ -1,0 +1,115 @@
+// Розширення: заготовка свого розширення («+ Створити розширення»), його
+// перевірка файла -> «ПРОБЛЕМИ» і позначки на жолобі, вимкнення, команда в
+// терміналі, зламане розширення - зрозумілий статус; вбудований Anylint
+// (якщо php і Anylint є на цій машині).
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_ext.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, userExtDir, saveAll }
+
+func waitLint(ms) {
+    var t0 = timeMs()
+    ideStep(10)
+    while (timeMs() - t0 < ms && len(app.lintJobs) > 0) { ideStep(20) }
+    ideStep(10)
+}
+
+var gameFile = ""
+
+// Знахідки розширення source у файлі гри.
+func problemsFrom(source) {
+    var out = []
+    for p in app.problems { if (p[4] == source && (gameFile == "" || p[0] == gameFile)) { append(out, p) } }
+    return out
+}
+
+func extById(id) {
+    for e in app.exts { if (e.id == id) { return e } }
+    return null
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    ideInit(dir)
+    var al = extById("anylint")
+    check(al != null && al.builtIn && al.enabled, "вбудоване розширення Anylint завантажено")
+
+    doAction("act:ext")
+    draw()
+    check(uiFind("ext.toggle:anylint") != null, "панель «Розширення» показує Anylint")
+    clickId("ext.new")
+    check(app.dialog != null && app.dialog.action == "newext", "діалог нового розширення")
+    typeText("Мій лінтер")
+    key("Enter", false, false)
+    step()
+    var my = extById("мій-лінтер")
+    check(my != null && !my.builtIn && dirExists(userExtDir() + "/мій-лінтер"), "заготовку створено в теці своїх розширень")
+    check(endsWith(app.current, "мій-лінтер/lint.nx"), "відкрито lint.nx розширення")
+    shot("e01_ext_panel")
+
+    // файл з TODO і довгим рядком -> знахідки після відкриття
+    writeFile(dir + "/гра.nx", "func main() {\n    // TODO: додати рахунок\n    print(\"" + repeat("дуже ", 25) + "\")\n}\n")
+    gameFile = dir + "/гра.nx"
+    openPath(dir + "/гра.nx")
+    waitLint(20000)
+    var mine = problemsFrom("Мій лінтер")
+    check(len(mine) == 2 && mine[0][1] == 1 && contains(mine[0][2], "TODO") && mine[1][3] == "info", "знахідки свого розширення в «ПРОБЛЕМИ»")
+    var ed = currentEditor()
+    check(len(ed.marks) >= 2 && ed.marks[0][0] == 1, "позначки на жолобі редактора")
+    // виправили й зберегли - знахідка зникла
+    ed.lines[1] = "    // рахунок є"
+    ed.dirty = true
+    saveAll()
+    waitLint(20000)
+    check(len(problemsFrom("Мій лінтер")) == 1, "після збереження - перевірка заново")
+    app.panelTab = "problems"
+    draw()
+    shot("e02_problems")
+
+    // команда розширення - у терміналі
+    doAction("extcmd:мій-лінтер:hello")
+    var t0 = timeMs()
+    while (timeMs() - t0 < 15000 && app.term.running) { ideStep(20) }
+    ideStep(10)
+    var tt = ""
+    for l in app.term.lines { tt = tt + l[0] + "\n" }
+    check(contains(tt, "Привіт з розширення!") && app.panelTab == "terminal", "команда розширення працює в терміналі")
+
+    // вимкнути - знахідки зникають, налаштування пам'ятає
+    if (app.side != "ext") { doAction("act:ext") }
+    draw()
+    clickId("ext.toggle:мій-лінтер")
+    check(!my.enabled && len(problemsFrom("Мій лінтер")) == 0 && indexOf(app.cfg.extOff, "мій-лінтер") >= 0, "вимкнене розширення прибирає знахідки")
+
+    // зламане розширення: скрипт падає - статус з причиною, IDE працює
+    makeDir(userExtDir() + "/зламане")
+    writeFile(userExtDir() + "/зламане/extension.json", "{\"id\": \"зламане\", \"name\": \"Зламане\", \"lint\": {\"files\": [\".nx\"], \"script\": \"lint.nx\"}}")
+    writeFile(userExtDir() + "/зламане/lint.nx", "func main() {\n    throw \"ой, зламалось\"\n}\n")
+    if (app.side != "ext") { doAction("act:ext") }
+    clickId("ext.reload")
+    var br = extById("зламане")
+    check(br != null, "зламане розширення завантажено")
+    openPath(dir + "/гра.nx")
+    ed = currentEditor()
+    ed.dirty = true
+    saveAll()
+    waitLint(20000)
+    check(br.statusKind == "err" && contains(br.status, "ой, зламалось"), "статус зламаного розширення пояснює причину")
+
+    // Anylint - лише якщо є на цій машині
+    var hasAnylint = fileExists(osEnv("HOME") + "/Projects/anylint/bin/anylint") || (osEnv("ANYLINT_BIN") != null && osEnv("ANYLINT_BIN") != "")
+    if (hasAnylint) {
+        writeFile(dir + "/catch.nx", "func main() {\n    try {\n        print(1)\n    } catch (e) {\n    }\n}\n")
+        openPath(dir + "/catch.nx")
+        waitLint(60000)
+        gameFile = ""
+        var ap = problemsFrom("Anylint")
+        var found = false
+        for p in ap { if (p[0] == dir + "/catch.nx" && contains(p[2], "empty-catch")) { found = true } }
+        check(found, "Anylint знайшов порожній catch")
+    } else { print("ok - Anylint не встановлено - перевірку пропущено") }
+
+    ideShutdown()
+    print("РОЗШИРЕННЯ: УСЕ ГАРАЗД")
+}

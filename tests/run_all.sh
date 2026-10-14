@@ -32,4 +32,5 @@ run scenario_crash.nx "$TMP/p5" "$TMP/shots"
 run test_explain.nx
 run test_code_to_blocks.nx
 run scenario_terminal.nx "$TMP/p8" "$TMP/shots"
+run scenario_ext.nx "$TMP/p9" "$TMP/shots"
 exit $fail

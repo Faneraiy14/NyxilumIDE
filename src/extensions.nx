@@ -1,0 +1,246 @@
+// Розширення Nx IDE - пишуться тією ж мовою NyxilumLang.
+//
+// Розширення - тека з extension.json:
+//   {
+//     "id": "anylint", "name": "Anylint", "version": "1.0",
+//     "description": "Що робить",
+//     "lint": { "files": [".nx"], "script": "lint.nx" },
+//     "commands": [ { "id": "project", "title": "Перевірити проєкт", "script": "project.nx" } ]
+//   }
+// lint - перевірка файла: IDE після збереження чи відкриття запускає
+//   nx <тека>/lint.nx <файл>
+// у фоні, а скрипт друкує JSON-масив знахідок:
+//   [{"line": 3, "severity": "warning", "message": "...", "rule": "..."}]
+// (line - з 1; severity - "error" | "warning" | "info"), або
+//   {"error": "чому не вийшло перевірити"}.
+// Знахідки з'являються в «ПРОБЛЕМИ» і позначками на жолобі редактора.
+// commands - пункти палітри команд (Ctrl+Shift+P); скрипт запускається в
+// терміналі як  nx <скрипт> <тека проєкту> <поточний файл>.
+//
+// Вбудовані розширення лежать у <IDE>/extensions, свої - у теці
+// «розширення» поруч з налаштуваннями (~/.nyx-ide/розширення).
+
+import "theme.nx"
+import "ui.nx"
+
+struct Ext {
+    id: string
+    name: string
+    version: string
+    desc: string
+    dir: string
+    lintFiles: array
+    lintScript: string
+    commands: array
+    builtIn: bool
+    enabled: bool
+    status: string
+    statusKind: string
+}
+
+// Одне розширення з теки; null - нема чи зіпсований extension.json.
+func extLoad(dir, builtIn) {
+    var mf = dir + "/extension.json"
+    if (!fileExists(mf)) { return null }
+    try {
+        var m = fromJson(readFile(mf))
+        var id = toString(mapGet(m, "id"))
+        if (id == "" || id == "null") { return null }
+        var name = id
+        if (mapHas(m, "name")) { name = toString(mapGet(m, "name")) }
+        var version = ""
+        if (mapHas(m, "version")) { version = toString(mapGet(m, "version")) }
+        var desc = ""
+        if (mapHas(m, "description")) { desc = toString(mapGet(m, "description")) }
+        var files = []
+        var script = ""
+        if (mapHas(m, "lint")) {
+            var l = mapGet(m, "lint")
+            if (mapHas(l, "files")) { for f in mapGet(l, "files") { append(files, toString(f)) } }
+            if (mapHas(l, "script")) { script = toString(mapGet(l, "script")) }
+        }
+        var cmds = []
+        if (mapHas(m, "commands")) {
+            for c in mapGet(m, "commands") {
+                append(cmds, [toString(mapGet(c, "id")), toString(mapGet(c, "title")), toString(mapGet(c, "script"))])
+            }
+        }
+        return Ext { id: id, name: name, version: version, desc: desc, dir: dir, lintFiles: files, lintScript: script,
+            commands: cmds, builtIn: builtIn, enabled: true, status: "", statusKind: "" }
+    } catch (e) {
+        return null
+    }
+}
+
+// Усі розширення: вбудовані, потім свої (своє з тим самим id - замість вбудованого).
+func extLoadAll(builtInDir, userDir, disabled) {
+    var out = []
+    for pair in [[builtInDir, true], [userDir, false]] {
+        var base = pair[0]
+        if (base == "" || !dirExists(base)) { continue }
+        var names = []
+        try { names = sort(listDir(base)) } catch (e) { names = [] }
+        for n in names {
+            if (startsWith(n, ".")) { continue }
+            var x = extLoad(base + "/" + n, pair[1])
+            if (x == null) { continue }
+            x.enabled = indexOf(disabled, x.id) < 0
+            var k = 0
+            var replaced = false
+            while (k < len(out)) {
+                if (out[k].id == x.id) {
+                    out[k] = x
+                    replaced = true
+                }
+                k = k + 1
+            }
+            if (!replaced) { append(out, x) }
+        }
+    }
+    return out
+}
+
+// Чи перевіряє розширення цей файл.
+func extLints(x, path) {
+    if (!x.enabled || x.lintScript == "") { return false }
+    for f in x.lintFiles {
+        if (f == "*" || endsWith(path, f)) { return true }
+    }
+    return false
+}
+
+// Відповідь lint-скрипта -> [знахідки [рядок з 0, рівень, текст, правило], помилка].
+func extParseLint(out) {
+    var t = trim(out)
+    // скрипт міг щось надрукувати перед JSON - беремо від першої [ чи {
+    var a = indexOf(t, "[")
+    var o = indexOf(t, "{")
+    var start = a
+    if (start < 0 || (o >= 0 && o < start)) { start = o }
+    if (start < 0) { return [[], "скрипт не надрукував JSON"] }
+    try {
+        var v = fromJson(substring(t, start, len(t) - start))
+        if (typeOf(v) == "map") {
+            if (mapHas(v, "error")) { return [[], toString(mapGet(v, "error"))] }
+            return [[], "очікувався масив знахідок"]
+        }
+        var res = []
+        for f in v {
+            var line = -1
+            if (mapHas(f, "line")) { line = toInt(mapGet(f, "line")) - 1 }
+            var sev = "warning"
+            if (mapHas(f, "severity")) { sev = toString(mapGet(f, "severity")) }
+            if (sev != "error" && sev != "warning" && sev != "info") { sev = "warning" }
+            var msg = ""
+            if (mapHas(f, "message")) { msg = toString(mapGet(f, "message")) }
+            var rule = ""
+            if (mapHas(f, "rule") && mapGet(f, "rule") != null) { rule = toString(mapGet(f, "rule")) }
+            append(res, [line, sev, msg, rule])
+        }
+        return [res, ""]
+    } catch (e) {
+        return [[], "незрозумілий JSON: " + toString(e)]
+    }
+}
+
+// Нове розширення-заготовка: перевірка .nx (довгі рядки, TODO) і команда.
+func extCreateTemplate(userDir, name) {
+    var id = ""
+    for c in toLower(trim(name)) {
+        var code = charCode(c)
+        if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57) || (code >= 0x430 && code <= 0x45f)) { id = id + c }
+        else if (c == " " || c == "-" || c == "_") { id = id + "-" }
+    }
+    if (id == "") { id = "моє-розширення" }
+    if (!dirExists(userDir)) { makeDir(userDir) }
+    var dir = userDir + "/" + id
+    var n = 2
+    while (dirExists(dir)) {
+        dir = userDir + "/" + id + "-" + toString(n)
+        n = n + 1
+    }
+    makeDir(dir)
+    var m = newMap()
+    mapSet(m, "id", id)
+    mapSet(m, "name", trim(name))
+    mapSet(m, "version", "0.1")
+    mapSet(m, "description", "Моє розширення: перевіряє довгі рядки й TODO в коді.")
+    var lint = newMap()
+    mapSet(lint, "files", [".nx"])
+    mapSet(lint, "script", "lint.nx")
+    mapSet(m, "lint", lint)
+    var cmd = newMap()
+    mapSet(cmd, "id", "hello")
+    mapSet(cmd, "title", "Привітатись")
+    mapSet(cmd, "script", "hello.nx")
+    mapSet(m, "commands", [cmd])
+    writeFile(dir + "/extension.json", toJson(m))
+    writeFile(dir + "/lint.nx", "// Перевірка файла: IDE запускає  nx lint.nx <файл>  після збереження.\n// Надрукуй JSON-масив знахідок: line (з 1), severity (error/warning/info),\n// message, rule. Порожній масив [] - усе гаразд.\n\nfunc main() {\n    var path = scriptArgs()[0]\n    var lines = split(readFile(path), \"\\n\")\n    var found = []\n    // \"TO\" + \"DO\" - щоб розширення не знаходило саме себе\n    var позначка = \"TO\" + \"DO\"\n    var i = 0\n    while (i < len(lines)) {\n        var l = lines[i]\n        if (len(l) > 100) {\n            var msg = \"Довгий рядок (\" + toString(len(l)) + \" символів)\"\n            append(found, знахідка(i + 1, \"info\", msg, \"довгий-рядок\"))\n        }\n        if (contains(l, позначка)) {\n            append(found, знахідка(i + 1, \"info\", \"Тут лишилось \" + позначка, \"todo\"))\n        }\n        i = i + 1\n    }\n    print(toJson(found))\n}\n\nfunc знахідка(line, severity, message, rule) {\n    var f = newMap()\n    mapSet(f, \"line\", line)\n    mapSet(f, \"severity\", severity)\n    mapSet(f, \"message\", message)\n    mapSet(f, \"rule\", rule)\n    return f\n}\n")
+    writeFile(dir + "/hello.nx", "// Команда розширення: IDE запускає її в терміналі як\n//   nx hello.nx <тека проєкту> <поточний файл>\n\nfunc main() {\n    var a = scriptArgs()\n    print(\"Привіт з розширення!\")\n    if (len(a) > 0) { print(\"Проєкт: \" + a[0]) }\n    if (len(a) > 1) { print(\"Файл: \" + a[1]) }\n}\n")
+    return dir
+}
+
+// ---------- панель «Розширення» ----------
+
+func drawExtensions(exts, userDir, x, y, w, h, scroll) {
+    surfaceClip(S, x, y, w, h)
+    var cy = y + 8 - scroll
+    uiButton("ext.new", "+ Створити", x + 12, cy, w - 120, 32, "primary")
+    uiButton("ext.reload", "Оновити", x + w - 102, cy, 90, 32, "normal")
+    cy = cy + 44
+    if (len(exts) == 0) {
+        surfaceText(S, "Розширень ще нема.", x + 14, cy, 14, C_DIM)
+        cy = cy + 24
+    }
+    for e in exts {
+        var lines = []
+        var cur = ""
+        for word in split(e.desc, " ") {
+            var cand = word
+            if (cur != "") { cand = cur + " " + word }
+            if (textWidth(cand, 13) > w - 44 && cur != "") {
+                append(lines, cur)
+                cur = word
+            } else { cur = cand }
+        }
+        if (cur != "") { append(lines, cur) }
+        // картка компактна: опис - до 3 рядків
+        if (len(lines) > 3) {
+            lines = slice(lines, 0, 3)
+            lines[2] = uiFit(lines[2] + " …", w - 44, 13)
+        }
+        var ch = 78 + len(lines) * 17
+        if (e.status != "") { ch = ch + 18 }
+        surfaceRoundRect(S, x + 8, cy, w - 16, ch, 8, C_SURFACE)
+        var tw = surfaceText(S, uiFit(e.name, w - 120, 16), x + 20, cy + 10, 16, C_TEXT, true)
+        if (e.version != "") { surfaceText(S, e.version, x + 28 + tw, cy + 12, 12, C_DIM) }
+        var tag = "своє"
+        if (e.builtIn) { tag = "вбудоване" }
+        surfaceText(S, tag, x + w - 20 - textWidth(tag, 12), cy + 12, 12, C_DIM)
+        var ly = cy + 34
+        for l in lines {
+            surfaceText(S, l, x + 20, ly, 13, C_SUBTEXT)
+            ly = ly + 17
+        }
+        if (e.status != "") {
+            var sc = C_GREEN
+            if (e.statusKind == "err") { sc = C_RED }
+            if (e.statusKind == "info") { sc = C_DIM }
+            surfaceText(S, uiFit(e.status, w - 44, 13), x + 20, ly, 13, sc)
+            ly = ly + 18
+        }
+        if (!e.enabled) { surfaceText(S, "вимкнено", x + w - 20 - textWidth("вимкнено", 12), cy + 30, 12, C_YELLOW) }
+        var label = "Вимкнути"
+        if (!e.enabled) { label = "Увімкнути" }
+        uiButton("ext.toggle:" + e.id, label, x + 20, ly + 6, 110, 28, "normal")
+        uiButton("ext.open:" + e.id, "Відкрити", x + 138, ly + 6, 100, 28, "flat")
+        cy = cy + ch + 10
+    }
+    cy = cy + 6
+    for l in ["Свої розширення - у теці:", userDir] {
+        surfaceText(S, uiFit(l, w - 28, 12), x + 14, cy, 12, C_DIM)
+        cy = cy + 16
+    }
+    surfaceUnclip(S)
+    return cy + scroll - y
+}

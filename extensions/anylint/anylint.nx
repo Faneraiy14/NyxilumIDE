@@ -1,0 +1,41 @@
+// Спільне для скриптів розширення: де Anylint і як його запустити.
+
+// Шлях до bin/anylint: ANYLINT_BIN, потім звичні місця. "" - не знайдено.
+func anylintBin() {
+    var env = osEnv("ANYLINT_BIN")
+    if (env != null && env != "" && fileExists(env)) { return env }
+    var home = osEnv("HOME")
+    if (home == null || home == "") { home = osEnv("USERPROFILE") }
+    if (home == null) { home = "" }
+    for p in [home + "/Projects/anylint/bin/anylint", home + "/anylint/bin/anylint",
+              home + "/.config/composer/vendor/bin/anylint", home + "/.composer/vendor/bin/anylint"] {
+        if (fileExists(p)) { return p }
+    }
+    return ""
+}
+
+// php з ANYLINT_PHP або просто "php" з PATH.
+func anylintPhp() {
+    var p = osEnv("ANYLINT_PHP")
+    if (p != null && p != "") { return p }
+    return "php"
+}
+
+// Запустити Anylint з аргументами: [код виходу, stdout, помилка запуску].
+func anylintRun(args) {
+    var bin = anylintBin()
+    if (bin == "") { return [-1, "", "не знайдено Anylint - постав змінну ANYLINT_BIN=<шлях до bin/anylint>"] }
+    var opts = newMap()
+    var env = newMap()
+    // Anylint читає .nx через "nx ast" - той самий nx, що й IDE
+    mapSet(env, "NX_EXE", nxPath())
+    mapSet(opts, "env", env)
+    var all = [bin]
+    for a in args { append(all, a) }
+    try {
+        var r = procRun(anylintPhp(), all, opts)
+        return [toInt(r.exitCode), r.stdout, ""]
+    } catch (e) {
+        return [-1, "", "не вдалося запустити php (" + toString(e) + ") - встанови php або постав ANYLINT_PHP"]
+    }
+}
