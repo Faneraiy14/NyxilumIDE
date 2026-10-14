@@ -1,0 +1,79 @@
+// Код -> блоки: приклади (код з блоків) перетворюються назад у блоки й дають
+// той самий код; простий код, написаний руками, стає блоками; що блоками не
+// скласти - зрозуміла помилка з номером рядка.
+//   nx tests/test_code_to_blocks.nx
+import "../src/code_to_blocks.nx"
+import "../src/blocks_model.nx"
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+func firstDiff(a, b) {
+    var x = split(a, "\n")
+    var y = split(b, "\n")
+    var i = 0
+    while (i < len(x) && i < len(y)) {
+        if (x[i] != y[i]) { return "рядок " + toString(i + 1) + ":\n  було:  " + x[i] + "\n  стало: " + y[i] }
+        i = i + 1
+    }
+    return "різна довжина " + toString(len(x)) + " / " + toString(len(y))
+}
+
+// Вивід програми, якій у консоль ввели input.
+func runWithInput(path, input) {
+    var o = newMap()
+    mapSet(o, "interactive", true)
+    var h = procStart(nxPath(), [path], o)
+    procWrite(h, input)
+    procCloseInput(h)
+    procWait(h)
+    return procOutput(h) + procErrorOutput(h)
+}
+
+func main() {
+    var dir = scriptDir() + "/../examples/.gen"
+    for f in listDir(dir) {
+        if (!endsWith(f, ".nx")) { continue }
+        var name = substring(f, 0, len(f) - 3)
+        var code = readFile(dir + "/" + f)
+        var r = codeToBlocks(code)
+        if (r[1] != "") { throw "ПРОВАЛ: " + name + ": " + r[1] }
+        var again = generateCode(r[0], name)[0]
+        if (again != code) { print(firstDiff(code, again)) }
+        check(again == code, "«" + name + "»: код -> блоки -> той самий код")
+    }
+    // код, написаний руками
+    var hand = "// моя програма\nfunc привітати(хто, скільки) {\n    for k in 0..скільки {\n        print(\"Привіт, \" + хто)\n    }\n}\n\nfunc main() {\n    print(\"Як тебе звати?\")\n    var ім'я = readLine()\n    привітати(ім'я, 2)\n    var x = 5\n    x = x + 2\n    x = x - 1\n    var покупки = []\n    append(покупки, \"хліб\")\n    print(len(покупки))\n    for i in 0..3 {\n        print(x * 2 + 1)\n    }\n    if (x >= 6 && !(x == 7)) {\n        print(\"багато\")\n    } else {\n        print(\"мало\")\n    }\n    while (x > 3) {\n        x = x - 1\n    }\n    print(x)\n    sleep(100)\n}\n"
+    var rh = codeToBlocks(hand)
+    check(rh[1] == "", "ручний код перетворено: " + rh[1])
+    check(len(rh[0]) == 2 && startsWith(rh[0][1].spec, "def:привітати|хто|скільки"), "своя функція стала «Моїм блоком»")
+    var tmp = scriptDir() + "/../.nyx-test-cb"
+    if (!dirExists(tmp)) { makeDir(tmp) }
+    writeFile(tmp + "/hand.nx", hand)
+    writeFile(tmp + "/back.nx", generateCode(rh[0], "ручний")[0])
+    var o1 = runWithInput(tmp + "/hand.nx", "Сева\n")
+    var o2 = runWithInput(tmp + "/back.nx", "Сева\n")
+    print(o2)
+    check(contains(o1, "Привіт, Сева") && trim(o1) == trim(o2), "блоки з коду роблять те саме, що код")
+    deleteFile(tmp + "/hand.nx")
+    deleteFile(tmp + "/back.nx")
+    deleteDir(tmp)
+
+    // що блоками не скласти - помилка з номером рядка
+    var bad = [
+        ["func main() {\n    for x in [1, 2] {\n        print(x)\n    }\n}", "Рядок 2"],
+        ["func main() {\n    for i in 0..3 {\n        print(i)\n    }\n}", "лічильник"],
+        ["struct Кіт {\n    x: i32\n}\nfunc main() {\n}", "Рядок 1"],
+        ["func f() {\n    return 5\n}\nfunc main() {\n    f()\n}", "return"],
+        ["func головна() {\n}", "main"],
+        ["func main() {\n    var a = [1, 2]\n    print(a[0])\n}", "Рядок 2"]
+    ]
+    for bc in bad {
+        var rb = codeToBlocks(bc[0])
+        check(rb[1] != "" && contains(rb[1], bc[1]), "помилка: " + rb[1])
+    }
+
+    print("КОД -> БЛОКИ: УСЕ ГАРАЗД")
+}

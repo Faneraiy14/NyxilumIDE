@@ -3,7 +3,7 @@
 // палітра команд, історія версій.
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_code.nx <тека> <тека-для-png>
 import "helpers.nx"
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, doAction, draw }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, currentBlocks, doAction, draw, openPath, setMode }
 import "../src/editor.nx" { edText, edHasSel }
 
 func main() {
@@ -229,6 +229,27 @@ func main() {
     t2 = timeMs()
     while (timeMs() - t2 < 2000 && app.con.running) { ideStep(50) }
     check(!app.con.running && contains(toString(app.con.lines), "Зупинено"), "F5 / «Зупинити» зупинили програму")
+
+    // код -> блоки: проста програма відкривається блоками й працює так само
+    writeFile(dir + "/рахунок.nx", "func main() {\n    var n = 0\n    for i in 0..3 {\n        n = n + 2\n    }\n    print(\"Вийшло \" + toString(n))\n}\n")
+    openPath(dir + "/рахунок.nx")
+    doAction("codetoblocks")
+    step()
+    check(app.mode == "blocks" && endsWith(app.currentB, "рахунок (блоки).nxb"), "«Код: відкрити як блоки» - нова вкладка з блоками")
+    check(len(currentBlocks().stacks) == 1 && currentBlocks().stacks[0].next.spec == "repeat", "блоки зібрано з коду")
+    key("F5", false, false)
+    step()
+    var tb = timeMs()
+    while (timeMs() - tb < 8000 && (app.con.running || !contains(toString(app.con.lines), "Готово"))) { ideStep(30) }
+    check(contains(toString(app.con.lines), "Вийшло 6"), "програма з цих блоків працює")
+    shot("c09_code_to_blocks")
+    // що блоками не скласти - пояснення в консолі, режим не міняється
+    writeFile(dir + "/складна.nx", "struct Точка {\n    x: i32\n}\nfunc main() {\n}\n")
+    setMode("code")
+    openPath(dir + "/складна.nx")
+    doAction("codetoblocks")
+    step()
+    check(app.mode == "code" && contains(toString(app.con.lines), "Рядок 1: «struct» блоками не скласти"), "зрозуміла помилка, якщо блоками не скласти")
 
     ideShutdown()
     check(fileExists(dir + "/тест.nx"), "файл збережено на диск")

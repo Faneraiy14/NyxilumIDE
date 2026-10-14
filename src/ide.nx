@@ -18,6 +18,7 @@ import "guide.nx"
 import "history.nx"
 import "tour.nx"
 import "explain.nx"
+import "code_to_blocks.nx"
 
 var TITLE_H = 36
 var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
@@ -431,6 +432,41 @@ func syncDebugView() {
     }
 }
 
+// "Відкрити як блоки": проста програма кодом стає програмою з блоків
+// (code_to_blocks.nx). Чого блоками не скласти - пояснення в консолі.
+func codeToBlocksFile(path) {
+    if (path == "" || !endsWith(path, ".nx")) {
+        setStatus("Відкрий файл коду (.nx), щоб зробити з нього блоки")
+        return
+    }
+    var text = ""
+    if (mapHas(app.editors, path)) { text = edText(mapGet(app.editors, path)) } else { text = readFile(path) }
+    var r = codeToBlocks(text)
+    var n = fileName(path)
+    if (r[1] != "") {
+        app.panelOpen = true
+        app.panelTab = "console"
+        conAdd(app.con, "Не вийшло зробити блоки з " + n + " - " + r[1], "err")
+        conAdd(app.con, "Блоками стають прості програми: print, змінні, повторення, умови, малювання, свої функції.", "info")
+        setStatus("Цю програму блоками не скласти (подробиці - в консолі)")
+        return
+    }
+    var base = substring(n, 0, len(n) - 3)
+    if (endsWith(base, " (код)")) { base = substring(base, 0, len(base) - 6) }
+    base = base + " (блоки)"
+    var dir = parentDir(path)
+    var name = base + ".nxb"
+    var i = 2
+    while (fileExists(joinPath(dir, name))) {
+        name = base + " " + toString(i) + ".nxb"
+        i = i + 1
+    }
+    writeFile(joinPath(dir, name), stacksToJson(r[0]))
+    setMode("blocks")
+    openPath(joinPath(dir, name))
+    setStatus("Блоки з коду відкрито як " + name)
+}
+
 // "Відкрити як код": код з блоків стає звичайною програмою .nx.
 func blocksToCode() {
     var ws = currentBlocks()
@@ -660,6 +696,7 @@ func commandList() {
         ["zoomout", "Зменшити шрифт", "Ctrl+-"],
         ["btogglecode", "Блоки: показати/сховати код", ""],
         ["bopencode", "Блоки: відкрити як код", ""],
+        ["codetoblocks", "Код: відкрити як блоки", ""],
         ["con.clear", "Очистити консоль", ""],
         ["stage.toggle", "Показати/сховати сцену", ""],
         ["quickopen", "Відкрити файл…", "Ctrl+P"]
@@ -683,7 +720,7 @@ func refreshPalette() {
         }
     } else {
         for c in commandList() {
-            var hide = (!app.cfg.blocks && (c[0] == "newblocks" || startsWith(c[0], "b"))) || (!app.cfg.lessons && c[0] == "act:learn")
+            var hide = (!app.cfg.blocks && (c[0] == "newblocks" || c[0] == "codetoblocks" || startsWith(c[0], "b"))) || (!app.cfg.lessons && c[0] == "act:learn")
             if (!hide && (q == "" || contains(toLower(c[1]), q))) { append(items, c) }
         }
     }
@@ -1364,6 +1401,7 @@ func openCtx(path, x, y) {
         items = [["Новий файл", "newfile"], ["Нова тека", "newdir"], ["Перейменувати", "rename"], ["Видалити", "delete"], ["Копіювати шлях", "copypath"]]
     } else {
         items = [["Відкрити", "open"], ["Перейменувати", "rename"], ["Видалити", "delete"], ["Копіювати шлях", "copypath"]]
+        if (endsWith(path, ".nx") && app.cfg.blocks) { insert(items, 1, ["Відкрити як блоки", "toblocks"]) }
     }
     if (path != "") { app.exSel = path }
     app.ctx = Ctx { items: items, x: x, y: y, path: path }
@@ -1380,6 +1418,7 @@ func ctxAction(act) {
     else if (act == "rename") { startEntry("rename", parentDir(path), fileName(path), path) }
     else if (act == "delete") { askDelete(path) }
     else if (act == "open") { openPath(path) }
+    else if (act == "toblocks") { codeToBlocksFile(path) }
     else if (act == "copypath") {
         clipboardSet(path)
         setStatus("Шлях скопійовано")
@@ -1861,6 +1900,7 @@ func doAction(id) {
         if (ws != null && app.mode == "blocks") { ws.showCode = !ws.showCode }
     }
     else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
+    else if (id == "codetoblocks") { codeToBlocksFile(app.current) }
     else if (id == "bnewblock") { if (currentBlocks() != null) { openDialog("Новий блок", "", "newblock") } }
     else if (id == "bclear") {
         var ws2 = currentBlocks()

@@ -533,7 +533,10 @@ func _genChain(b, indent) {
         var sp = specOf(b.spec)
         if (sp.kind == "cmd") {
             // "збільшити на -1" -> "x = x - 1", а не "x + -1"
-            for part in split(replace(_fill(sp, b), " + -", " - "), "\n") { _emit(pad + part, b) }
+            for part in split(replace(_fill(sp, b), " + -", " - "), "\n") {
+                // «запитати» без питання - лише чекає відповідь
+                if (part != "printNoNewLine(\"\" + \" \")") { _emit(pad + part, b) }
+            }
         } else if (sp.kind == "c" || sp.kind == "c2") {
             _genId = _genId + 1
             var head = _fill(sp, b)
