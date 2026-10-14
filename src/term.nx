@@ -1,0 +1,265 @@
+// Термінал у нижній панелі (як у VS Code): команди системи в теці проєкту.
+//
+// Кожна команда - окремий процес оболонки (sh -c / cmd /c) з потоковим
+// виводом, як у консолі. "cd" і "clear" робить сам термінал (тека
+// пам'ятається між командами), "nx" - той самий nx, яким запущено IDE.
+// Поки команда працює, набраний рядок іде їй у stdin; Ctrl+C - зупинити.
+
+import "theme.nx"
+import "ui.nx"
+
+struct Terminal {
+    lines: array
+    proc: any
+    outLen: i32
+    errLen: i32
+    running: bool
+    cwd: string
+    root: string
+    input: string
+    history: array
+    histIdx: i32
+    scroll: i32
+    focused: bool
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+}
+
+func newTerminal(dir) {
+    return Terminal { lines: [], proc: null, outLen: 0, errLen: 0, running: false, cwd: dir, root: dir, input: "",
+        history: [], histIdx: -1, scroll: 0, focused: false, x: 0, y: 0, w: 0, h: 0 }
+}
+
+func termIsWindows() { return contains(toLower(osPlatform()), "windows") }
+
+// Рядок - [текст, вид]; вид: "out" | "err" | "cmd" | "info".
+func termAdd(t, text, kind) {
+    append(t.lines, [text, kind, true])
+    if (len(t.lines) > 3000) { removeAt(t.lines, 0) }
+}
+
+// Шматок виводу: дописується до останнього незавершеного рядка.
+func _termChunk(t, chunk, kind) {
+    chunk = replace(chunk, "\r", "")
+    var parts = split(chunk, "\n")
+    var k = 0
+    while (k < len(parts)) {
+        var p = parts[k]
+        var n = len(t.lines)
+        if (k == 0 && n > 0 && t.lines[n - 1][1] == kind && !t.lines[n - 1][2]) {
+            t.lines[n - 1][0] = t.lines[n - 1][0] + p
+        } else if (k < len(parts) - 1 || p != "") {
+            append(t.lines, [p, kind, false])
+        }
+        // рядок завершено, якщо за ним був перехід
+        if (k < len(parts) - 1 && len(t.lines) > 0) { t.lines[len(t.lines) - 1] = [t.lines[len(t.lines) - 1][0], kind, true] }
+        k = k + 1
+    }
+    if (len(t.lines) > 3000) { removeAt(t.lines, 0) }
+}
+
+// Підказка рядка: скорочена тека.
+func termPrompt(t) {
+    var home = osEnv("HOME")
+    if (home == null || home == "") { home = osEnv("USERPROFILE") }
+    var p = t.cwd
+    // у теці проєкту - коротко: "проєкт/ігри"
+    if (p == t.root || startsWith(p, t.root + "/")) {
+        var rp = split(replace(t.root, "\\", "/"), "/")
+        p = rp[len(rp) - 1] + substring(p, len(t.root), len(p) - len(t.root))
+    }
+    else if (home != null && home != "" && startsWith(p, home)) { p = "~" + substring(p, len(home), len(p) - len(home)) }
+    if (termIsWindows()) { return p + ">" }
+    return p + " $"
+}
+
+// Тека після "cd арг" або "" - нема такої.
+func _termCd(t, arg) {
+    var a = trim(arg)
+    if (len(a) >= 2 && startsWith(a, "\"") && endsWith(a, "\"")) { a = substring(a, 1, len(a) - 2) }
+    var home = osEnv("HOME")
+    if (home == null || home == "") { home = osEnv("USERPROFILE") }
+    if (a == "" || a == "~") { return home }
+    if (startsWith(a, "~/")) { a = home + substring(a, 1, len(a) - 1) }
+    var path = a
+    var isAbs = startsWith(a, "/") || (len(a) > 1 && a[1] == ":")
+    if (!isAbs) { path = t.cwd + "/" + a }
+    // ".." і "." - самі
+    var parts = []
+    for seg in split(replace(path, "\\", "/"), "/") {
+        if (seg == "" || seg == ".") { continue }
+        if (seg == "..") {
+            if (len(parts) > 0) { removeAt(parts, len(parts) - 1) }
+            continue
+        }
+        append(parts, seg)
+    }
+    var res = join(parts, "/")
+    if (!(len(res) > 1 && res[1] == ":")) { res = "/" + res }
+    if (!dirExists(res)) { return "" }
+    return res
+}
+
+// Виконати рядок команди.
+func termExec(t, line) {
+    var cmd = trim(line)
+    termAdd(t, termPrompt(t) + " " + cmd, "cmd")
+    if (cmd == "") { return }
+    if (len(t.history) == 0 || t.history[len(t.history) - 1] != cmd) { append(t.history, cmd) }
+    t.histIdx = -1
+    t.scroll = 0
+    if (cmd == "clear" || cmd == "cls") {
+        t.lines = []
+        return
+    }
+    if (cmd == "cd" || startsWith(cmd, "cd ")) {
+        var nd = _termCd(t, substring(cmd, 2, len(cmd) - 2))
+        if (nd == "") { termAdd(t, "Нема такої теки: " + trim(substring(cmd, 2, len(cmd) - 2)), "err") }
+        else { t.cwd = nd }
+        return
+    }
+    // "nx ..." - той самий nx, що й IDE (на Windows його може не бути в PATH)
+    if (cmd == "nx" || startsWith(cmd, "nx ")) { cmd = "\"" + nxPath() + "\"" + substring(cmd, 2, len(cmd) - 2) }
+    var opts = newMap()
+    mapSet(opts, "interactive", true)
+    mapSet(opts, "cwd", t.cwd)
+    try {
+        if (termIsWindows()) { t.proc = procStart("cmd.exe", ["/c", cmd], opts) }
+        else { t.proc = procStart("/bin/sh", ["-c", cmd], opts) }
+        t.running = true
+        t.outLen = 0
+        t.errLen = 0
+    } catch (e) {
+        termAdd(t, "Не вдалося запустити: " + toString(e), "err")
+    }
+}
+
+func termStop(t) {
+    if (!t.running) { return }
+    procKill(t.proc)
+    // спершу "не працює" - тоді termPoll не друкує код виходу вбитого процесу
+    t.running = false
+    termPoll(t)
+    termAdd(t, "^C", "info")
+}
+
+// Забрати новий вивід. true - щось змінилось.
+func termPoll(t) {
+    if (t.proc == null) { return false }
+    var changed = false
+    var out = procOutput(t.proc)
+    if (len(out) > t.outLen) {
+        _termChunk(t, substring(out, t.outLen, len(out) - t.outLen), "out")
+        t.outLen = len(out)
+        changed = true
+    }
+    var err = procErrorOutput(t.proc)
+    if (len(err) > t.errLen) {
+        _termChunk(t, substring(err, t.errLen, len(err) - t.errLen), "err")
+        t.errLen = len(err)
+        changed = true
+    }
+    if (t.running && !procIsRunning(t.proc)) {
+        sleep(20)
+        out = procOutput(t.proc)
+        if (len(out) > t.outLen) { _termChunk(t, substring(out, t.outLen, len(out) - t.outLen), "out")  t.outLen = len(out) }
+        err = procErrorOutput(t.proc)
+        if (len(err) > t.errLen) { _termChunk(t, substring(err, t.errLen, len(err) - t.errLen), "err")  t.errLen = len(err) }
+        t.running = false
+        var code = procExitCode(t.proc)
+        if (code != 0) { termAdd(t, "(код виходу " + toString(code) + ")", "info") }
+        changed = true
+    }
+    if (changed) { t.scroll = 0 }
+    return changed
+}
+
+func termKey(t, e) {
+    var k = e.key
+    if (e.ctrl && k == "c") {
+        if (t.running) { termStop(t) }
+        else {
+            termAdd(t, termPrompt(t) + " " + t.input + "^C", "cmd")
+            t.input = ""
+        }
+        return true
+    }
+    if (e.ctrl && k == "l") {
+        t.lines = []
+        return true
+    }
+    if (e.ctrl && k == "v") {
+        t.input = t.input + replace(clipboardGet(), "\n", " ")
+        return true
+    }
+    if (k == "Enter") {
+        if (t.running) {
+            termAdd(t, t.input, "in")
+            procWrite(t.proc, t.input + "\n")
+        } else { termExec(t, t.input) }
+        t.input = ""
+        return true
+    }
+    if (k == "Backspace") {
+        if (len(t.input) > 0) { t.input = substring(t.input, 0, len(t.input) - 1) }
+        return true
+    }
+    if ((k == "Up" || k == "Down") && !t.running && len(t.history) > 0) {
+        if (k == "Up") {
+            if (t.histIdx < 0) { t.histIdx = len(t.history) - 1 } else { t.histIdx = max(0, t.histIdx - 1) }
+            t.input = t.history[t.histIdx]
+        } else if (t.histIdx >= 0) {
+            t.histIdx = t.histIdx + 1
+            if (t.histIdx >= len(t.history)) {
+                t.histIdx = -1
+                t.input = ""
+            } else { t.input = t.history[t.histIdx] }
+        }
+        return true
+    }
+    return false
+}
+
+func termDraw(t, x, y, w, h) {
+    t.x = x
+    t.y = y
+    t.w = w
+    t.h = h
+    surfaceRect(S, x, y, w, h, C_BG)
+    uiRegion("term.area", x, y, w, h)
+    var lh = 18
+    var top = y + 6
+    // останній рядок - підказка з тим, що набрано
+    var rows = max(1, toInt((h - 12) / lh))
+    var total = len(t.lines) + 1
+    t.scroll = clamp(t.scroll, 0, max(0, total - rows))
+    var first = max(0, total - rows - t.scroll)
+    surfaceClip(S, x, y, w, h)
+    var i = first
+    var row = 0
+    while (i < total && row < rows) {
+        var ty = top + row * lh
+        if (i == len(t.lines)) {
+            var pre = ""
+            var pcol = C_GREEN
+            if (!t.running) { pre = termPrompt(t) + " " }
+            else { pcol = C_YELLOW }
+            var pw = surfaceText(S, pre, x + 10, ty, 16, pcol)
+            var iw = surfaceText(S, t.input, x + 10 + pw, ty, 16, C_TEXT)
+            if (t.focused) { surfaceRect(S, x + 11 + pw + iw, ty, 2, 18, C_ACCENT) }
+        } else {
+            var item = t.lines[i]
+            var col = C_TEXT
+            if (item[1] == "err") { col = C_RED }
+            if (item[1] == "cmd") { col = C_GREEN }
+            if (item[1] == "info") { col = C_DIM }
+            if (item[1] == "in") { col = C_YELLOW }
+            surfaceText(S, item[0], x + 10, ty, 16, col)
+        }
+        i = i + 1
+        row = row + 1
+    }
+    surfaceUnclip(S)
+}

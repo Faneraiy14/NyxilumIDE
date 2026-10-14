@@ -1,0 +1,77 @@
+// Термінал у нижній панелі: команди в теці проєкту, cd, nx (той самий, що
+// й IDE), введення в запущену команду, Ctrl+C, історія ↑.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_terminal.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw }
+
+func termText() {
+    var parts = []
+    for l in app.term.lines { append(parts, l[0]) }
+    return join(parts, "\n")
+}
+
+// Набрати команду, Enter і чекати, поки вона завершиться.
+func run(cmd, ms) {
+    typeText(cmd)
+    key("Enter", false, false)
+    var t0 = timeMs()
+    ideStep(10)
+    while (timeMs() - t0 < ms && app.term.running) { ideStep(20) }
+    ideStep(10)
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    makeDir(dir + "/ігри")
+    writeFile(dir + "/ігри/рахунок.nx", "func main() {\n    print(\"рахунок: \" + toString(2 + 3))\n}\n")
+    writeFile(dir + "/ігри/ім'я.nx", "func main() {\n    var n = readLine()\n    print(\"Привіт, \" + n)\n}\n")
+    ideInit(dir)
+    key("`", true, false)
+    step()
+    check(app.panelOpen && app.panelTab == "terminal" && app.focus == "terminal", "Ctrl+` відкриває термінал")
+
+    run("echo привіт з терміналу", 5000)
+    check(contains(termText(), "привіт з терміналу"), "команда системи працює")
+    run("cd ігри", 2000)
+    check(endsWith(app.term.cwd, "/ігри"), "cd змінює теку")
+    run("nx рахунок.nx", 15000)
+    check(contains(termText(), "рахунок: 5"), "nx запускає програму")
+    // програма питає - рядок іде їй
+    typeText("nx \"ім'я.nx\"")
+    key("Enter", false, false)
+    var t0 = timeMs()
+    while (timeMs() - t0 < 3000) { ideStep(20) }
+    typeText("Сева")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 15000 && app.term.running) { ideStep(20) }
+    ideStep(10)
+    check(contains(termText(), "Привіт, Сева"), "введення йде запущеній програмі")
+    run("cd ..", 2000)
+    check(app.term.cwd == dir, "cd .. повертає назад")
+    run("cd нема-такої", 2000)
+    check(contains(termText(), "Нема такої теки"), "cd у неіснуючу теку - зрозуміла помилка")
+    run("ls нема-такого-файла", 5000)
+    check(contains(termText(), "код виходу"), "помилка команди - код виходу")
+    // Ctrl+C зупиняє довгу команду
+    typeText("sleep 30")
+    key("Enter", false, false)
+    ideStep(50)
+    check(app.term.running, "довга команда працює")
+    key("c", true, false)
+    ideStep(10)
+    check(!app.term.running && contains(termText(), "^C"), "Ctrl+C зупинив команду")
+    // ↑ - попередня команда
+    key("Up", false, false)
+    step()
+    check(app.term.input == "sleep 30", "↑ - попередня команда")
+    key("Escape", false, false)
+    step()
+    check(app.focus == "editor", "Escape - назад у редактор")
+    draw()
+    shot("t01_terminal")
+    ideShutdown()
+    print("ТЕРМІНАЛ: УСЕ ГАРАЗД")
+}
