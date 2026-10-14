@@ -152,11 +152,15 @@ func refreshFiles() {
     app.files = out
 }
 
-// Усі файли поточного виду в корені теки (для уроків і "першого файла").
+// Усі файли цього виду в корені теки (для уроків і "першого файла").
+// Напряму з диска: Провідник може ховати .nxb (вимкнений режим блоків).
 func filesOfKind(kind) {
     var res = []
-    for f in app.files {
-        if (!f[3] && fileKind(f[0]) == kind) { append(res, f[0]) }
+    var names = []
+    try { names = sort(listDir(app.dir)) } catch (e) { return res }
+    for n in names {
+        var p = joinPath(app.dir, n)
+        if (!startsWith(n, ".") && fileKind(p) == kind && fileExists(p)) { append(res, p) }
     }
     return res
 }
@@ -754,6 +758,8 @@ func offerInfo(key) {
 func offerOnce(key) {
     if (app.cfg == null || !app.cfg.offers || app.tour >= 0 || app.demo != null) { return }
     if (indexOf(app.cfg.seen, key) >= 0) { return }
+    // пропозиції-уроки - лише коли уроки ввімкнено
+    if (!app.cfg.lessons && (key == "blocks" || key == "code")) { return }
     app.offer = key
 }
 
@@ -1757,11 +1763,28 @@ func startTour(firstRun) {
     app.side = "files"
     app.offer = null
     app.demo = null
-    if (app.mode != "blocks" || app.active == "") { setMode("blocks") }
+    // з вимкненими блоками екскурсія - у режимі коду (кроки про блоки пропускаються)
+    if (app.cfg.blocks) {
+        if (app.mode != "blocks" || app.active == "") { setMode("blocks") }
+    } else if (app.mode != "code" || app.active == "") { setMode("code") }
     tourGo(0)
 }
 
+// Крок екскурсії, недоречний з поточними налаштуваннями (блоки/уроки вимкнено).
+func tourSkip(step) {
+    var ids = TOUR[step][0]
+    for id in ids {
+        if (!app.cfg.blocks && (startsWith(id, "bcat") || id == "bpalette" || id == "bworkspace")) { return true }
+        if (!app.cfg.lessons && id == "act:learn") { return true }
+    }
+    return false
+}
+
 func tourGo(step) {
+    if (step < 0) { return }
+    var dir = 1
+    if (app.tour >= 0 && step < app.tour) { dir = -1 }
+    while (step >= 0 && step < len(TOUR) && tourSkip(step)) { step = step + dir }
     if (step < 0) { return }
     if (step >= len(TOUR)) {
         endTour()
@@ -1776,7 +1799,7 @@ func tourGo(step) {
 func endTour() {
     app.tour = -1
     app.demo = null
-    app.side = "learn"
+    if (app.cfg.lessons) { app.side = "learn" } else { app.side = "files" }
     if (app.tourFirstRun) {
         app.guideTab = "lessons"
         openLesson(0)

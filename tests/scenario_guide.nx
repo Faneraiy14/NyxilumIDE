@@ -3,7 +3,7 @@
 // приклади; рівень "середній" - пропозиція гайду з "Не треба"; налаштування.
 // NYX_IDE_CONFIG=<новий файл> NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
 import "helpers.nx"
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind, offerOnce }
 import "../src/guide.nx" { LESSONS }
 import "../src/blocks_model.nx" { generateCode }
 
@@ -125,6 +125,25 @@ func main() {
     clickId("set.blocks")
     check(app.cfg.blocks, "перемикач повертає блоки")
     shot("s03_advanced")
+
+    // знайдено живцем: просунутий (блоки вимкнено) + "Показати" екскурсію -> падіння
+    clickId("set.blocks")
+    check(!app.cfg.blocks, "блоки знову вимкнено")
+    app.cfg.seen = []
+    app.cfg.offers = true
+    offerOnce("tour")
+    check(app.offer == "tour", "пропозиція екскурсії")
+    clickId("offer.yes")
+    check(app.tour >= 0 && app.mode == "code", "екскурсія без блоків - у режимі коду")
+    var guard = 0
+    while (app.tour >= 0 && guard < 40) {
+        var t1 = timeMs()
+        while (app.demo != null && timeMs() - t1 < 8000) { ideStep(16) }
+        doAction("t.next")
+        guard = guard + 1
+    }
+    check(app.tour == -1 && guard <= 12, "екскурсію пройдено без кроків про блоки (" + toString(guard) + " кроків)")
+    check(app.side == "files", "після екскурсії без уроків - Провідник")
 
     ideShutdown()
     check(contains(readFile(dir + "/.nyx/уроки.json"), "Повторення"), "прогрес уроків збережено")
