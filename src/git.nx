@@ -287,6 +287,8 @@ func drawGit(g, x, y, w, h) {
 }
 
 func _drawDiff(d, scroll, x, y, w, h) {
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
     var cw = textWidth("M", 14)
     var lh = 17
     var cy = y
@@ -314,6 +316,7 @@ func _drawDiff(d, scroll, x, y, w, h) {
         row = row + 1
     }
     if (len(d) == 0) { surfaceText(S, "Без змін.", x + 14, y, 14, C_DIM) }
+    surfaceFont(prevFont)
 }
 
 // Лише змінені рядки з 2 рядками контексту (у великому файлі зміна не губиться).

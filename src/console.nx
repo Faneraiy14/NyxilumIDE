@@ -303,6 +303,8 @@ func conDraw(con, x, y, w, h) {
     uiRegion("con.area", x, y, w, h)
     var bw = uiButtonW("Очистити")
     uiButton("con.clear", "Очистити", x + w - bw - 8, y + 2, bw, 24, "flat")
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
 
     var inputH = 0
     if (con.running) { inputH = 34 }
@@ -345,4 +347,5 @@ func conDraw(con, x, y, w, h) {
         }
         uiRegion("con.input", x + 8, iy, w - 16, inputH - 4)
     }
+    surfaceFont(prevFont)
 }

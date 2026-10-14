@@ -863,6 +863,9 @@ func _warmTokens(ed, upTo) {
 }
 
 func edDraw(ed, x, y, w, h, focused) {
+    // код - моноширинним (якщо не вибрано піксельний шрифт)
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
     ed.x = x
     ed.y = y
     ed.w = w
@@ -1058,4 +1061,5 @@ func edDraw(ed, x, y, w, h, focused) {
             i = i + 1
         }
     }
+    surfaceFont(prevFont)
 }

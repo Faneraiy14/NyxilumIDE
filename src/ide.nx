@@ -1189,6 +1189,8 @@ struct Settings {
     offers: bool
     seen: array
     extOff: array
+    pixelFont: bool
+    uiScale: i32
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1197,6 +1199,11 @@ func configPath() {
     var p = osEnv("NYX_IDE_CONFIG")
     if (p != null && p != "") { return p }
     return joinPath(joinPath(homeDir(), ".nyx-ide"), "налаштування.json")
+}
+
+func _scaleOf(m) {
+    if (!mapHas(m, "uiScale")) { return 100 }
+    return clamp(toInt(mapGet(m, "uiScale")), 50, 300)
 }
 
 func loadSettings() {
@@ -1210,7 +1217,7 @@ func loadSettings() {
         if (mapHas(m, "extOff")) { for x2 in mapGet(m, "extOff") { append(extOff, toString(x2)) } }
         return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
             lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
-            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff }
+            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m) }
     } catch (e) { return null }
 }
 
@@ -1224,6 +1231,8 @@ func saveSettings() {
     mapSet(m, "offers", c.offers)
     mapSet(m, "seen", c.seen)
     mapSet(m, "extOff", c.extOff)
+    mapSet(m, "pixelFont", c.pixelFont)
+    mapSet(m, "uiScale", c.uiScale)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1233,7 +1242,7 @@ func saveSettings() {
 
 func defaultSettings(level) {
     var adv = level == "advanced"
-    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [] }
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100 }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1244,13 +1253,19 @@ var LEVELS = [["beginner", "Новачок", "Ніколи не програму
 func applyLevel(level, firstRun) {
     var seen = []
     var extOff = []
+    var pixelFont = false
+    var uiScale = 100
     if (app.cfg != null) {
         seen = app.cfg.seen
         extOff = app.cfg.extOff
+        pixelFont = app.cfg.pixelFont
+        uiScale = app.cfg.uiScale
     }
     app.cfg = defaultSettings(level)
     app.cfg.seen = seen
     app.cfg.extOff = extOff
+    app.cfg.pixelFont = pixelFont
+    app.cfg.uiScale = uiScale
     app.askLevel = false
     saveSettings()
     if (!firstRun) { return }
@@ -1427,6 +1442,20 @@ func drawSettingsView(x, y, w, h) {
     _toggle("set.hints", "Підказки до помилок", c.hints, x + 6, cy, w - 12)
     cy = cy + 34
     _toggle("set.offers", "Пропонувати гайд", c.offers, x + 6, cy, w - 12)
+    cy = cy + 34
+    _toggle("set.pixelfont", "Піксельний шрифт", c.pixelFont, x + 6, cy, w - 12)
+    cy = cy + 40
+    surfaceText(S, "Масштаб інтерфейсу", x + 14, cy, 14, C_SUBTEXT, true)
+    cy = cy + 22
+    var scales = [100, 125, 150, 175, 200]
+    var sw = toInt((w - 28) / len(scales))
+    var si = 0
+    while (si < len(scales)) {
+        var sk = "normal"
+        if (c.uiScale == scales[si]) { sk = "primary" }
+        uiButton("set.scale:" + toString(scales[si]), toString(scales[si]) + "%", x + 14 + si * sw, cy, sw - 4, 28, sk)
+        si = si + 1
+    }
     cy = cy + 46
     uiButton("set.resetoffers", "Показувати пропозиції знову", x + 14, cy, w - 28, 30, "flat")
     cy = cy + 40
@@ -1452,6 +1481,11 @@ func settingsAction(id) {
     }
     if (id == "set.hints") { c.hints = !c.hints }
     if (id == "set.offers") { c.offers = !c.offers }
+    if (id == "set.pixelfont") { c.pixelFont = !c.pixelFont }
+    if (startsWith(id, "set.scale:")) {
+        c.uiScale = toInt(substring(id, 10, len(id) - 10))
+        surfaceScale(c.uiScale / 100)
+    }
     if (id == "set.resetoffers") {
         c.seen = []
         c.offers = true
@@ -2353,11 +2387,18 @@ func drawStatus(W, H) {
     }
 }
 
+// Шрифт інтерфейсу й шрифт коду (налаштування «Піксельний шрифт»).
+func uiFontSans() {
+    if (app.cfg != null && app.cfg.pixelFont) { surfaceFont("pixel") } else { surfaceFont("sans") }
+}
+
 func draw() {
     var W = surfaceWidth(S)
     var H = surfaceHeight(S)
     uiBegin()
     app.tooltip = ""
+    // шрифт інтерфейсу: згладжений Noto Sans (код - Noto Sans Mono, див. edDraw)
+    uiFontSans()
     surfaceClear(S, C_BG)
     drawTitleBar(W)
     var bodyY = TITLE_H
@@ -3515,6 +3556,7 @@ func ideInit(dir) {
         app.askLevel = true
     }
     reloadExtensions()
+    surfaceScale(app.cfg.uiScale / 100)
     refreshFiles()
     // порожня тека - приклад першої програми
     if (len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {

@@ -609,6 +609,9 @@ func drawCodePanel(ws, x, y, w, h, title) {
     var first = indexOf(lines, "func main() {")
     if (first < 0) { first = 0 }
     surfaceClip(S, x, y + 44, w, h - 44)
+    // код - моноширинним (стовпці токенів)
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
     var ly = y + 50
     var cw = textWidth("M", 14)
     var i = first
@@ -626,6 +629,7 @@ func drawCodePanel(ws, x, y, w, h, title) {
         i = i + 1
     }
     surfaceUnclip(S)
+    surfaceFont(prevFont)
 }
 
 // ---------- усе разом ----------

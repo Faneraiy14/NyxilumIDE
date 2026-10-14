@@ -113,6 +113,13 @@ func main() {
     clickId("act:settings")
     check(app.side == "settings", "налаштування відкрито")
     shot("s01_settings")
+    // масштаб інтерфейсу: 150% - логічне вікно менше, все більше
+    clickId("set.scale:150")
+    check(app.cfg.uiScale == 150 && surfaceWidth(S) == 853, "масштаб 150%")
+    draw()
+    shot("s01b_scale150")
+    clickId("set.scale:100")
+    check(app.cfg.uiScale == 100 && surfaceWidth(S) == 1280, "масштаб назад 100%")
     clickId("set.level:middle")
     check(app.cfg.level == "middle" && app.cfg.blocks && app.cfg.lessons, "середній: блоки й уроки ввімкнено")
     clickId("act:history")

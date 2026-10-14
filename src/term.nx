@@ -223,6 +223,8 @@ func termKey(t, e) {
 }
 
 func termDraw(t, x, y, w, h) {
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
     t.x = x
     t.y = y
     t.w = w
@@ -262,4 +264,5 @@ func termDraw(t, x, y, w, h) {
         row = row + 1
     }
     surfaceUnclip(S)
+    surfaceFont(prevFont)
 }

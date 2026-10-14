@@ -27,7 +27,7 @@ var BUILTIN_NAMES = [
     "surfaceClose", "surfaceGetPixel", "surfaceHeight", "surfaceIsOpen", "surfaceKeyDown",
     "surfaceLine", "surfaceMouseDown", "surfaceMouseX", "surfaceMouseY", "surfaceNextEvent",
     "surfaceOpen", "surfacePolygon", "surfacePostEvent", "surfacePresent", "surfaceRect",
-    "surfaceRectLine", "surfaceRoundRect", "surfaceSave", "surfaceText", "surfaceTitle",
+    "surfaceRectLine", "surfaceRoundRect", "surfaceSave", "surfaceFont", "surfaceScale", "surfaceText", "surfaceTitle",
     "surfaceUnclip", "surfaceWidth", "tan", "tcpClose", "tcpConnect", "tcpReceive", "tcpSend",
     "tcpStartTls", "textHeight", "textWidth", "timeMs", "timestamp", "toDouble", "toFixed", "toInt",
     "toJson", "toLower", "toString", "toUpper", "today", "trim", "typeOf", "unique", "urlStatus",
