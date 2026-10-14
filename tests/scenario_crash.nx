@@ -1,0 +1,43 @@
+// Запобіжник: помилка всередині IDE не закриває її, робота зберігається,
+// помилка - у журналі; лавина помилок - акуратне закриття.
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, app, currentEditor, recoverFromError, errorLogPath, draw }
+import "../src/editor.nx" { edText }
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("middle", false, true, true)
+    ideInit(dir)
+    step()
+    var ed = currentEditor()
+    typeText("// незбережена зміна\n")
+    step()
+    check(ed.dirty, "є незбережена зміна")
+
+    // ламаємо стан так, що наступний кадр упаде
+    var saved = app.con
+    app.con = null
+    var crashed = false
+    try { draw() } catch (e) {
+        crashed = true
+        check(recoverFromError(e), "після однієї помилки IDE працює далі")
+    }
+    check(crashed, "кадр справді впав")
+    app.con = saved
+    draw()
+    check(!ed.dirty && contains(readFile(ed.path), "незбережена зміна"), "роботу збережено на диск")
+    check(contains(app.status, "Внутрішня помилка IDE"), "користувач бачить повідомлення")
+    check(fileExists(errorLogPath()) && contains(readFile(errorLogPath()), "running"), "помилку записано в журнал")
+    shot("crash_recovered")
+
+    // лавина помилок -> акуратно закритись
+    var k = 0
+    var keepGoing = true
+    while (k < 25) {
+        keepGoing = recoverFromError("тестова помилка")
+        k = k + 1
+    }
+    check(!keepGoing, "понад 20 помилок за 5 с - закриватись")
+    print("ЗАПОБІЖНИК: УСЕ ГАРАЗД")
+}

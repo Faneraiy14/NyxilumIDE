@@ -210,6 +210,26 @@ func main() {
     step()
     check(len(app.tabs) == before - 1, "Ctrl+W закрив вкладку")
 
+    // нескінченний цикл: "Зупинити" (F5 під час роботи) справді зупиняє
+    clickId("ex.newfile")
+    typeText("вічний")
+    key("Enter", false, false)
+    step()
+    ed = currentEditor()
+    key("a", true, false)
+    key("Delete", false, false)
+    typeText("func main() {\nvar i = 0\nwhile (true) {\ni = i + 1\n")
+    key("F5", false, false)
+    step()
+    var t2 = timeMs()
+    while (timeMs() - t2 < 800) { ideStep(50) }
+    check(app.con.running, "нескінченна програма працює")
+    key("F5", false, false)
+    step()
+    t2 = timeMs()
+    while (timeMs() - t2 < 2000 && app.con.running) { ideStep(50) }
+    check(!app.con.running && contains(toString(app.con.lines), "Зупинено"), "F5 / «Зупинити» зупинили програму")
+
     ideShutdown()
     check(fileExists(dir + "/тест.nx"), "файл збережено на диск")
     print("СЦЕНАРІЙ ПРОЙДЕНО")

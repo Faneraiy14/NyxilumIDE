@@ -77,6 +77,7 @@ struct App {
     tooltip: string
     probRun: i32
     exSel: string
+    lastAutosave: i32
     entry: any
     ctx: any
     cfg: any
@@ -2560,7 +2561,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
@@ -2617,8 +2618,53 @@ func ideStep(wait) {
         dirty = true
     }
     if (app.status != "" && timeMs() - app.statusTime > 4000 && timeMs() - app.statusTime < 4100) { dirty = true }
+    // автозбереження раз на 30 с (як Auto Save у VS Code)
+    if (timeMs() - app.lastAutosave > 30000) {
+        app.lastAutosave = timeMs()
+        saveAll()
+    }
     if (dirty) { draw() }
     return surfaceIsOpen(S)
+}
+
+// ---------- запобіжник: помилка в самій IDE не закриває вікно ----------
+
+var _errTimes = []
+
+// Журнал - поруч з налаштуваннями (у тестах - поруч з NYX_IDE_CONFIG).
+func errorLogPath() { return joinPath(parentDir(configPath()), "помилки.log") }
+
+// Помилка всередині IDE: записати в журнал, зберегти роботу, скинути
+// тимчасовий стан (меню, показ, перетягування), повідомити. true - можна
+// працювати далі; false - помилки сиплються безперервно, краще закритись.
+func recoverFromError(err) {
+    var msg = toString(err)
+    try {
+        var dir = parentDir(errorLogPath())
+        if (!dirExists(dir)) { makeDir(dir) }
+        appendFile(errorLogPath(), formatDate(timestamp(), "yyyy-MM-dd HH:mm:ss") + "  " + msg + "\n")
+    } catch (e1) { }
+    try { saveAll() } catch (e2) { }
+    app.demo = null
+    app.drag = ""
+    app.palette = null
+    app.ctx = null
+    app.entry = null
+    app.dialog = null
+    app.focus = "editor"
+    uiPressedId = ""
+    var ws = currentBlocks()
+    if (ws != null) {
+        ws.drag = null
+        ws.pending = null
+        ws.panning = false
+        ws.menu = []
+    }
+    setStatus("Внутрішня помилка IDE - роботу збережено, можна працювати далі. Деталі: " + errorLogPath())
+    var now = timeMs()
+    append(_errTimes, now)
+    while (len(_errTimes) > 0 && now - _errTimes[0] > 5000) { removeAt(_errTimes, 0) }
+    return len(_errTimes) <= 20
 }
 
 func ideShutdown() {
@@ -2631,6 +2677,14 @@ func main() {
     var dir = joinPath(homeDir(), "NyxПрограми")
     if (len(args) > 0) { dir = args[0] }
     ideInit(dir)
-    while (ideStep(-1)) { }
-    ideShutdown()
+    var running = true
+    while (running) {
+        try {
+            running = ideStep(-1)
+        } catch (err) {
+            running = recoverFromError(err)
+            try { draw() } catch (err2) { }
+        }
+    }
+    try { ideShutdown() } catch (err3) { saveAll() }
 }
