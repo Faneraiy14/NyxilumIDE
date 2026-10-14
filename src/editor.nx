@@ -42,6 +42,7 @@ struct Editor {
     acSel: i32
     findOpen: bool
     findText: string
+    plain: bool
 }
 
 func newEditor(text, path) {
@@ -49,7 +50,7 @@ func newEditor(text, path) {
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
         x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
-        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "" }
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false }
     edSetText(ed, text)
     return ed
 }
@@ -775,7 +776,7 @@ func edTextInput(ed, t) {
     edBeginEdit(ed, "type")
     edType(ed, t)
     edEnsureVisible(ed)
-    if (isIdentPart(charCode(t))) { edUpdateCompletion(ed) } else { ed.acOpen = false }
+    if (!ed.plain && isIdentPart(charCode(t))) { edUpdateCompletion(ed) } else { ed.acOpen = false }
 }
 
 var ZOOM_SIZES = [12, 14, 16, 20, 24, 28, 32]
@@ -801,7 +802,9 @@ func _warmTokens(ed, upTo) {
         var inState = false
         if (i > 0) { inState = ed.hlOut[i - 1] }
         if (ed.hlSrc[i] != ed.lines[i] || ed.hlIn[i] != inState) {
-            var r = hlLine(ed.lines[i], inState)
+            // звичайний текст (.md, .txt, ...) - без підсвітки синтаксису
+            var r = [[0, len(ed.lines[i]), HL_TEXT], false]
+            if (!ed.plain) { r = hlLine(ed.lines[i], inState) }
             ed.hlSrc[i] = ed.lines[i]
             ed.hlIn[i] = inState
             ed.hlTok[i] = r[0]

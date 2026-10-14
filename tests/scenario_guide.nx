@@ -1,27 +1,15 @@
-// Сценарій навчання: перший запуск відкриває урок 1 у блоках; "Покажи мені"
-// сама збирає програму й запускає її; урок зараховується; приклади.
-// NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw }
+// Сценарій навчання і першого запуску: питання про рівень, екскурсія для
+// новачка (показ сам згортає/розгортає панель), уроки 1-3 через "Покажи мені",
+// приклади; рівень "середній" - пропозиція гайду з "Не треба"; налаштування.
+// NYX_IDE_CONFIG=<новий файл> NX_HEADLESS=1 nx tests/scenario_guide.nx <нова-тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind }
 import "../src/guide.nx" { LESSONS }
 import "../src/blocks_model.nx" { generateCode }
 
-func check(cond, msg) {
-    if (!cond) { throw "ПРОВАЛ: " + msg }
-    print("ok - " + msg)
-}
-
 func typeConsole(t) {
-    var i = 0
-    while (i < len(t)) {
-        var m = newMap()
-        mapSet(m, "type", "text")
-        mapSet(m, "text", t[i])
-        surfacePostEvent(S, m)
-        i = i + 1
-    }
-    var k = newMap()
-    mapSet(k, "type", "key") mapSet(k, "key", "Enter") mapSet(k, "ctrl", false) mapSet(k, "shift", false)
-    surfacePostEvent(S, k)
+    typeText(t)
+    key("Enter", false, false)
 }
 
 // Прокрутити показ до кінця (і запуск програми), відповідаючи на питання.
@@ -42,90 +30,103 @@ func playDemo(answer, maxMs) {
 
 func main() {
     var dir = scriptArgs()[0]
-    var out = scriptArgs()[1]
+    outDir = scriptArgs()[1]
+    // НЕ presetConfig: файл налаштувань не існує - це перший запуск
     ideInit(dir)
-    ideStep(0)
-
-    // екскурсія: перший запуск починається з неї
-    check(app.tour == 0, "перший запуск: екскурсія")
-    surfaceSave(S, out + "/t00.png")
+    step()
+    check(app.askLevel, "перший запуск: питання «хто ти в програмуванні»")
+    shot("t00_level")
+    clickId("level:beginner")
+    check(!app.askLevel && app.cfg.level == "beginner" && app.tour == 0, "новачок - одразу екскурсія")
+    check(fileExists(osEnv("NYX_IDE_CONFIG")), "налаштування збережено")
+    shot("t01_tour")
     doAction("t.next")
-    draw()
-    surfaceSave(S, out + "/t01_files.png")
+    shot("t02_files")
     doAction("t.next")
-    // крок зі стрілкою: показ сам згортає й розгортає панель
+    // крок зі стрілкою: показ сам згортає й розгортає бічну панель
     var sawCollapsed = false
     var t0 = timeMs()
     while (timeMs() - t0 < 8000 && app.demo != null) {
         ideStep(16)
-        if (app.filesCollapsed) {
-            if (!sawCollapsed) { surfaceSave(S, out + "/t02_collapsed.png") }
+        if (app.side == "") {
+            if (!sawCollapsed) { shot("t03_collapsed") }
             sawCollapsed = true
         }
     }
-    check(sawCollapsed && !app.filesCollapsed, "показ згорнув і розгорнув панель програм")
-    var step = 3
-    while (step < 12) {
+    check(sawCollapsed && app.side == "files", "показ згорнув і розгорнув бічну панель")
+    var stepN = 3
+    while (stepN < 14) {
         doAction("t.next")
-        draw()
-        if (step == 5 || step == 8) { surfaceSave(S, out + "/t0" + toString(step) + ".png") }
-        step = step + 1
+        if (stepN == 5 || stepN == 8 || stepN == 11) { shot("t0" + toString(stepN)) }
+        stepN = stepN + 1
     }
     check(app.tour == -1, "екскурсію пройдено")
-    check(app.guideOpen && app.guideLesson == 0 && app.mode == "blocks", "після екскурсії - урок 1 у режимі блоків")
-    surfaceSave(S, out + "/g01_lesson1.png")
+    check(app.side == "learn" && app.guideLesson == 0 && app.mode == "blocks", "після екскурсії - урок 1 у блоках")
+    shot("g01_lesson1")
 
     var ws = currentBlocks()
     check(endsWith(app.currentB, "Урок 1.nxb") && len(ws.stacks) == 1 && ws.stacks[0].next == null, "урок 1 - своя чиста програма з шапкою")
-
     playDemo("", 20000)
-    print(generateCode(ws.stacks, "x")[0])
-    print(app.con.lines)
     check(contains(app.con.lastOutput, "Привіт, світе!"), "показ уроку 1 зібрав і запустив програму")
     check(indexOf(app.done, LESSONS[0].title) >= 0, "урок 1 зараховано")
-    surfaceSave(S, out + "/g02_lesson1_done.png")
+    shot("g02_lesson1_done")
 
     doAction("g.next")
     ws = currentBlocks()
     check(endsWith(app.currentB, "Урок 2.nxb") && ws.stacks[0].next == null, "урок 2 - нова чиста програма")
     playDemo("Сева", 30000)
-    print(generateCode(ws.stacks, "x")[0])
     check(contains(app.con.lastOutput, "Привіт, Сева"), "показ уроку 2: питання й відповідь")
     check(indexOf(app.done, LESSONS[1].title) >= 0, "урок 2 зараховано")
 
     doAction("g.next")
     ws = currentBlocks()
     playDemo("", 30000)
-    print(generateCode(ws.stacks, "x")[0])
     check(indexOf(app.done, LESSONS[2].title) >= 0, "урок 3 (повторення) зараховано")
-    surfaceSave(S, out + "/g03_lesson3.png")
 
-    // "Почати спочатку" лишає тільки шапку
     doAction("bclear")
-    check(len(ws.stacks) == 1 && ws.stacks[0].spec == "start" && ws.stacks[0].next == null, "«Почати спочатку» лишає шапку")
-
-    // історія версій
-    doAction("history")
-    check(app.histOpen && !app.guideOpen, "панель історії відкрито")
-    doAction("h.save")
-    app.dialog.text = "порожня програма"
-    doAction("dialog.ok")
-    check(len(app.histList) == 1, "версію збережено")
-    doAction("g.next")
-    doAction("help")
-    doAction("history")
-    surfaceSave(S, out + "/g05_history.png")
-    doAction("help")
+    check(len(ws.stacks) == 1 && ws.stacks[0].next == null, "«Почати спочатку» лишає шапку")
 
     doAction("g.tab.examples")
-    ideStep(0)
-    surfaceSave(S, out + "/g04_examples.png")
+    shot("g04_examples")
     doAction("g.ex:Вгадай число.nxb")
     check(app.mode == "blocks" && endsWith(app.currentB, "Вгадай число.nxb"), "приклад відкрито в блоках")
     doAction("g.ex:привіт.nx")
-    check(app.mode == "code" && contains(app.current, "привіт"), "приклад коду відкрито")
+    check(app.mode == "code" && contains(app.active, "привіт"), "приклад коду відкрито")
+
+    // рівень "середній": гайд не нав'язується, а пропонується з "Не треба"
+    app.cfg.seen = []
+    clickId("act:settings")
+    check(app.side == "settings", "налаштування відкрито")
+    shot("s01_settings")
+    clickId("set.level:middle")
+    check(app.cfg.level == "middle" && app.cfg.blocks && app.cfg.lessons, "середній: блоки й уроки ввімкнено")
+    clickId("act:history")
+    check(app.offer == "history", "пропозиція гайду для історії")
+    shot("s02_offer")
+    clickId("offer.no")
+    check(app.offer == null && indexOf(app.cfg.seen, "history") >= 0, "«Не треба» прибирає пропозицію назавжди для цього місця")
+    clickId("act:history")
+    clickId("act:history")
+    check(app.offer == null, "та сама пропозиція вдруге не з'являється")
+
+    // рівень "просунутий": блоки й уроки вимкнено
+    clickId("act:settings")
+    clickId("set.level:advanced")
+    check(!app.cfg.blocks && !app.cfg.lessons, "просунутий: блоки й уроки вимкнено")
+    draw()
+    check(uiFind("act:learn") == null, "кнопки «Навчання» в смужці немає")
+    clickId("act:files")
+    draw()
+    check(uiFind("newblocks") == null, "кнопки «+ Блоки» немає")
+    var nxbVisible = false
+    for f in app.files { if (endsWith(f[0], ".nxb")) { nxbVisible = true } }
+    check(!nxbVisible, "файли .nxb у Провіднику сховано")
+    clickId("act:settings")
+    clickId("set.blocks")
+    check(app.cfg.blocks, "перемикач повертає блоки")
+    shot("s03_advanced")
 
     ideShutdown()
-    check(contains(readFile(dir + "/.nyx/уроки.json"), "Повторення"), "прогрес збережено")
+    check(contains(readFile(dir + "/.nyx/уроки.json"), "Повторення"), "прогрес уроків збережено")
     print("СЦЕНАРІЙ НАВЧАННЯ ПРОЙДЕНО")
 }

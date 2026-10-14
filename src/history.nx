@@ -161,14 +161,10 @@ var HISTORY_W = 440
 // scroll - прокрутка порівняння (рядків).
 // counts[i] - [+, -] версії i проти попередньої; diff - готове порівняння
 // вибраної версії з поточним станом (рахує ide.nx і кешує).
-func drawHistory(file, list, counts, sel, diff, scroll, x, y, h) {
-    var w = HISTORY_W
+func drawHistory(file, list, counts, sel, diff, scroll, x, y, w, h) {
     surfaceRect(S, x, y, w, h, C_PANEL)
-    surfaceRect(S, x, y, 1, h, C_PEACH)
-    surfaceText(S, "Історія версій", x + 16, y + 12, 18, C_TEXT, true)
-    uiButton("h.close", "×", x + w - 44, y + 6, 36, 30, "flat")
-    surfaceClip(S, x, y + 40, w, h - 40)
-    var cy = y + 46
+    surfaceClip(S, x, y, w, h)
+    var cy = y + 8
 
     if (sel < 0) {
         uiButton("h.save", "+ Зберегти версію", x + 14, cy, 200, 34, "primary")
@@ -189,10 +185,10 @@ func drawHistory(file, list, counts, sel, diff, scroll, x, y, h) {
             var bg = C_SURFACE
             if (hover) { bg = C_SURFACE2 }
             surfaceRoundRect(S, x + 10, cy, w - 20, 56, 8, bg)
-            surfaceText(S, uiFit(v[1], w - 150, 16), x + 22, cy + 8, 16, C_TEXT, true)
+            surfaceText(S, uiFit(v[1], w - 120, 16), x + 22, cy + 8, 16, C_TEXT, true)
             surfaceText(S, formatDate(v[0], "dd.MM.yyyy HH:mm"), x + 22, cy + 32, 14, C_DIM)
-            surfaceText(S, "+" + toString(cnt[0]), x + w - 110, cy + 18, 16, C_GREEN)
-            surfaceText(S, "-" + toString(cnt[1]), x + w - 60, cy + 18, 16, C_RED)
+            surfaceText(S, "+" + toString(cnt[0]), x + w - 90, cy + 18, 14, C_GREEN)
+            surfaceText(S, "-" + toString(cnt[1]), x + w - 46, cy + 18, 14, C_RED)
             uiRegion("h.sel:" + toString(i), x + 10, cy, w - 20, 56)
             cy = cy + 62
             i = i - 1
@@ -241,7 +237,7 @@ func drawHistory(file, list, counts, sel, diff, scroll, x, y, h) {
         row = row + 1
     }
     surfaceUnclip(S)
-    uiRegion("h.diff", x, y + 40, w, h - 40)
+    uiRegion("h.diff", x, y, w, h)
 }
 
 func wrapLines(text, maxW, size) {

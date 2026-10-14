@@ -190,16 +190,14 @@ func wrapText(text, maxW, size) {
 var GUIDE_W = 400
 
 // state: [вкладка ("lessons"/"examples"), відкритий урок (-1 - список), done (масив назв), ctx]
-func drawGuide(tab, open, done, ctx, x, y, h) {
-    var w = GUIDE_W
+func drawGuide(tab, open, done, ctx, x, y, w, h) {
     surfaceRect(S, x, y, w, h, C_PANEL)
-    surfaceRect(S, x, y, 1, h, C_ACCENT)
     var lk = "tab"
     var ek = "tab"
     if (tab == "lessons") { lk = "tabOn" } else { ek = "tabOn" }
-    uiButton("g.tab.lessons", "Уроки", x + 1, y, 130, 40, lk)
-    uiButton("g.tab.examples", "Приклади", x + 131, y, 130, 40, ek)
-    uiButton("g.close", "×", x + w - 44, y + 4, 36, 32, "flat")
+    var tbw = toInt((w - 2) / 2)
+    uiButton("g.tab.lessons", "Уроки", x + 1, y, tbw, 40, lk)
+    uiButton("g.tab.examples", "Приклади", x + 1 + tbw, y, tbw, 40, ek)
     var cy = y + 52
     surfaceClip(S, x, y + 40, w, h - 40)
 

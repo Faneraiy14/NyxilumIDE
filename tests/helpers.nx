@@ -1,0 +1,88 @@
+// Спільне для сценаріїв: штучні події, клік за назвою області, перевірки.
+import "../src/ui.nx"
+import "../src/ide.nx" { ideStep, draw }
+
+var outDir = ""
+
+func ev(type, x, y) {
+    var m = newMap()
+    mapSet(m, "type", type)
+    mapSet(m, "x", x) mapSet(m, "y", y) mapSet(m, "button", 1)
+    mapSet(m, "shift", false) mapSet(m, "ctrl", false) mapSet(m, "alt", false)
+    surfacePostEvent(S, m)
+}
+
+func key(k, ctrl, shift) {
+    var m = newMap()
+    mapSet(m, "type", "key")
+    mapSet(m, "key", k) mapSet(m, "ctrl", ctrl) mapSet(m, "shift", shift) mapSet(m, "alt", false)
+    surfacePostEvent(S, m)
+}
+
+func typeText(t) {
+    var i = 0
+    while (i < len(t)) {
+        var ch = t[i]
+        if (ch == "\n") { key("Enter", false, false) }
+        else {
+            var m = newMap()
+            mapSet(m, "type", "text")
+            mapSet(m, "text", ch)
+            surfacePostEvent(S, m)
+        }
+        i = i + 1
+    }
+}
+
+func step() { ideStep(0) }
+
+func click(x, y) {
+    ev("mousedown", x, y)
+    ev("mouseup", x, y)
+    ideStep(0)
+}
+
+// Клік по середині області з назвою id (з останнього кадру).
+func clickId(id) {
+    draw()
+    var r = uiFind(id)
+    if (r == null) { throw "ПРОВАЛ: на екрані нема області " + id }
+    click(r[0] + toInt(r[2] / 2), r[1] + toInt(r[3] / 2))
+}
+
+func dragTo(x1, y1, x2, y2) {
+    ev("mousedown", x1, y1)
+    ideStep(0)
+    var i = 1
+    while (i <= 5) {
+        ev("mousemove", x1 + (x2 - x1) * i / 5, y1 + (y2 - y1) * i / 5)
+        ideStep(0)
+        i = i + 1
+    }
+    ev("mouseup", x2, y2)
+    ideStep(0)
+}
+
+func shot(name) {
+    draw()
+    surfaceSave(S, outDir + "/" + name + ".png")
+}
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+// Налаштування "не перший запуск": рівень і без пропозицій гайду.
+func presetConfig(level, offers, blocks, lessons) {
+    var p = osEnv("NYX_IDE_CONFIG")
+    if (p == null || p == "") { throw "Тести запускаються з NYX_IDE_CONFIG=<тимчасовий файл>" }
+    var m = newMap()
+    mapSet(m, "level", level)
+    mapSet(m, "blocks", blocks)
+    mapSet(m, "lessons", lessons)
+    mapSet(m, "hints", true)
+    mapSet(m, "offers", offers)
+    mapSet(m, "seen", [])
+    writeFile(p, toJson(m))
+}

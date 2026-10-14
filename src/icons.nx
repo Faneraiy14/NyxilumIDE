@@ -1,0 +1,101 @@
+// Іконки, намальовані фігурами (у шрифті Terminus таких символів нема).
+// Кожна - у квадраті s x s з лівим верхнім кутом (x, y).
+
+import "ui.nx"
+
+func _ln(x1, y1, x2, y2, c) { surfaceLine(S, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 2) }
+
+// Провідник: два аркуші.
+func iconFiles(x, y, s, c) {
+    var a = s / 24
+    surfaceRectLine(S, toInt(x + 7 * a), toInt(y + 3 * a), toInt(11 * a), toInt(14 * a), c, 2)
+    surfaceRectLine(S, toInt(x + 4 * a), toInt(y + 7 * a), toInt(11 * a), toInt(14 * a), c, 2)
+}
+
+// Пошук: лупа.
+func iconSearch(x, y, s, c) {
+    var a = s / 24
+    surfaceCircleLine(S, toInt(x + 10 * a), toInt(y + 10 * a), toInt(6 * a), c, 2)
+    _ln(x + 14.5 * a, y + 14.5 * a, x + 20 * a, y + 20 * a, c)
+}
+
+// Історія: годинник.
+func iconHistory(x, y, s, c) {
+    var a = s / 24
+    surfaceCircleLine(S, toInt(x + 12 * a), toInt(y + 12 * a), toInt(8 * a), c, 2)
+    _ln(x + 12 * a, y + 12 * a, x + 12 * a, y + 7 * a, c)
+    _ln(x + 12 * a, y + 12 * a, x + 16 * a, y + 14 * a, c)
+}
+
+// Навчання: відкрита книжка.
+func iconLearn(x, y, s, c) {
+    var a = s / 24
+    _ln(x + 12 * a, y + 6 * a, x + 12 * a, y + 19 * a, c)
+    _ln(x + 3 * a, y + 5 * a, x + 12 * a, y + 6 * a, c)
+    _ln(x + 3 * a, y + 5 * a, x + 3 * a, y + 18 * a, c)
+    _ln(x + 3 * a, y + 18 * a, x + 12 * a, y + 19 * a, c)
+    _ln(x + 21 * a, y + 5 * a, x + 12 * a, y + 6 * a, c)
+    _ln(x + 21 * a, y + 5 * a, x + 21 * a, y + 18 * a, c)
+    _ln(x + 21 * a, y + 18 * a, x + 12 * a, y + 19 * a, c)
+}
+
+// Розширення: чотири квадрати, один відсунутий.
+func iconExt(x, y, s, c) {
+    var a = s / 24
+    var q = toInt(7 * a)
+    surfaceRectLine(S, toInt(x + 3 * a), toInt(y + 13 * a), q, q, c, 2)
+    surfaceRectLine(S, toInt(x + 11 * a), toInt(y + 13 * a), q, q, c, 2)
+    surfaceRectLine(S, toInt(x + 3 * a), toInt(y + 5 * a), q, q, c, 2)
+    surfaceRectLine(S, toInt(x + 13 * a), toInt(y + 3 * a), q, q, c, 2)
+}
+
+// Шеврон теки: відкритої (вниз) чи закритої (вправо).
+func iconChevron(x, y, s, open, c) {
+    var m = s / 2
+    if (open) {
+        _ln(x + m - 4, y + m - 2, x + m, y + m + 2, c)
+        _ln(x + m, y + m + 2, x + m + 4, y + m - 2, c)
+    } else {
+        _ln(x + m - 2, y + m - 4, x + m + 2, y + m, c)
+        _ln(x + m + 2, y + m, x + m - 2, y + m + 4, c)
+    }
+}
+
+// Значок файла за типом: код {}, блоки (кольорові цеглинки), текст (рядки), тека.
+func iconFileKind(kind, x, y, s, c) {
+    if (kind == "dir") {
+        surfaceRoundRect(S, x + 1, y + 4, s - 2, s - 6, 2, 0xd9b45a)
+        surfaceRect(S, x + 1, y + 2, toInt(s / 2), 4, 0xd9b45a)
+        return
+    }
+    if (kind == "blocks") {
+        surfaceRoundRect(S, x + 1, y + 2, s - 4, 5, 2, 0xd4a000)
+        surfaceRoundRect(S, x + 3, y + 8, s - 4, 5, 2, 0x4c8fe8)
+        surfaceRoundRect(S, x + 1, y + 14, s - 6, 5, 2, 0xe8901a)
+        return
+    }
+    if (kind == "code") {
+        surfaceText(S, "{}", x, y + toInt((s - 14) / 2), 14, 0x89b4fa, true)
+        return
+    }
+    var i = 0
+    while (i < 4) {
+        surfaceRect(S, x + 3, y + 4 + i * 4, s - 6 - (i % 2) * 4, 2, c)
+        i = i + 1
+    }
+}
+
+// Налаштування: шестерня.
+func iconGear(x, y, s, c) {
+    var a = s / 24
+    var cx = x + 12 * a
+    var cy = y + 12 * a
+    surfaceCircleLine(S, toInt(cx), toInt(cy), toInt(6 * a), c, 2)
+    surfaceCircle(S, toInt(cx), toInt(cy), toInt(2 * a), c)
+    var k = 0
+    while (k < 8) {
+        var ang = k * 3.14159265 / 4
+        _ln(cx + cos(ang) * 7 * a, cy + sin(ang) * 7 * a, cx + cos(ang) * 10 * a, cy + sin(ang) * 10 * a, c)
+        k = k + 1
+    }
+}

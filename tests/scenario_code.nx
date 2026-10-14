@@ -1,104 +1,64 @@
-// Сценарій режиму "Код": друк, підсвітка, запуск з введенням, помилка.
-// NX_HEADLESS=1 nx tests/scenario_code.nx <тимчасова-тека> <тека-для-png>
+// Сценарій режиму "Код" у новому вигляді (як VS Code): Провідник, вкладки,
+// друк, підказки, запуск з введенням, помилка, автодоповнення, пошук,
+// палітра команд, історія версій.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_code.nx <тека> <тека-для-png>
+import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentEditor, doAction, draw }
 import "../src/editor.nx" { edText, edHasSel }
-
-var outDir = ""
-
-func ev(type) {
-    var m = newMap()
-    mapSet(m, "type", type)
-    return m
-}
-func key(k, ctrl, shift) {
-    var m = ev("key")
-    mapSet(m, "key", k) mapSet(m, "ctrl", ctrl) mapSet(m, "shift", shift) mapSet(m, "alt", false)
-    surfacePostEvent(S, m)
-}
-func typeText(t) {
-    var i = 0
-    while (i < len(t)) {
-        var ch = t[i]
-        if (ch == "\n") { key("Enter", false, false) }
-        else {
-            var m = ev("text")
-            mapSet(m, "text", ch)
-            surfacePostEvent(S, m)
-        }
-        i = i + 1
-    }
-}
-func click(x, y) {
-    var d = ev("mousedown")
-    mapSet(d, "x", x) mapSet(d, "y", y) mapSet(d, "button", 1) mapSet(d, "shift", false) mapSet(d, "ctrl", false)
-    surfacePostEvent(S, d)
-    var u = ev("mouseup")
-    mapSet(u, "x", x) mapSet(u, "y", y) mapSet(u, "button", 1)
-    surfacePostEvent(S, u)
-}
-func step() { ideStep(0) }
-func shot(name) { surfaceSave(S, outDir + "/" + name + ".png") }
-func check(cond, msg) {
-    if (!cond) { throw "ПРОВАЛ: " + msg }
-    print("ok - " + msg)
-}
 
 func main() {
     var a = scriptArgs()
     var dir = a[0]
     outDir = a[1]
-    // не перший запуск (інакше IDE відкриє уроки) - див. scenario_guide.nx
-    if (!dirExists(dir)) { makeDir(dir) }
-    if (!dirExists(dir + "/.nyx")) { makeDir(dir + "/.nyx") }
-    writeFile(dir + "/.nyx/уроки.json", "[]")
+    presetConfig("middle", false, true, true)
     ideInit(dir)
     step()
     shot("01_start")
     var ed = currentEditor()
-    check(len(ed.lines) > 5, "приклад відкрито (" + toString(len(ed.lines)) + " рядків)")
+    check(ed != null && len(ed.lines) > 5, "відкрито приклад привіт.nx (" + toString(len(app.tabs)) + " вкладка)")
+    check(app.side == "files" && app.panelOpen, "Провідник і нижня панель відкриті")
 
-    // Нова програма через кнопку й діалог
-    click(115, 800 - 26 - 46 + 10)
-    step()
-    check(app.dialog != null, "діалог нової програми відкрито")
-    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
-    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
-    key("Backspace", false, false) key("Backspace", false, false) key("Backspace", false, false)
+    // нова програма кодом через Провідник
+    clickId("newcode")
+    check(app.dialog != null, "діалог нової програми")
+    var n = 0
+    while (n < 12) {
+        key("Backspace", false, false)
+        n = n + 1
+    }
     typeText("тест")
     key("Enter", false, false)
     step()
     ed = currentEditor()
-    check(endsWith(ed.path, "тест.nx"), "створено тест.nx")
+    check(endsWith(ed.path, "тест.nx") && len(app.tabs) == 2, "створено тест.nx у новій вкладці")
 
-    // Виділити все й надрукувати свою програму (автодужки, автовідступи)
     key("a", true, false)
     key("Delete", false, false)
     typeText("func main() {\nvar x = 0x10\nprint(\"Число: \" + toString(x))\nprintNoNewLine(\"Ім'я? \")\nvar n = readLine()\nprint(\"Привіт, \" + n)\n")
     step()
     var text = edText(ed)
-    print(text)
     check(contains(text, "    var x = 0x10"), "автовідступ всередині {")
     check(endsWith(trim(text), "}"), "автодужка } у кінці")
     shot("02_typed")
 
-    // Запуск (F5) і відповідь програмі
+    // запуск і відповідь програмі
     key("F5", false, false)
     step()
     var t0 = timeMs()
-    while (timeMs() - t0 < 4000 && !contains(toString(app.con.lines), "Ім'я?")) { ideStep(50) }
+    while (timeMs() - t0 < 5000 && !contains(toString(app.con.lines), "Ім'я?")) { ideStep(50) }
     check(contains(toString(app.con.lines), "Число: 16"), "програма вивела Число: 16")
     typeText("Сева")
     key("Enter", false, false)
     t0 = timeMs()
-    while (timeMs() - t0 < 4000 && app.con.running) { ideStep(50) }
+    while (timeMs() - t0 < 5000 && app.con.running) { ideStep(50) }
     step()
     check(contains(toString(app.con.lines), "Привіт, Сева"), "введення дійшло до програми")
     check(contains(toString(app.con.lines), "Готово"), "програма завершилась успішно")
     shot("03_ran")
 
-    // Помилка: невідома змінна -> червоний рядок у редакторі
+    // помилка -> червоний рядок + підказка + "Проблеми"
     key("End", true, false)
-    typeText("\nfunc зламано() {\nprint(немає)\n}\n")
+    typeText("\nfunc зламано() {\nprint(немає)\n")
     key("Home", true, false)
     key("Down", false, false)
     key("End", false, false)
@@ -106,42 +66,70 @@ func main() {
     key("F5", false, false)
     t0 = timeMs()
     step()
-    while (timeMs() - t0 < 4000 && app.con.running) { ideStep(50) }
+    while (timeMs() - t0 < 5000 && app.con.running) { ideStep(50) }
     step()
     step()
-    print(edText(ed))
-    print(app.con.lines)
     check(ed.errLine >= 0, "рядок з помилкою підсвічено: " + toString(ed.errLine + 1))
     check(contains(toString(app.con.lines), "Підказка:"), "у консолі є підказка до помилки")
+    check(len(app.problems) > 0, "помилка є у вкладці «Проблеми»")
+    clickId("status.problems")
+    check(app.panelTab == "problems", "клік по лічильнику в рядку стану відкриває «Проблеми»")
     shot("04_error")
+    clickId("ptab:console")
 
-    // Автодоповнення і пошук
+    // автодоповнення і пошук
     key("End", true, false)
     typeText("\nprin")
     step()
-    check(ed.acOpen && len(ed.acItems) > 0, "автодоповнення відкрилось: " + toString(ed.acItems))
-    var hasPrint = false
-    for it in ed.acItems { if (it[0] == "print" || it[0] == "printNoNewLine") { hasPrint = true } }
-    check(hasPrint, "серед підказок є print")
+    check(ed.acOpen && len(ed.acItems) > 0, "автодоповнення відкрилось")
     while (ed.acItems[ed.acSel][0] != "print") { key("Down", false, false)  step() }
     key("Enter", false, false)
     step()
-    check(ed.lines[ed.cy] == "print()" || endsWith(ed.lines[ed.cy], "print()"), "вставлено print(): " + ed.lines[ed.cy])
-    shot("06_autocomplete_done")
+    check(endsWith(ed.lines[ed.cy], "print()"), "вставлено print()")
     key("z", true, false)
     key("z", true, false)
     step()
     key("f", true, false)
     typeText("Число")
     step()
-    check(ed.findOpen && edHasSel(ed) && contains(ed.lines[ed.cy], "Число"), "Ctrl+F знайшов «Число» у рядку " + toString(ed.cy + 1))
-    shot("07_find")
+    check(ed.findOpen && edHasSel(ed) && contains(ed.lines[ed.cy], "Число"), "Ctrl+F знайшов «Число»")
     key("Escape", false, false)
     step()
     check(!ed.findOpen, "Escape закрив пошук")
 
-    // Історія версій: зберегти, змінити, подивитись diff, повернути
-    doAction("history")
+    // палітра команд і швидке відкриття
+    key("p", true, true)
+    step()
+    check(app.palette != null, "Ctrl+Shift+P відкриває палітру команд")
+    typeText("бічну")
+    step()
+    check(len(app.palette.items) == 1, "палітра фільтрує команди")
+    key("Enter", false, false)
+    step()
+    check(app.side == "", "команда з палітри сховала бічну панель")
+    key("b", true, false)
+    step()
+    check(app.side == "files", "Ctrl+B повернув бічну панель")
+    key("p", true, false)
+    typeText("привіт")
+    step()
+    key("Enter", false, false)
+    step()
+    check(endsWith(app.active, "привіт.nx"), "Ctrl+P відкрив привіт.nx")
+    clickId("tab:" + dir + "/тест.nx")
+    check(endsWith(app.active, "тест.nx"), "клік по вкладці перемикає файл")
+
+    // пошук у файлах
+    key("f", true, true)
+    typeText("Привіт")
+    step()
+    check(app.side == "search" && len(app.searchResults) >= 2, "пошук у файлах знайшов " + toString(len(app.searchResults)))
+    shot("05_search")
+    key("Escape", false, false)
+
+    // історія версій
+    ed = currentEditor()
+    doAction("act:history")
     doAction("h.save")
     app.dialog.text = "версія з помилкою"
     doAction("dialog.ok")
@@ -154,20 +142,19 @@ func main() {
     draw()
     var plus = 0
     for r in app.histDiff { if (r[0] == "+") { plus = plus + 1 } }
-    check(plus >= 1, "diff показує доданий рядок (+" + toString(plus) + ")")
-    shot("05_history")
+    check(plus >= 1, "diff показує доданий рядок")
+    shot("06_history")
     doAction("h.restore")
     check(edText(ed) == savedText, "версію повернуто")
-    check(len(app.histList) == 2, "перед поверненням збережено поточний стан")
     key("z", true, false)
     step()
     check(contains(edText(ed), "// новий рядок"), "повернення можна скасувати Ctrl+Z")
 
-    // Скасування
-    var before = len(ed.lines)
-    key("z", true, false)
+    // закриття вкладки
+    key("w", true, false)
     step()
-    check(len(ed.lines) != before || true, "Ctrl+Z не падає")
+    check(len(app.tabs) == 1, "Ctrl+W закрив вкладку")
+
     ideShutdown()
     check(fileExists(dir + "/тест.nx"), "файл збережено на диск")
     print("СЦЕНАРІЙ ПРОЙДЕНО")

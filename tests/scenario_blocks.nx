@@ -1,53 +1,10 @@
-// Сценарій режиму "Блоки": вкладка, перетягування з палітри з прилипанням,
-// редагування віконця, запуск з введенням, панель коду, "Відкрити як код".
-// NX_HEADLESS=1 nx tests/scenario_blocks.nx <тимчасова-тека> <тека-для-png>
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, currentEditor }
+// Сценарій режиму "Блоки": нова програма з блоків, перетягування з палітри
+// з прилипанням, віконця, змінна, запуск з введенням, панель коду.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_blocks.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks }
 import "../src/blocks_view.nx" { _pHits, _sHits }
-import "../src/blocks_model.nx" { generateCode, lastOfChain }
 
-var outDir = ""
-
-func ev(type, x, y) {
-    var m = newMap()
-    mapSet(m, "type", type)
-    mapSet(m, "x", x) mapSet(m, "y", y) mapSet(m, "button", 1)
-    mapSet(m, "shift", false) mapSet(m, "ctrl", false) mapSet(m, "alt", false)
-    surfacePostEvent(S, m)
-}
-func key(k) {
-    var m = newMap()
-    mapSet(m, "type", "key")
-    mapSet(m, "key", k) mapSet(m, "ctrl", false) mapSet(m, "shift", false) mapSet(m, "alt", false)
-    surfacePostEvent(S, m)
-}
-func typeText(t) {
-    var i = 0
-    while (i < len(t)) {
-        var m = newMap()
-        mapSet(m, "type", "text")
-        mapSet(m, "text", t[i])
-        surfacePostEvent(S, m)
-        i = i + 1
-    }
-}
-func click(x, y) {
-    ev("mousedown", x, y)
-    ev("mouseup", x, y)
-    ideStep(0)
-}
-// Перетягнути з (x1,y1) у (x2,y2) кроками, як справжня миша.
-func dragTo(x1, y1, x2, y2) {
-    ev("mousedown", x1, y1)
-    ideStep(0)
-    var i = 1
-    while (i <= 5) {
-        ev("mousemove", x1 + (x2 - x1) * i / 5, y1 + (y2 - y1) * i / 5)
-        ideStep(0)
-        i = i + 1
-    }
-    ev("mouseup", x2, y2)
-    ideStep(0)
-}
 func palPos(id) {
     var k = 0
     while (k < len(_pHits)) {
@@ -65,89 +22,88 @@ func slotPos(b, k) {
     }
     throw "нема віконця " + toString(k)
 }
-func shot(name) { surfaceSave(S, outDir + "/" + name + ".png") }
-func check(cond, msg) {
-    if (!cond) { throw "ПРОВАЛ: " + msg }
-    print("ok - " + msg)
-}
-
 func main() {
     var a = scriptArgs()
     var dir = a[0]
     outDir = a[1]
-    // не перший запуск (інакше IDE відкриє уроки) - див. scenario_guide.nx
-    if (!dirExists(dir)) { makeDir(dir) }
-    if (!dirExists(dir + "/.nyx")) { makeDir(dir + "/.nyx") }
-    writeFile(dir + "/.nyx/уроки.json", "[]")
+    presetConfig("middle", false, true, true)
     ideInit(dir)
-    ideStep(0)
+    step()
 
-    click(285, 24)                       // вкладка "Блоки"
+    clickId("newblocks")
+    check(app.dialog != null, "діалог нової програми з блоків")
+    var n = 0
+    while (n < 12) {
+        key("Backspace", false, false)
+        n = n + 1
+    }
+    typeText("мої блоки")
+    key("Enter", false, false)
+    step()
     var ws = currentBlocks()
-    check(app.mode == "blocks" && ws != null, "режим блоків відкрито")
+    check(app.mode == "blocks" && ws != null && endsWith(app.active, "мої блоки.nxb"), "відкрито нову програму з блоків")
     check(len(ws.stacks) == 1 && ws.stacks[0].spec == "start", "нова програма має шапку")
     var say = ws.stacks[0].next
     check(say != null && say.spec == "say", "під шапкою блок «сказати»")
     shot("b01_start")
 
-    click(230 + 42, 48 + 10 + 62 + 14)  // категорія "Вивід"
+    clickId("bcat:Вивід")
     check(ws.cat == "Вивід", "категорія Вивід")
     var p = palPos("ask")
-    // кинути так, щоб верхній лівий кут опинився під "сказати"
     dragTo(p[0] + 10, p[1] + 10, say.sx + 10, say.sy + say.hh + 12)
     check(say.next != null && say.next.spec == "ask", "«запитати» прилип під «сказати»")
 
-    // ще один "сказати" з'єднати + змінна
     p = palPos("say")
     var ask = say.next
     dragTo(p[0] + 10, p[1] + 10, ask.sx + 10, ask.sy + ask.hh + 12)
     var say2 = ask.next
     check(say2 != null && say2.spec == "say", "другий «сказати» прилип")
 
-    click(230 + 42, 48 + 10 + 4 * 62 + 14)  // "Оператори"
+    clickId("bcat:Оператори")
     p = palPos("join")
     dragTo(p[0] + 5, p[1] + 10, say2.sx + 80, say2.sy + 20)
     check(typeOf(say2.args[0]) == "struct" && say2.args[0].spec == "join", "«з'єднати» вставлено у віконце")
-    ideStep(0)
+    step()
 
-    // віконце "з'єднати": клік і набір тексту
     var j = say2.args[0]
     var sp0 = slotPos(j, 0)
     click(sp0[0], sp0[1])
     check(ws.edit == j, "віконце редагується")
-    key("Backspace") key("Backspace") key("Backspace") key("Backspace") key("Backspace")
-    key("Backspace") key("Backspace") key("Backspace") key("Backspace") key("Backspace")
+    n = 0
+    while (n < 10) {
+        key("Backspace", false, false)
+        n = n + 1
+    }
     typeText("Радий бачити, ")
-    key("Enter")
-    ideStep(0)
-    check(j.args[0] == "Радий бачити, ", "текст у віконці: " + toString(j.args[0]))
+    key("Enter", false, false)
+    step()
+    check(j.args[0] == "Радий бачити, ", "текст у віконці")
 
-    click(230 + 42, 48 + 10 + 3 * 62 + 14)  // "Змінні"
+    clickId("bcat:Змінні")
     p = palPos("var:відповідь")
-    ideStep(0)
     var sp1 = slotPos(j, 1)
     dragTo(p[0] + 5, p[1] + 8, sp1[0] - 10, sp1[1] - 8)
     check(typeOf(j.args[1]) == "struct", "змінна вставлена в друге віконце")
     shot("b02_built")
 
-    print(generateCode(ws.stacks, "x")[0])
-
-    key("F5")
-    ideStep(0)
+    key("F5", false, false)
+    step()
     var t0 = timeMs()
     while (timeMs() - t0 < 5000 && !contains(toString(app.con.lines), "звати?")) { ideStep(50) }
     typeText("Сева")
-    key("Enter")
+    key("Enter", false, false)
     t0 = timeMs()
     while (timeMs() - t0 < 5000 && app.con.running) { ideStep(50) }
-    ideStep(0)
-    ideStep(0)
-    print(app.con.lines)
+    step()
+    step()
     check(contains(toString(app.con.lines), "Радий бачити, Сева"), "програма з блоків працює")
 
-    click(1280 - 60, 48 + 25)               // "Показати код"
+    clickId("btogglecode")
     check(ws.showCode, "панель коду відкрито")
     shot("b03_code")
+
+    // блоки і код - вкладки поруч
+    check(len(app.tabs) == 2, "дві вкладки: привіт.nx і мої блоки.nxb")
 
     ideShutdown()
     check(fileExists(dir + "/мої блоки.nxb"), "блоки збережено")

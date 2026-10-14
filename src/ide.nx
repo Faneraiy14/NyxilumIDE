@@ -1,11 +1,15 @@
 // Nyx IDE - середовище програмування для NyxilumLang, написане на NyxilumLang.
 //
-//   nx ide.nx [тека-з-програмами]
+//   nx ide [тека]        (або: nx src/ide.nx [тека])
 //
 // Без аргументу програми лежать у ~/NyxПрограми (створюється з прикладом).
+// Вигляд - як у VS Code: смужка дій зліва, бічна панель (Провідник, Пошук,
+// Історія, Навчання, Розширення), вкладки файлів, нижня панель (Консоль,
+// Проблеми), рядок стану, палітра команд (Ctrl+Shift+P).
 
 import "theme.nx"
 import "ui.nx"
+import "icons.nx"
 import "editor.nx"
 import "console.nx"
 import "blocks_model.nx"
@@ -15,33 +19,44 @@ import "history.nx"
 import "tour.nx"
 import "explain.nx"
 
-var TOP_H = 48
-var LEFT_W = 230          // панель "Мої програми" (36, коли згорнута)
-var FILES_W = 230
-var FILES_COLLAPSED_W = 36
-var STATUS_H = 26
+var TITLE_H = 36
+var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
+var ACT_W = 48            // смужка дій
+var TABS_H = 34
+var PANEL_HEAD_H = 30
+var STATUS_H = 24
+var LEFT_W = 48           // де починається область редактора (рахує draw)
 
 struct App {
     mode: string
     dir: string
     files: array
+    expanded: map
     editors: map
     current: string
     blocks: map
     currentB: string
+    tabs: array
+    active: string
+    side: string
+    sideW: i32
+    sideScroll: i32
+    panelOpen: bool
+    panelTab: string
+    problems: array
+    palette: any
+    searchText: string
+    searchResults: array
     genMap: array
-    guideOpen: bool
     guideTab: string
     guideLesson: i32
     done: array
     demo: any
     cursorX: i32
     cursorY: i32
-    filesCollapsed: bool
     hintRun: i32
     tour: i32
     tourFirstRun: bool
-    histOpen: bool
     histSel: i32
     histScroll: i32
     histList: array
@@ -59,6 +74,11 @@ struct App {
     dialog: any
     status: string
     statusTime: i32
+    tooltip: string
+    probRun: i32
+    cfg: any
+    askLevel: bool
+    offer: any
 }
 
 var app = null
@@ -82,6 +102,14 @@ func fileName(path) {
     return parts[len(parts) - 1]
 }
 
+// Вид файла: "blocks" (.nxb), "code" (.nx), "text" (решта).
+func fileKind(path) {
+    if (endsWith(path, ".nxb")) { return "blocks" }
+    if (endsWith(path, ".nx")) { return "code" }
+    return "text"
+}
+
+// Розширення нових файлів у поточному режимі.
 func ext() {
     if (app.mode == "blocks") { return ".nxb" }
     return ".nx"
@@ -90,12 +118,47 @@ func ext() {
 // Тека IDE (там, де лежить src/): приклади, гайд.
 func ideHome() { return joinPath(scriptDir(), "..") }
 
-func refreshFiles() {
+var SKIP_DIRS = ["node_modules", "bin", "obj", "__pycache__"]
+
+// Дерево Провідника, розгорнуте в плаский список рядків:
+// [шлях, назва, глибина, тека?]. Приховані (.nyx, .git) - не показуються.
+func _walkDir(dir, depth, out) {
     var names = []
-    for n in listDir(app.dir) {
-        if (endsWith(n, ext()) && fileExists(joinPath(app.dir, n))) { append(names, n) }
+    try { names = sort(listDir(dir)) } catch (e) { return }
+    var dirs = []
+    var files = []
+    for n in names {
+        if (startsWith(n, ".")) { continue }
+        var p = joinPath(dir, n)
+        if (dirExists(p)) {
+            if (indexOf(SKIP_DIRS, n) < 0) { append(dirs, n) }
+        } else { append(files, n) }
     }
-    app.files = sort(names)
+    for d in dirs {
+        var dp = joinPath(dir, d)
+        append(out, [dp, d, depth, true])
+        if (mapHas(app.expanded, dp)) { _walkDir(dp, depth + 1, out) }
+    }
+    for f in files {
+        // з вимкненим режимом блоків файли .nxb не показуються
+        if (app.cfg != null && !app.cfg.blocks && endsWith(f, ".nxb")) { continue }
+        append(out, [joinPath(dir, f), f, depth, false])
+    }
+}
+
+func refreshFiles() {
+    var out = []
+    _walkDir(app.dir, 0, out)
+    app.files = out
+}
+
+// Усі файли поточного виду в корені теки (для уроків і "першого файла").
+func filesOfKind(kind) {
+    var res = []
+    for f in app.files {
+        if (!f[3] && fileKind(f[0]) == kind) { append(res, f[0]) }
+    }
+    return res
 }
 
 func currentEditor() {
@@ -108,6 +171,16 @@ func currentBlocks() {
     return mapGet(app.blocks, app.currentB)
 }
 
+func _addTab(path) {
+    if (indexOf(app.tabs, path) < 0) { append(app.tabs, path) }
+    app.active = path
+    surfaceTitle(S, "Nyx IDE — " + fileName(path))
+    // перша зустріч з редактором блоків / коду - запропонувати гайд
+    var kind = fileKind(path)
+    if (kind == "blocks") { offerOnce("blocks") }
+    if (kind == "code") { offerOnce("code") }
+}
+
 func openBlocks(path) {
     app.histSel = -1
     if (!mapHas(app.blocks, path)) {
@@ -116,25 +189,8 @@ func openBlocks(path) {
         mapSet(app.blocks, path, newBlocksWs(path, text))
     }
     app.currentB = path
-    surfaceTitle(S, "Nyx IDE — " + fileName(path))
-}
-
-// Перейти в режим (вкладка Блоки/Код): свій список файлів, свій відкритий файл.
-func setMode(mode) {
-    saveAll()
-    app.mode = mode
-    refreshFiles()
-    if (mode == "blocks") {
-        if (app.currentB == "") {
-            if (len(app.files) == 0) {
-                writeFile(joinPath(app.dir, "мої блоки.nxb"), starterBlocksJson())
-                refreshFiles()
-            }
-            openBlocks(joinPath(app.dir, app.files[0]))
-        } else { surfaceTitle(S, "Nyx IDE — " + fileName(app.currentB)) }
-    } else if (app.current != "") {
-        surfaceTitle(S, "Nyx IDE — " + fileName(app.current))
-    }
+    app.mode = "blocks"
+    _addTab(path)
 }
 
 func openFile(path) {
@@ -142,11 +198,61 @@ func openFile(path) {
     if (!mapHas(app.editors, path)) {
         var text = ""
         if (fileExists(path)) { text = readFile(path) }
-        mapSet(app.editors, path, newEditor(text, path))
+        var ed = newEditor(text, path)
+        ed.plain = fileKind(path) == "text"
+        mapSet(app.editors, path, ed)
     }
     app.current = path
+    app.mode = "code"
     app.focus = "editor"
-    surfaceTitle(S, "Nyx IDE — " + fileName(path))
+    _addTab(path)
+}
+
+// Відкрити будь-який файл у відповідному редакторі.
+func openPath(path) {
+    saveAll()
+    if (fileKind(path) == "blocks") { openBlocks(path) } else { openFile(path) }
+}
+
+func closeTab(path) {
+    saveAll()
+    var i = indexOf(app.tabs, path)
+    if (i < 0) { return }
+    removeAt(app.tabs, i)
+    if (app.current == path) { app.current = "" }
+    if (app.currentB == path) { app.currentB = "" }
+    if (app.active == path) {
+        app.active = ""
+        if (len(app.tabs) > 0) { openPath(app.tabs[min(i, len(app.tabs) - 1)]) }
+        else { surfaceTitle(S, "Nyx IDE") }
+    }
+}
+
+// Перейти в режим блоків/коду (уроки, показ): активна вкладка цього виду,
+// інакше перший такий файл, інакше новий.
+func setMode(mode) {
+    saveAll()
+    var kind = "code"
+    if (mode == "blocks") { kind = "blocks" }
+    if (app.active != "" && fileKind(app.active) == kind) {
+        app.mode = mode
+        return
+    }
+    for t in app.tabs {
+        if (fileKind(t) == kind) {
+            openPath(t)
+            return
+        }
+    }
+    refreshFiles()
+    var list = filesOfKind(kind)
+    if (len(list) == 0) {
+        if (kind == "blocks") { writeFile(joinPath(app.dir, "мої блоки.nxb"), starterBlocksJson()) }
+        else { writeFile(joinPath(app.dir, "програма1.nx"), "func main() {\n    print(\"Привіт!\")\n}\n") }
+        refreshFiles()
+        list = filesOfKind(kind)
+    }
+    openPath(list[0])
 }
 
 func saveEditor(ed) {
@@ -171,25 +277,30 @@ func setStatus(text) {
     app.statusTime = timeMs()
 }
 
-func newFile(name) {
+// kind: "code" | "blocks"
+func newFile(name, kind) {
     name = trim(name)
     if (name == "") { return }
-    if (!endsWith(name, ext())) { name = name + ext() }
+    var e = ".nx"
+    if (kind == "blocks") { e = ".nxb" }
+    if (!endsWith(name, e)) { name = name + e }
     var path = joinPath(app.dir, name)
     if (fileExists(path)) {
         setStatus("Файл " + name + " вже є - відкрито його")
-    } else if (app.mode == "blocks") {
+    } else if (kind == "blocks") {
         writeFile(path, starterBlocksJson())
     } else {
         writeFile(path, "func main() {\n    print(\"Привіт!\")\n}\n")
     }
     refreshFiles()
-    if (app.mode == "blocks") { openBlocks(path) } else { openFile(path) }
+    openPath(path)
 }
 
-func freeName() {
+func freeName(kind) {
+    var e = ".nx"
+    if (kind == "blocks") { e = ".nxb" }
     var i = 1
-    while (fileExists(joinPath(app.dir, "програма" + toString(i) + ext()))) { i = i + 1 }
+    while (fileExists(joinPath(app.dir, "програма" + toString(i) + e))) { i = i + 1 }
     return "програма" + toString(i)
 }
 
@@ -246,6 +357,7 @@ func addErrorHints() {
     var con = app.con
     if (con.running || con.lastOk || con.runs == app.hintRun || con.runs == 0) { return }
     app.hintRun = con.runs
+    if (!app.cfg.hints) { return }
     var errText = ""
     for l in con.lines {
         if (l[1] == "err" || l[1] == "out") { errText = errText + l[0] + "\n" }
@@ -273,10 +385,38 @@ func addErrorHints() {
     }
 }
 
+// "Проблеми" від запуску: після кожного завершеного запуску - заново.
+// Джерело "запуск"; проблеми розширень (інше джерело) не чіпаються.
+func updateRunProblems() {
+    var con = app.con
+    if (con.running || con.runs == app.probRun) { return }
+    app.probRun = con.runs
+    var keep = []
+    for p in app.problems { if (p[4] != "запуск") { append(keep, p) } }
+    app.problems = keep
+    if (con.lastOk) { return }
+    var msg = "Програма зупинилась з помилкою"
+    for l in con.lines {
+        if (startsWith(l[0], "Runtime Error")) { msg = replace(l[0], "Runtime Error: ", "") }
+    }
+    var line = -1
+    if (app.mode == "code") { line = con.errLine }
+    var file = app.active
+    insert(app.problems, 0, [file, line, msg, "error", "запуск"])
+    var at = 1
+    for l2 in con.lines {
+        if (l2[1] == "hint") {
+            insert(app.problems, at, [file, line, trim(replace(l2[0], "Підказка: ", "")), "info", "запуск"])
+            at = at + 1
+        }
+    }
+}
+
 // Після завершення з помилкою - підсвітити рядок у редакторі й перейти до нього.
 func afterPoll() {
     var con = app.con
     addErrorHints()
+    updateRunProblems()
     if (!con.running && con.errLine >= 0 && app.mode == "blocks") {
         var ws = currentBlocks()
         if (ws != null && con.errLine < len(app.genMap)) {
@@ -297,7 +437,7 @@ func afterPoll() {
     }
 }
 
-// ---------- діалог (назва нової програми) ----------
+// ---------- діалог (назва нової програми, опис версії) ----------
 
 struct Dialog {
     title: string
@@ -307,9 +447,11 @@ struct Dialog {
     suffix: string
 }
 
+// action: "newcode" | "newblocks" | "version"
 func openDialog(title, text, action) {
     var okLabel = "Створити"
-    var suffix = ext()
+    var suffix = ".nx"
+    if (action == "newblocks") { suffix = ".nxb" }
     if (action == "version") {
         okLabel = "Зберегти"
         suffix = ""
@@ -322,7 +464,8 @@ func closeDialog(ok) {
     var d = app.dialog
     app.dialog = null
     app.focus = "editor"
-    if (ok && d.action == "new") { newFile(d.text) }
+    if (ok && d.action == "newcode") { newFile(d.text, "code") }
+    if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
 }
 
@@ -359,152 +502,877 @@ func dialogKey(e) {
     if (e.key == "Backspace" && len(d.text) > 0) { d.text = substring(d.text, 0, len(d.text) - 1) }
 }
 
-// ---------- малювання ----------
+// ---------- палітра команд (Ctrl+Shift+P) і швидке відкриття (Ctrl+P) ----------
 
-func drawTopBar(W) {
-    surfaceRect(S, 0, 0, W, TOP_H, C_PANEL2)
-    surfaceText(S, "Nyx", 16, 12, 24, C_ACCENT, true)
-    surfaceText(S, "IDE", 16 + textWidth("Nyx ", 24, true), 12, 24, C_TEXT)
+struct Palette {
+    mode: string
+    text: string
+    sel: i32
+    items: array
+}
 
-    // вкладки не наїжджають на назву "Nyx IDE", коли панель програм згорнута
-    var tx = max(LEFT_W, 160)
-    var blocksKind = "tab"
-    var codeKind = "tab"
-    if (app.mode == "blocks") { blocksKind = "tabOn" } else { codeKind = "tabOn" }
-    uiButton("mode.blocks", "Блоки", tx, 0, 110, TOP_H, blocksKind)
-    uiButton("mode.code", "Код", tx + 110, 0, 110, TOP_H, codeKind)
+// [id, назва, клавіші] - команди, доступні з палітри
+func commandList() {
+    var list = [
+        ["run", "Запустити програму", "F5"],
+        ["stop", "Зупинити програму", ""],
+        ["save", "Зберегти все", "Ctrl+S"],
+        ["newcode", "Нова програма (код)", "Ctrl+N"],
+        ["newblocks", "Нова програма з блоків", ""],
+        ["closetab", "Закрити вкладку", "Ctrl+W"],
+        ["side.toggle", "Показати/сховати бічну панель", "Ctrl+B"],
+        ["panel.toggle", "Показати/сховати нижню панель", "Ctrl+J"],
+        ["act:files", "Провідник", ""],
+        ["act:search", "Пошук у файлах", "Ctrl+Shift+F"],
+        ["act:history", "Історія версій", ""],
+        ["h.save", "Зберегти версію", ""],
+        ["act:learn", "Навчання: уроки й приклади", ""],
+        ["g.tour", "Знайомство з IDE (екскурсія)", ""],
+        ["act:ext", "Розширення", ""],
+        ["act:settings", "Налаштування", ""],
+        ["find", "Знайти у файлі", "Ctrl+F"],
+        ["zoomin", "Збільшити шрифт", "Ctrl+="],
+        ["zoomout", "Зменшити шрифт", "Ctrl+-"],
+        ["btogglecode", "Блоки: показати/сховати код", ""],
+        ["bopencode", "Блоки: відкрити як код", ""],
+        ["con.clear", "Очистити консоль", ""],
+        ["quickopen", "Відкрити файл…", "Ctrl+P"]
+    ]
+    return list
+}
 
-    var x = W - 16
-    var helpW = uiButtonW("Навчання")
-    x = x - helpW
-    var helpKind = "normal"
-    if (app.guideOpen) { helpKind = "primary" }
-    uiButton("help", "Навчання", x, 8, helpW, 32, helpKind)
-    var histW = uiButtonW("Історія")
-    x = x - histW - 8
-    var histKind = "normal"
-    if (app.histOpen) { histKind = "primary" }
-    uiButton("history", "Історія", x, 8, histW, 32, histKind)
-    var saveW = uiButtonW("Зберегти")
-    x = x - saveW - 8
-    uiButton("save", "Зберегти", x, 8, saveW, 32, "normal")
-    if (app.con.running) {
-        var stopW = uiButtonW("■ Зупинити")
-        x = x - stopW - 8
-        uiButton("stop", "■ Зупинити", x, 8, stopW, 32, "danger")
+func openPalette(mode) {
+    app.palette = Palette { mode: mode, text: "", sel: 0, items: [] }
+    refreshPalette()
+}
+
+func refreshPalette() {
+    var p = app.palette
+    var q = toLower(p.text)
+    var items = []
+    if (p.mode == "files") {
+        refreshFiles()
+        for f in app.files {
+            if (!f[3] && (q == "" || contains(toLower(f[1]), q))) { append(items, ["file:" + f[0], f[1], ""]) }
+        }
     } else {
-        var runW = uiButtonW("▶ Запустити")
-        x = x - runW - 8
-        uiButton("run", "▶ Запустити", x, 8, runW, 32, "primary")
+        for c in commandList() {
+            var hide = (!app.cfg.blocks && (c[0] == "newblocks" || startsWith(c[0], "b"))) || (!app.cfg.lessons && c[0] == "act:learn")
+            if (!hide && (q == "" || contains(toLower(c[1]), q))) { append(items, c) }
+        }
+    }
+    p.items = slice(items, 0, min(len(items), 14))
+    p.sel = clamp(p.sel, 0, max(0, len(p.items) - 1))
+}
+
+func paletteKey(e) {
+    var p = app.palette
+    var k = e.key
+    if (k == "Escape") {
+        app.palette = null
+        return
+    }
+    if (k == "Down" && len(p.items) > 0) { p.sel = (p.sel + 1) % len(p.items) }
+    else if (k == "Up" && len(p.items) > 0) { p.sel = (p.sel - 1 + len(p.items)) % len(p.items) }
+    else if (k == "Enter") {
+        if (len(p.items) > 0) {
+            var id = p.items[p.sel][0]
+            app.palette = null
+            doAction(id)
+        }
+    }
+    else if (k == "Backspace" && len(p.text) > 0) {
+        p.text = substring(p.text, 0, len(p.text) - 1)
+        refreshPalette()
     }
 }
 
-func drawFiles(H) {
-    var y0 = TOP_H
-    var h = H - TOP_H - STATUS_H
-    surfaceRect(S, 0, y0, LEFT_W, h, C_PANEL)
-    uiRegion("files.panel", 0, y0, LEFT_W, h)
-    if (app.filesCollapsed) {
-        // згорнута: лише стрілка "розгорнути" і "+"
-        uiButton("files.toggle", "›", 4, y0 + 8, 28, 28, "flat")
-        uiButton("newfile", "+", 4, y0 + h - 40, 28, 30, "normal")
+func drawCmdPalette() {
+    var p = app.palette
+    var W = surfaceWidth(S)
+    var w = min(620, W - 40)
+    var x = toInt((W - w) / 2)
+    var y = TITLE_H + 6
+    var rowH = 26
+    var h = 48 + len(p.items) * rowH + 8
+    surfaceRoundRect(S, x + 4, y + 4, w, h, 8, 0x88000000)
+    surfaceRoundRect(S, x, y, w, h, 8, C_PANEL)
+    surfaceRoundRect(S, x + 8, y + 8, w - 16, 32, 6, C_ACCENT)
+    surfaceRoundRect(S, x + 9, y + 9, w - 18, 30, 6, C_BG)
+    var prefix = "> "
+    if (p.mode == "files") { prefix = "" }
+    var tw = surfaceText(S, prefix + p.text, x + 18, y + 16, 16, C_TEXT)
+    surfaceRect(S, x + 19 + tw, y + 14, 2, 20, C_ACCENT)
+    if (p.text == "") {
+        var hint = "Назва команди…"
+        if (p.mode == "files") { hint = "Назва файла…" }
+        surfaceText(S, hint, x + 28 + tw, y + 16, 16, C_DIM)
+    }
+    var iy = y + 48
+    var i = 0
+    while (i < len(p.items)) {
+        var it = p.items[i]
+        if (i == p.sel) { surfaceRoundRect(S, x + 6, iy, w - 12, rowH, 5, C_SURFACE2) }
+        if (p.mode == "files") {
+            iconFileKind(fileKind(it[1]), x + 14, iy + 3, 20, C_SUBTEXT)
+            surfaceText(S, it[1], x + 42, iy + 5, 16, C_TEXT)
+        } else {
+            surfaceText(S, it[1], x + 16, iy + 5, 16, C_TEXT)
+            if (it[2] != "") { surfaceText(S, it[2], x + w - 16 - textWidth(it[2], 14), iy + 6, 14, C_DIM) }
+        }
+        uiRegion("pal:" + toString(i), x + 6, iy, w - 12, rowH)
+        iy = iy + rowH
+        i = i + 1
+    }
+    uiRegion("pal.box", x, y, w, h)
+}
+
+// ---------- пошук у файлах ----------
+
+func runSearch() {
+    app.searchResults = []
+    var q = toLower(app.searchText)
+    if (len(q) < 2) { return }
+    for f in _allFiles(app.dir, 0) {
+        if (fileKind(f) == "blocks") { continue }
+        var lines = []
+        try { lines = split(readFile(f), "\n") } catch (e) { continue }
+        var ln = 0
+        while (ln < len(lines)) {
+            if (contains(toLower(lines[ln]), q)) {
+                append(app.searchResults, [f, ln, trim(lines[ln])])
+                if (len(app.searchResults) >= 200) { return }
+            }
+            ln = ln + 1
+        }
+    }
+}
+
+// Усі файли теки рекурсивно (без прихованих і великих службових тек).
+func _allFiles(dir, depth) {
+    var out = []
+    if (depth > 6) { return out }
+    var names = []
+    try { names = listDir(dir) } catch (e) { return out }
+    for n in names {
+        if (startsWith(n, ".") || indexOf(SKIP_DIRS, n) >= 0) { continue }
+        var p = joinPath(dir, n)
+        if (dirExists(p)) { for x in _allFiles(p, depth + 1) { append(out, x) } }
+        else { append(out, p) }
+    }
+    return out
+}
+
+// ---------- налаштування, рівень, пропозиції гайду ----------
+
+struct Settings {
+    level: string
+    blocks: bool
+    lessons: bool
+    hints: bool
+    offers: bool
+    seen: array
+}
+
+// Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
+// або шлях з NYX_IDE_CONFIG (тести - щоб не чіпати справжні налаштування).
+func configPath() {
+    var p = osEnv("NYX_IDE_CONFIG")
+    if (p != null && p != "") { return p }
+    return joinPath(joinPath(homeDir(), ".nyx-ide"), "налаштування.json")
+}
+
+func loadSettings() {
+    var path = configPath()
+    if (!fileExists(path)) { return null }
+    try {
+        var m = fromJson(readFile(path))
+        var seen = []
+        if (mapHas(m, "seen")) { for x in mapGet(m, "seen") { append(seen, toString(x)) } }
+        return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
+            lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
+            offers: mapGet(m, "offers") == true, seen: seen }
+    } catch (e) { return null }
+}
+
+func saveSettings() {
+    var c = app.cfg
+    var m = newMap()
+    mapSet(m, "level", c.level)
+    mapSet(m, "blocks", c.blocks)
+    mapSet(m, "lessons", c.lessons)
+    mapSet(m, "hints", c.hints)
+    mapSet(m, "offers", c.offers)
+    mapSet(m, "seen", c.seen)
+    var path = configPath()
+    var parts = split(replace(path, "\\", "/"), "/")
+    var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
+    if (dir != "" && !dirExists(dir)) { makeDir(dir) }
+    writeFile(path, toJson(m))
+}
+
+func defaultSettings(level) {
+    var adv = level == "advanced"
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [] }
+}
+
+var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
+              ["middle", "Середній", "Вже трохи писав(ла) код, але IDE нова"],
+              ["advanced", "Просунутий", "Пишу програми; блоки й уроки не потрібні"]]
+
+// Вибір рівня (перший запуск або в Налаштуваннях): виставляє налаштування.
+func applyLevel(level, firstRun) {
+    var seen = []
+    if (app.cfg != null) { seen = app.cfg.seen }
+    app.cfg = defaultSettings(level)
+    app.cfg.seen = seen
+    app.askLevel = false
+    saveSettings()
+    if (!firstRun) { return }
+    if (level == "beginner") {
+        // новачкові - одразу: екскурсія, потім урок 1
+        app.mode = "blocks"
+        openLesson(0)
+        startTour(true)
+    } else {
+        // іншим гайд не нав'язуємо - лише пропонуємо (з кнопкою "Не треба")
+        offerOnce("tour")
+    }
+}
+
+// Пропозиції гайду: ключ -> [текст, дія кнопки "Показати"].
+func offerInfo(key) {
+    if (key == "tour") { return ["Показати, що де в Nyx IDE? (коротка екскурсія)", "g.tour"] }
+    if (key == "blocks") { return ["Показати, як складати програму з блоків?", "offer.blocks"] }
+    if (key == "code") { return ["Показати основи коду NyxilumLang?", "offer.code"] }
+    if (key == "history") { return ["Пояснити, як працює історія версій?", "offer.history"] }
+    if (key == "ext") { return ["Пояснити, що таке розширення?", "offer.ext"] }
+    return null
+}
+
+// Запропонувати (один раз на ключ, якщо пропозиції ввімкнено).
+func offerOnce(key) {
+    if (app.cfg == null || !app.cfg.offers || app.tour >= 0 || app.demo != null) { return }
+    if (indexOf(app.cfg.seen, key) >= 0) { return }
+    app.offer = key
+}
+
+func dismissOffer(forever) {
+    if (app.offer != null) {
+        append(app.cfg.seen, app.offer)
+        app.offer = null
+    }
+    if (forever) { app.cfg.offers = false }
+    saveSettings()
+}
+
+func drawOffer(W, H) {
+    var info = offerInfo(app.offer)
+    if (info == null) { return }
+    var w = 360
+    var lines = wrapLines(info[0], w - 32, 16)
+    var h = 74 + len(lines) * 20
+    var x = W - w - 16
+    var y = H - STATUS_H - h - 12
+    surfaceRoundRect(S, x + 3, y + 3, w, h, 10, 0x88000000)
+    surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
+    surfaceRoundRect(S, x, y, 4, h, 2, C_YELLOW)
+    var ly = y + 14
+    for l in lines {
+        surfaceText(S, l, x + 16, ly, 16, C_TEXT)
+        ly = ly + 20
+    }
+    uiButton("offer.yes", "Показати", x + 16, y + h - 44, 110, 32, "primary")
+    uiButton("offer.no", "Не треба", x + 134, y + h - 44, 100, 32, "normal")
+    uiButton("offer.never", "Не пропонувати", x + 240, y + h - 44, w - 252, 32, "flat")
+}
+
+func offerAction(id) {
+    var key = app.offer
+    if (id == "offer.no") {
+        dismissOffer(false)
         return
     }
-    surfaceText(S, "Мої програми", 16, y0 + 14, 16, C_SUBTEXT, true)
-    uiButton("files.toggle", "‹", LEFT_W - 36, y0 + 8, 28, 28, "flat")
-    var y = y0 + 44
-    for name in app.files {
-        var path = joinPath(app.dir, name)
-        var on = path == app.current || path == app.currentB
-        var hover = uiHover(0, y, LEFT_W, 30)
-        if (on) { surfaceRect(S, 0, y, LEFT_W, 30, C_SURFACE) }
-        else if (hover) { surfaceRect(S, 0, y, LEFT_W, 30, C_BG) }
-        if (on) { surfaceRect(S, 0, y, 3, 30, C_ACCENT) }
-        var label = substring(name, 0, len(name) - len(ext()))
-        var color = C_SUBTEXT
-        if (on) { color = C_TEXT }
-        surfaceText(S, uiFit(label, LEFT_W - 50, 16), 20, y + 7, 16, color)
-        var on2 = (mapHas(app.editors, path) && mapGet(app.editors, path).dirty) || (mapHas(app.blocks, path) && mapGet(app.blocks, path).dirty)
-        if (on2) {
-            surfaceCircle(S, LEFT_W - 20, y + 15, 4, C_PEACH)
-        }
-        uiRegion("file:" + path, 0, y, LEFT_W, 30)
-        y = y + 30
-        if (y > y0 + h - 60) { break }
+    if (id == "offer.never") {
+        dismissOffer(true)
+        setStatus("Гайд більше не пропонуватиметься (увімкнути - у Налаштуваннях)")
+        return
     }
-    uiButton("newfile", "+ Нова програма", 12, y0 + h - 46, LEFT_W - 24, 34, "normal")
+    if (id == "offer.yes") {
+        var info = offerInfo(key)
+        dismissOffer(false)
+        doAction(info[1])
+        return
+    }
+    // дії "Показати"
+    if (id == "offer.blocks") {
+        app.side = "learn"
+        openLesson(0)
+        startDemo(LESSONS[0].demo, true)
+    } else if (id == "offer.code") {
+        app.side = "learn"
+        app.guideTab = "lessons"
+        app.guideLesson = 7
+    } else if (id == "offer.history") {
+        startTour(false)
+        tourGo(9)
+    } else if (id == "offer.ext") {
+        setStatus("Розширення - окремі програми .nx, які додають IDE нові можливості (наприклад, перевірку коду Anylint).")
+    }
+}
+
+func drawLevelAsk(W, H) {
+    surfaceRect(S, 0, 0, W, H, 0xcc000000)
+    var w = min(760, W - 40)
+    var h = 330
+    var x = toInt((W - w) / 2)
+    var y = toInt((H - h) / 2)
+    surfaceRoundRect(S, x, y, w, h, 14, C_PANEL)
+    surfaceText(S, "Привіт! Хто ти в програмуванні?", x + 28, y + 26, 24, C_TEXT, true)
+    surfaceText(S, "Від цього залежить, скільки IDE підказуватиме. Змінити можна будь-коли в Налаштуваннях.", x + 28, y + 64, 14, C_SUBTEXT)
+    var cw = toInt((w - 56 - 24) / 3)
+    var i = 0
+    while (i < len(LEVELS)) {
+        var lv = LEVELS[i]
+        var cx = x + 28 + i * (cw + 12)
+        var cy = y + 100
+        var ch = 190
+        var hover = uiHover(cx, cy, cw, ch)
+        var bg = C_SURFACE
+        if (hover) { bg = C_SURFACE2 }
+        surfaceRoundRect(S, cx, cy, cw, ch, 10, bg)
+        var colors = [C_GREEN, C_ACCENT, C_MAUVE]
+        surfaceRoundRect(S, cx, cy, cw, 6, 3, colors[i])
+        surfaceText(S, lv[1], cx + 16, cy + 22, 20, C_TEXT, true)
+        var ly = cy + 60
+        for l in wrapLines(lv[2], cw - 32, 14) {
+            surfaceText(S, l, cx + 16, ly, 14, C_SUBTEXT)
+            ly = ly + 18
+        }
+        var what = "Екскурсія й уроки одразу"
+        if (lv[0] == "middle") { what = "Блоки й уроки є, гайд - за бажанням" }
+        if (lv[0] == "advanced") { what = "Без блоків і уроків (можна ввімкнути)" }
+        var wl = wrapLines(what, cw - 32, 12)
+        var wy = cy + ch - 14 - len(wl) * 16
+        for l2 in wl {
+            surfaceText(S, l2, cx + 16, wy, 12, C_DIM)
+            wy = wy + 16
+        }
+        uiRegion("level:" + lv[0], cx, cy, cw, ch)
+        i = i + 1
+    }
+}
+
+// Перемикач у Налаштуваннях.
+func _toggle(id, label, on, x, y, w) {
+    if (uiHover(x, y, w, 30)) { surfaceRoundRect(S, x, y, w, 30, 6, C_BG) }
+    var tx = x + w - 52
+    var bg = C_SURFACE2
+    if (on) { bg = C_GREEN }
+    surfaceRoundRect(S, tx, y + 6, 40, 18, 9, bg)
+    var knob = tx + 3
+    if (on) { knob = tx + 25 }
+    surfaceCircle(S, knob + 6, y + 15, 7, 0xffffff)
+    surfaceText(S, label, x + 10, y + 7, 16, C_TEXT)
+    uiRegion(id, x, y, w, 30)
+}
+
+func drawSettingsView(x, y, w, h) {
+    var c = app.cfg
+    var cy = y + 4
+    surfaceText(S, "Рівень", x + 14, cy, 14, C_SUBTEXT, true)
+    cy = cy + 24
+    var bw = toInt((w - 28) / 3)
+    var i = 0
+    while (i < len(LEVELS)) {
+        var kind = "normal"
+        if (c.level == LEVELS[i][0]) { kind = "primary" }
+        uiButton("set.level:" + LEVELS[i][0], LEVELS[i][1], x + 14 + i * bw, cy, bw - 4, 30, kind)
+        i = i + 1
+    }
+    cy = cy + 44
+    surfaceText(S, "Що показувати", x + 14, cy, 14, C_SUBTEXT, true)
+    cy = cy + 24
+    _toggle("set.blocks", "Режим блоків", c.blocks, x + 6, cy, w - 12)
+    cy = cy + 34
+    _toggle("set.lessons", "Уроки й навчання", c.lessons, x + 6, cy, w - 12)
+    cy = cy + 34
+    _toggle("set.hints", "Підказки до помилок", c.hints, x + 6, cy, w - 12)
+    cy = cy + 34
+    _toggle("set.offers", "Пропонувати гайд", c.offers, x + 6, cy, w - 12)
+    cy = cy + 46
+    uiButton("set.resetoffers", "Показувати пропозиції знову", x + 14, cy, w - 28, 30, "flat")
+    cy = cy + 40
+    uiButton("g.tour", "Екскурсія по IDE", x + 14, cy, w - 28, 30, "normal")
+    cy = cy + 46
+    for l in wrapLines("Налаштування спільні для всіх тек: " + configPath(), w - 28, 12) {
+        surfaceText(S, l, x + 14, cy, 12, C_DIM)
+        cy = cy + 16
+    }
+}
+
+func settingsAction(id) {
+    var c = app.cfg
+    if (startsWith(id, "set.level:")) {
+        applyLevel(substring(id, 10, len(id) - 10), false)
+        setStatus("Рівень змінено - налаштування виставлено під нього")
+        return
+    }
+    if (id == "set.blocks") { c.blocks = !c.blocks }
+    if (id == "set.lessons") {
+        c.lessons = !c.lessons
+        if (!c.lessons && app.side == "learn") { app.side = "" }
+    }
+    if (id == "set.hints") { c.hints = !c.hints }
+    if (id == "set.offers") { c.offers = !c.offers }
+    if (id == "set.resetoffers") {
+        c.seen = []
+        c.offers = true
+        setStatus("Пропозиції гайду показуватимуться знову")
+    }
+    saveSettings()
+    refreshFiles()
+}
+
+// ---------- малювання ----------
+
+func drawTitleBar(W) {
+    surfaceRect(S, 0, 0, W, TITLE_H, C_PANEL2)
+    surfaceText(S, "Nyx", 14, 8, 20, C_ACCENT, true)
+    surfaceText(S, "IDE", 14 + textWidth("Nyx ", 20, true), 8, 20, C_TEXT)
+    // поле "палітри команд" по центру, як у VS Code
+    var cw = min(440, W - 420)
+    if (cw > 160) {
+        var cx = toInt((W - cw) / 2)
+        var bg = C_BG
+        if (uiHover(cx, 6, cw, 24)) { bg = C_SURFACE }
+        surfaceRoundRect(S, cx, 6, cw, 24, 6, bg)
+        surfaceRectLine(S, cx, 6, cw, 24, C_BORDER, 1)
+        iconSearch(cx + 8, 9, 18, C_DIM)
+        var label = "Команди й файли  (Ctrl+Shift+P)"
+        surfaceText(S, uiFit(label, cw - 40, 14), cx + 32, 11, 14, C_DIM)
+        uiRegion("cmd.open", cx, 6, cw, 24)
+    }
+    var runnable = app.active != "" && fileKind(app.active) != "text"
+    if (app.con.running) {
+        var stopW = uiButtonW("■ Зупинити")
+        uiButton("stop", "■ Зупинити", W - stopW - 10, 4, stopW, 28, "danger")
+    } else if (runnable) {
+        var runW = uiButtonW("▶ Запустити")
+        uiButton("run", "▶ Запустити", W - runW - 10, 4, runW, 28, "primary")
+    }
+}
+
+var ALL_ACTIVITIES = [["files", "Провідник"], ["search", "Пошук у файлах"], ["history", "Історія версій"], ["learn", "Навчання"], ["ext", "Розширення"], ["settings", "Налаштування"]]
+
+// Видимі дії (без "Навчання", якщо уроки вимкнено; налаштування - окремо внизу).
+func activities() {
+    var list = []
+    for a in ALL_ACTIVITIES {
+        if (a[0] == "settings") { continue }
+        if (a[0] == "learn" && app.cfg != null && !app.cfg.lessons) { continue }
+        append(list, a)
+    }
+    return list
+}
+
+func drawActivityBar(y, h) {
+    surfaceRect(S, 0, y, ACT_W, h, C_PANEL2)
+    var acts = activities()
+    // шестерня налаштувань - внизу, як у VS Code
+    var gy = y + h - ACT_W
+    var gon = app.side == "settings"
+    var gc = C_DIM
+    if (uiHover(0, gy, ACT_W, ACT_W)) {
+        gc = C_SUBTEXT
+        app.tooltip = "Налаштування"
+    }
+    if (gon) {
+        gc = C_TEXT
+        surfaceRect(S, 0, gy, 2, ACT_W, C_ACCENT)
+    }
+    iconGear(toInt((ACT_W - 24) / 2), gy + 12, 24, gc)
+    uiRegion("act:settings", 0, gy, ACT_W, ACT_W)
+    var i = 0
+    while (i < len(acts)) {
+        var a = acts[i]
+        var iy = y + i * ACT_W
+        var on = app.side == a[0]
+        var hover = uiHover(0, iy, ACT_W, ACT_W)
+        var c = C_DIM
+        if (hover) {
+            c = C_SUBTEXT
+            app.tooltip = a[1]
+        }
+        if (on) {
+            c = C_TEXT
+            surfaceRect(S, 0, iy, 2, ACT_W, C_ACCENT)
+        }
+        var ix = toInt((ACT_W - 24) / 2)
+        if (a[0] == "files") { iconFiles(ix, iy + 12, 24, c) }
+        if (a[0] == "search") { iconSearch(ix, iy + 12, 24, c) }
+        if (a[0] == "history") { iconHistory(ix, iy + 12, 24, c) }
+        if (a[0] == "learn") { iconLearn(ix, iy + 12, 24, c) }
+        if (a[0] == "ext") { iconExt(ix, iy + 12, 24, c) }
+        uiRegion("act:" + a[0], 0, iy, ACT_W, ACT_W)
+        i = i + 1
+    }
+}
+
+func _sideTitle(view) {
+    for a in ALL_ACTIVITIES { if (a[0] == view) { return toUpper(a[1]) } }
+    return ""
+}
+
+func drawSidebar(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_PANEL)
+    uiRegion("side.panel", x, y, w, h)
+    surfaceText(S, _sideTitle(app.side), x + 14, y + 10, 14, C_SUBTEXT, true)
+    uiButton("side.collapse", "‹", x + w - 32, y + 4, 26, 26, "flat")
+    var cy = y + 34
+    var ch = h - 34
+    if (app.side == "files") { drawExplorer(x, cy, w, ch) }
+    else if (app.side == "search") { drawSearchView(x, cy, w, ch) }
+    else if (app.side == "history") {
+        refreshHistoryDiff()
+        if (app.active == "") { surfaceText(S, "Відкрий файл, щоб бачити його версії.", x + 14, cy + 8, 14, C_DIM) }
+        else { drawHistory(curPath(), app.histList, app.histCounts, app.histSel, app.histDiff, app.histScroll, x, cy, w, ch) }
+    }
+    else if (app.side == "learn") {
+        checkLessons()
+        drawGuide(app.guideTab, app.guideLesson, app.done, lessonCtx(), x, cy, w, ch)
+    }
+    else if (app.side == "ext") { drawExtensionsView(x, cy, w, ch) }
+    else if (app.side == "settings") { drawSettingsView(x, cy, w, ch) }
+}
+
+func _isDirty(path) {
+    if (mapHas(app.editors, path) && mapGet(app.editors, path).dirty) { return true }
+    if (mapHas(app.blocks, path) && mapGet(app.blocks, path).dirty) { return true }
+    return false
+}
+
+func drawExplorer(x, y, w, h) {
+    // кнопки "нова програма"
+    if (app.cfg.blocks) {
+        var bw = toInt((w - 36) / 2)
+        uiButton("newcode", "+ Код", x + 12, y, bw, 28, "normal")
+        uiButton("newblocks", "+ Блоки", x + 24 + bw, y, bw, 28, "normal")
+    } else {
+        uiButton("newcode", "+ Нова програма", x + 12, y, w - 24, 28, "normal")
+    }
+    var top = y + 38
+    var rowH = 24
+    surfaceClip(S, x, top, w, h - 38)
+    var ry = top - app.sideScroll
+    for f in app.files {
+        if (ry + rowH >= top && ry < top + h) {
+            var path = f[0]
+            var on = path == app.active
+            var indent = 10 + f[2] * 14
+            if (on) { surfaceRect(S, x, ry, w, rowH, C_SURFACE) }
+            else if (uiHover(x, ry, w, rowH)) { surfaceRect(S, x, ry, w, rowH, C_BG) }
+            if (f[3]) {
+                iconChevron(x + indent, ry + 2, 20, mapHas(app.expanded, path), C_SUBTEXT)
+                iconFileKind("dir", x + indent + 18, ry + 3, 18, C_SUBTEXT)
+                surfaceText(S, uiFit(f[1], w - indent - 50, 16), x + indent + 42, ry + 4, 16, C_SUBTEXT)
+                uiRegion("dir:" + path, x, ry, w, rowH)
+            } else {
+                var kind = fileKind(path)
+                iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
+                var label = f[1]
+                if (kind == "blocks") { label = substring(label, 0, len(label) - 4) }
+                if (kind == "code") { label = substring(label, 0, len(label) - 3) }
+                var col = C_SUBTEXT
+                if (on) { col = C_TEXT }
+                surfaceText(S, uiFit(label, w - indent - 64, 16), x + indent + 42, ry + 4, 16, col)
+                if (_isDirty(path)) { surfaceCircle(S, x + w - 16, ry + 12, 4, C_PEACH) }
+                uiRegion("file:" + path, x, ry, w, rowH)
+            }
+        }
+        ry = ry + rowH
+    }
+    surfaceUnclip(S)
+}
+
+func drawSearchView(x, y, w, h) {
+    var focused = app.focus == "search"
+    var border = C_SURFACE2
+    if (focused) { border = C_ACCENT }
+    surfaceRoundRect(S, x + 10, y, w - 20, 30, 6, border)
+    surfaceRoundRect(S, x + 11, y + 1, w - 22, 28, 6, C_BG)
+    var tw = surfaceText(S, app.searchText, x + 20, y + 7, 16, C_TEXT)
+    if (focused) { surfaceRect(S, x + 21 + tw, y + 5, 2, 20, C_ACCENT) }
+    if (app.searchText == "" && !focused) { surfaceText(S, "Шукати в усіх файлах…", x + 20, y + 7, 16, C_DIM) }
+    uiRegion("search.input", x + 10, y, w - 20, 30)
+    var cy = y + 40
+    if (len(app.searchText) >= 2) {
+        surfaceText(S, toString(len(app.searchResults)) + " збігів", x + 14, cy, 14, C_DIM)
+        cy = cy + 22
+    }
+    surfaceClip(S, x, cy, w, h - (cy - y))
+    var ry = cy - app.sideScroll
+    var lastFile = ""
+    var i = 0
+    while (i < len(app.searchResults) && ry < y + h) {
+        var r = app.searchResults[i]
+        if (r[0] != lastFile) {
+            lastFile = r[0]
+            iconFileKind(fileKind(r[0]), x + 10, ry + 3, 16, C_DIM)
+            surfaceText(S, uiFit(fileName(r[0]), w - 40, 14), x + 32, ry + 4, 14, C_TEXT, true)
+            ry = ry + 22
+        }
+        if (uiHover(x, ry, w, 22)) { surfaceRect(S, x, ry, w, 22, C_BG) }
+        surfaceText(S, toString(r[1] + 1), x + 22, ry + 4, 14, C_DIM)
+        surfaceText(S, uiFit(r[2], w - 64, 14), x + 56, ry + 4, 14, C_SUBTEXT)
+        uiRegion("sres:" + toString(i), x, ry, w, 22)
+        ry = ry + 22
+        i = i + 1
+    }
+    surfaceUnclip(S)
+}
+
+func drawExtensionsView(x, y, w, h) {
+    surfaceText(S, "Розширення - незабаром.", x + 14, y + 8, 14, C_DIM)
+}
+
+func drawTabs(x, y, w) {
+    surfaceRect(S, x, y, w, TABS_H, C_PANEL2)
+    uiRegion("tabs", x, y, w, TABS_H)
+    var tx = x
+    for path in app.tabs {
+        var name = fileName(path)
+        var tw = textWidth(name, 14) + 64
+        var on = path == app.active
+        var bg = C_PANEL2
+        if (on) { bg = C_BG }
+        else if (uiHover(tx, y, tw, TABS_H)) { bg = C_PANEL }
+        surfaceRect(S, tx, y, tw, TABS_H, bg)
+        if (on) { surfaceRect(S, tx, y, tw, 2, C_ACCENT) }
+        surfaceRect(S, tx + tw - 1, y + 6, 1, TABS_H - 12, C_BORDER)
+        iconFileKind(fileKind(path), tx + 10, y + 8, 18, C_DIM)
+        var col = C_SUBTEXT
+        if (on) { col = C_TEXT }
+        surfaceText(S, name, tx + 34, y + 10, 14, col)
+        uiRegion("tab:" + path, tx, y, tw, TABS_H)
+        // "●" незбережене, "×" - закрити (під мишею)
+        var bx = tx + tw - 24
+        if (uiHover(bx, y + 7, 20, 20)) {
+            surfaceRoundRect(S, bx, y + 7, 20, 20, 4, C_SURFACE2)
+            surfaceLine(S, bx + 6, y + 13, bx + 13, y + 20, C_TEXT, 2)
+            surfaceLine(S, bx + 13, y + 13, bx + 6, y + 20, C_TEXT, 2)
+        } else if (_isDirty(path)) {
+            surfaceCircle(S, bx + 10, y + 17, 4, C_SUBTEXT)
+        } else if (on || uiHover(tx, y, tw, TABS_H)) {
+            surfaceLine(S, bx + 6, y + 13, bx + 13, y + 20, C_DIM, 2)
+            surfaceLine(S, bx + 13, y + 13, bx + 6, y + 20, C_DIM, 2)
+        }
+        uiRegion("tabclose:" + path, bx, y + 7, 20, 20)
+        tx = tx + tw
+        if (tx > x + w) { break }
+    }
+}
+
+func drawWelcome(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_BG)
+    var cx = x + toInt(w / 2)
+    var t1 = "Nyx IDE"
+    surfaceText(S, t1, cx - toInt(textWidth(t1, 32, true) / 2), y + 60, 32, C_TEXT, true)
+    var t2 = "Програмування блоками і кодом мовою NyxilumLang"
+    surfaceText(S, t2, cx - toInt(textWidth(t2, 16) / 2), y + 104, 16, C_SUBTEXT)
+    var bw = 260
+    var bx = cx - toInt(bw / 2)
+    var by = y + 150
+    if (app.cfg.blocks) {
+        uiButton("newblocks", "+ Нова програма з блоків", bx, by, bw, 36, "normal")
+        by = by + 46
+    }
+    uiButton("newcode", "+ Нова програма кодом", bx, by, bw, 36, "normal")
+    if (app.cfg.lessons) { uiButton("act:learn", "Уроки й приклади", bx, by + 46, bw, 36, "primary") }
+    var t3 = "Ctrl+Shift+P - усі команди    Ctrl+P - відкрити файл"
+    surfaceText(S, t3, cx - toInt(textWidth(t3, 14) / 2), by + 152, 14, C_DIM)
+}
+
+func layoutConsoleH(H) {
+    var maxH = H - TITLE_H - STATUS_H - TABS_H - 120
+    app.consoleH = clamp(app.consoleH, 90, max(90, maxH))
+    return app.consoleH
+}
+
+func drawPanel(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    surfaceRect(S, x, y, w, 1, C_BORDER)
+    uiRegion("panel", x, y, w, h)
+    var tabs = [["console", "КОНСОЛЬ"], ["problems", "ПРОБЛЕМИ"]]
+    var tx = x + 10
+    for t in tabs {
+        var label = t[1]
+        if (t[0] == "problems" && len(app.problems) > 0) { label = label + " " + toString(len(app.problems)) }
+        var lw = textWidth(label, 14) + 16
+        var on = app.panelTab == t[0]
+        var col = C_DIM
+        if (on) { col = C_TEXT }
+        surfaceText(S, label, tx + 8, y + 8, 14, col, on)
+        if (on) { surfaceRect(S, tx + 8, y + PANEL_HEAD_H - 3, lw - 16, 2, C_ACCENT) }
+        uiRegion("ptab:" + t[0], tx, y, lw, PANEL_HEAD_H)
+        tx = tx + lw + 6
+    }
+    if (app.con.running) {
+        surfaceCircle(S, tx + 14, y + 15, 5, C_GREEN)
+        surfaceText(S, "програма працює", tx + 26, y + 8, 14, C_GREEN)
+    }
+    uiButton("panel.toggle", "×", x + w - 34, y + 3, 26, 24, "flat")
+    var by = y + PANEL_HEAD_H
+    var bh = h - PANEL_HEAD_H
+    if (app.panelTab == "console") { conDraw(app.con, x, by, w - 34, bh) }
+    else { drawProblems(x, by, w, bh) }
+}
+
+// Проблема: [файл, рядок (0-based, -1 - невідомо), повідомлення, вид "error"/"warning"/"info", джерело]
+func drawProblems(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    if (len(app.problems) == 0) {
+        surfaceText(S, "Проблем не знайдено.", x + 14, y + 8, 14, C_DIM)
+        return
+    }
+    surfaceClip(S, x, y, w, h)
+    var ry = y + 4
+    var i = 0
+    while (i < len(app.problems) && ry < y + h) {
+        var p = app.problems[i]
+        if (uiHover(x, ry, w, 22)) { surfaceRect(S, x, ry, w, 22, C_BG) }
+        var col = C_RED
+        if (p[3] == "warning") { col = C_YELLOW }
+        if (p[3] == "info") { col = C_ACCENT }
+        surfaceCircle(S, x + 18, ry + 11, 5, col)
+        var where = fileName(p[0])
+        if (p[1] >= 0) { where = where + ":" + toString(p[1] + 1) }
+        var sx = surfaceText(S, where, x + 32, ry + 4, 14, C_SUBTEXT)
+        surfaceText(S, uiFit(p[2], w - sx - 160, 14), x + 44 + sx, ry + 4, 14, C_TEXT)
+        if (p[4] != "") { surfaceText(S, p[4], x + w - 12 - textWidth(p[4], 12), ry + 5, 12, C_DIM) }
+        uiRegion("prob:" + toString(i), x, ry, w, 22)
+        ry = ry + 22
+        i = i + 1
+    }
+    surfaceUnclip(S)
 }
 
 func drawStatus(W, H) {
     var y = H - STATUS_H
-    surfaceRect(S, 0, y, W, STATUS_H, C_PANEL2)
-    var ed = currentEditor()
-    var left = ""
-    if (app.mode == "blocks") {
-        var ws = currentBlocks()
-        if (ws != null) {
-            left = fileName(ws.path)
-            if (ws.dirty) { left = left + "   • не збережено" } else { left = left + "   √ збережено" }
-        }
-    } else if (ed != null) {
-        left = fileName(ed.path) + "   рядок " + toString(ed.cy + 1) + ", стовпчик " + toString(ed.cx + 1)
-        if (ed.dirty) { left = left + "   • не збережено" } else { left = left + "   √ збережено" }
+    var bg = 0x2c5aa0
+    if (app.con.running) { bg = 0xb5651d }
+    surfaceRect(S, 0, y, W, STATUS_H, bg)
+    var fg = 0xffffff
+    var x = 10
+    var errs = 0
+    var warns = 0
+    for p in app.problems {
+        if (p[3] == "error") { errs = errs + 1 }
+        if (p[3] == "warning") { warns = warns + 1 }
     }
-    surfaceText(S, left, 12, y + 5, 14, C_SUBTEXT)
-    var msg = "F5 - запустити   Ctrl+S - зберегти   Ctrl+Z - скасувати   Ctrl+/ - коментар   Ctrl+= / Ctrl+- - шрифт"
-    if (app.mode == "blocks") { msg = "Тягни блоки мишею   Права кнопка - меню блока   F5 - запустити   Ctrl+Z - скасувати" }
-    if (app.status != "" && timeMs() - app.statusTime < 4000) { msg = app.status }
-    var mw = textWidth(msg, 14)
-    surfaceText(S, msg, W - mw - 12, y + 5, 14, C_DIM)
-}
-
-func layoutConsoleH(H) {
-    var maxH = H - TOP_H - STATUS_H - 120
-    app.consoleH = clamp(app.consoleH, 90, max(90, maxH))
-    return app.consoleH
+    // "×N  !N" - кількість проблем (клік - нижня панель "Проблеми")
+    surfaceLine(S, x, y + 8, x + 8, y + 16, fg, 2)
+    surfaceLine(S, x + 8, y + 8, x, y + 16, fg, 2)
+    x = x + 14 + surfaceText(S, toString(errs), x + 14, y + 5, 14, fg)
+    surfaceText(S, "!", x + 10, y + 5, 14, fg, true)
+    x = x + 22 + surfaceText(S, toString(warns), x + 22, y + 5, 14, fg)
+    uiRegion("status.problems", 0, y, x + 10, STATUS_H)
+    if (app.status != "" && timeMs() - app.statusTime < 4000) {
+        surfaceText(S, uiFit(app.status, W - x - 420, 14), x + 24, y + 5, 14, fg)
+    } else if (app.con.running) {
+        surfaceText(S, "Програма працює…", x + 24, y + 5, 14, fg)
+    }
+    // праворуч: позиція, відступи, кодування, мова
+    var right = []
+    var ed = currentEditor()
+    if (app.active != "" && fileKind(app.active) == "blocks") {
+        append(right, "Блоки")
+    } else if (ed != null && app.active != "") {
+        append(right, "Рядок " + toString(ed.cy + 1) + ", стовпчик " + toString(ed.cx + 1))
+        append(right, "Пробіли: 4")
+        append(right, "UTF-8")
+        if (ed.plain) { append(right, "Текст") } else { append(right, "NyxilumLang") }
+    }
+    var rx = W - 12
+    var k = len(right) - 1
+    while (k >= 0) {
+        var tw = textWidth(right[k], 14)
+        rx = rx - tw
+        surfaceText(S, right[k], rx, y + 5, 14, fg)
+        rx = rx - 22
+        k = k - 1
+    }
 }
 
 func draw() {
     var W = surfaceWidth(S)
     var H = surfaceHeight(S)
-    if (app.filesCollapsed) { LEFT_W = FILES_COLLAPSED_W } else { LEFT_W = FILES_W }
     uiBegin()
+    app.tooltip = ""
     surfaceClear(S, C_BG)
-    drawTopBar(W)
-    drawFiles(H)
+    drawTitleBar(W)
+    var bodyY = TITLE_H
+    var bodyH = H - TITLE_H - STATUS_H
+    drawActivityBar(bodyY, bodyH)
 
-    var cx = LEFT_W
-    var cw = W - LEFT_W
-    if (app.guideOpen) { cw = cw - GUIDE_W }
-    if (app.histOpen) { cw = cw - HISTORY_W }
-    var conH = layoutConsoleH(H)
-    var edY = TOP_H
-    var edH = H - TOP_H - STATUS_H - conH
-    var ed = currentEditor()
-    if (app.mode == "blocks") {
-        var ws = currentBlocks()
-        if (ws != null) { blocksDraw(ws, cx, edY, cw, edH, blocksTitle(ws)) }
-    } else if (ed != null) {
-        edDraw(ed, cx, edY, cw, edH, app.focus == "editor" && app.dialog == null)
+    var sideW = 0
+    if (app.side != "") {
+        sideW = clamp(app.sideW, 200, max(200, W - ACT_W - 400))
+        drawSidebar(ACT_W, bodyY, sideW, bodyH)
+        uiRegion("sash.side", ACT_W + sideW - 3, bodyY, 7, bodyH)
     }
-    conDraw(app.con, cx, edY + edH, cw, conH)
-    uiRegion("split", cx, edY + edH - 3, cw, 7)
-    if (app.guideOpen) {
-        checkLessons()
-        drawGuide(app.guideTab, app.guideLesson, app.done, lessonCtx(), W - GUIDE_W, TOP_H, H - TOP_H - STATUS_H)
+    var ex = ACT_W + sideW
+    var ew = W - ex
+    LEFT_W = ex
+    var panelH = 0
+    if (app.panelOpen) { panelH = layoutConsoleH(H) }
+    var tabsY = bodyY
+    var edY = tabsY + TABS_H
+    var edH = bodyH - TABS_H - panelH
+
+    if (len(app.tabs) == 0) {
+        drawWelcome(ex, bodyY, ew, bodyH - panelH)
+    } else {
+        drawTabs(ex, tabsY, ew)
+        if (app.mode == "blocks") {
+            var ws = currentBlocks()
+            if (ws != null) { blocksDraw(ws, ex, edY, ew, edH, blocksTitle(ws)) }
+        } else {
+            var ed = currentEditor()
+            if (ed != null) { edDraw(ed, ex, edY, ew, edH, app.focus == "editor" && app.dialog == null && app.palette == null) }
+        }
     }
-    if (app.histOpen) {
-        refreshHistoryDiff()
-        drawHistory(curPath(), app.histList, app.histCounts, app.histSel, app.histDiff, app.histScroll, W - HISTORY_W, TOP_H, H - TOP_H - STATUS_H)
+    if (app.panelOpen) {
+        drawPanel(ex, bodyY + bodyH - panelH, ew, panelH)
+        uiRegion("split", ex, bodyY + bodyH - panelH - 3, ew, 7)
     }
     drawStatus(W, H)
+    if (app.tooltip != "" && app.palette == null && app.dialog == null) { uiTooltip(app.tooltip) }
+    if (app.offer != null && app.tour < 0 && app.palette == null && app.dialog == null) { drawOffer(W, H) }
+    if (app.palette != null) { drawCmdPalette() }
     if (app.dialog != null) { drawDialog() }
+    if (app.askLevel) { drawLevelAsk(W, H) }
     if (app.tour >= 0) { drawTour(app.tour) }
     if (app.demo != null) { drawDemoCursor() }
     surfacePresent(S)
 }
 
 // ---------- події ----------
+
+func toggleSide(view) {
+    if (app.side == view) { app.side = "" } else {
+        app.side = view
+        app.sideScroll = 0
+        if (view == "history") {
+            app.histSel = -1
+            loadHistory()
+            offerOnce("history")
+        }
+        if (view == "ext") { offerOnce("ext") }
+        if (view == "search") { app.focus = "search" }
+        if (view == "files") { refreshFiles() }
+    }
+}
 
 func doAction(id) {
     if (id == "run") { runCurrent() }
@@ -513,48 +1381,82 @@ func doAction(id) {
         saveAll()
         setStatus("Збережено √")
     }
-    else if (id == "mode.blocks") { setMode("blocks") }
-    else if (id == "mode.code") { setMode("code") }
     else if (id == "btogglecode") {
         var ws = currentBlocks()
-        if (ws != null) { ws.showCode = !ws.showCode }
+        if (ws != null && app.mode == "blocks") { ws.showCode = !ws.showCode }
     }
-    else if (id == "bopencode") { blocksToCode() }
+    else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
     else if (id == "bclear") {
-        var ws = currentBlocks()
-        if (ws != null) {
-            blocksClear(ws)
+        var ws2 = currentBlocks()
+        if (ws2 != null) {
+            blocksClear(ws2)
             setStatus("Почали спочатку (Ctrl+Z - повернути блоки)")
         }
     }
-    else if (id == "newfile") { openDialog("Назва нової програми", freeName(), "new") }
+    else if (id == "newcode") { openDialog("Назва нової програми (код)", freeName("code"), "newcode") }
+    else if (id == "newblocks") { openDialog("Назва нової програми з блоків", freeName("blocks"), "newblocks") }
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
-    else if (id == "help") {
-        app.guideOpen = !app.guideOpen
-        if (app.guideOpen) { app.histOpen = false }
+    else if (startsWith(id, "act:")) { toggleSide(substring(id, 4, len(id) - 4)) }
+    else if (id == "side.collapse") { app.side = "" }
+    else if (id == "side.toggle") {
+        if (app.side == "") { app.side = "files" } else { app.side = "" }
     }
-    else if (id == "files.toggle") { app.filesCollapsed = !app.filesCollapsed }
-    else if (id == "history") {
-        app.histOpen = !app.histOpen
-        if (app.histOpen) {
-            app.guideOpen = false
-            app.histSel = -1
-            loadHistory()
+    else if (id == "panel.toggle") { app.panelOpen = !app.panelOpen }
+    else if (startsWith(id, "ptab:")) { app.panelTab = substring(id, 5, len(id) - 5) }
+    else if (id == "status.problems") {
+        app.panelOpen = true
+        app.panelTab = "problems"
+    }
+    else if (startsWith(id, "prob:")) {
+        var p = app.problems[toInt(substring(id, 5, len(id) - 5))]
+        if (fileExists(p[0])) {
+            openPath(p[0])
+            var ed = currentEditor()
+            if (ed != null && p[1] >= 0 && app.mode == "code") { edGoToLine(ed, p[1]) }
         }
+    }
+    else if (id == "cmd.open") { openPalette("commands") }
+    else if (id == "quickopen") { openPalette("files") }
+    else if (startsWith(id, "pal:")) {
+        var it = app.palette.items[toInt(substring(id, 4, len(id) - 4))]
+        app.palette = null
+        doAction(it[0])
+    }
+    else if (id == "closetab") { if (app.active != "") { closeTab(app.active) } }
+    else if (startsWith(id, "tabclose:")) { closeTab(substring(id, 9, len(id) - 9)) }
+    else if (startsWith(id, "tab:")) { openPath(substring(id, 4, len(id) - 4)) }
+    else if (startsWith(id, "dir:")) {
+        var d = substring(id, 4, len(id) - 4)
+        if (mapHas(app.expanded, d)) { mapRemove(app.expanded, d) } else { mapSet(app.expanded, d, true) }
+        refreshFiles()
+    }
+    else if (startsWith(id, "sres:")) {
+        var r = app.searchResults[toInt(substring(id, 5, len(id) - 5))]
+        openPath(r[0])
+        var ed2 = currentEditor()
+        if (ed2 != null && app.mode == "code") { edGoToLine(ed2, r[1]) }
+    }
+    else if (id == "find") {
+        var ed3 = currentEditor()
+        if (ed3 != null && app.mode == "code") { ed3.findOpen = true }
+    }
+    else if (id == "zoomin" || id == "zoomout") {
+        var ed4 = currentEditor()
+        var dz = 1
+        if (id == "zoomout") { dz = -1 }
+        if (ed4 != null) { edZoom(ed4, dz) }
     }
     else if (startsWith(id, "h.")) { historyAction(id) }
     else if (id == "t.next") { tourGo(app.tour + 1) }
     else if (id == "t.prev") { tourGo(app.tour - 1) }
     else if (id == "t.skip") { endTour() }
-
     else if (startsWith(id, "g.")) { guideAction(id) }
-    else if (startsWith(id, "file:")) {
-        saveAll()
-        var path = substring(id, 5, len(id) - 5)
-        if (app.mode == "blocks") { openBlocks(path) } else { openFile(path) }
-    }
+    else if (startsWith(id, "file:")) { openPath(substring(id, 5, len(id) - 5)) }
+    else if (startsWith(id, "offer.")) { offerAction(id) }
+    else if (startsWith(id, "set.")) { settingsAction(id) }
+    else if (startsWith(id, "level:")) { applyLevel(substring(id, 6, len(id) - 6), true) }
 }
 
 func onMouseDown(e) {
@@ -566,7 +1468,16 @@ func onMouseDown(e) {
         if (startsWith(id, "t.")) { uiPressedId = id }
         return
     }
+    if (app.askLevel) {
+        if (startsWith(id, "level:")) { uiPressedId = id }
+        return
+    }
     if (app.dialog != null && !startsWith(id, "dialog.")) { return }
+    if (app.palette != null) {
+        if (startsWith(id, "pal:")) { uiPressedId = id }
+        else if (id != "pal.box") { app.palette = null }
+        return
+    }
 
     // подвійний/потрійний клік: те саме місце (±4 px) протягом 400 мс
     if (timeMs() - app.lastClickTime < 400 && abs(e.x - app.lastClickX) < 5 && abs(e.y - app.lastClickY) < 5) {
@@ -577,7 +1488,7 @@ func onMouseDown(e) {
     app.lastClickY = e.y
 
     var bws = currentBlocks()
-    if (app.mode == "blocks" && bws != null && (startsWith(id, "b") || len(bws.menu) > 0)) {
+    if (app.mode == "blocks" && bws != null && app.active != "" && (startsWith(id, "b") || len(bws.menu) > 0)) {
         if (blocksMouseDown(bws, e, id)) {
             app.focus = "blocks"
             app.con.focused = false
@@ -585,6 +1496,11 @@ func onMouseDown(e) {
         }
     }
 
+    // середня кнопка по вкладці - закрити
+    if (e.button == 2 && startsWith(id, "tab:")) {
+        closeTab(substring(id, 4, len(id) - 4))
+        return
+    }
     if (e.button != 1) { return }
     var ed = currentEditor()
     if (id == "editor" && ed != null) {
@@ -620,17 +1536,26 @@ func onMouseDown(e) {
         app.drag = "split"
         return
     }
+    if (id == "sash.side") {
+        app.drag = "side"
+        return
+    }
     if (id == "con.input") {
         app.focus = "console"
         app.con.focused = true
         return
     }
+    if (id == "search.input") {
+        app.focus = "search"
+        return
+    }
+    if (app.focus == "search") { app.focus = "editor" }
     uiPressedId = id
 }
 
 func onMouseUp(e) {
     var bws = currentBlocks()
-    if (app.mode == "blocks" && bws != null) { blocksMouseUp(bws, e) }
+    if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseUp(bws, e) }
     var id = uiHit(e.x, e.y)
     if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
     uiPressedId = ""
@@ -641,7 +1566,7 @@ func onMouseMove(e) {
     uiMouseX = e.x
     uiMouseY = e.y
     var bws = currentBlocks()
-    if (app.mode == "blocks" && bws != null) { blocksMouseMove(bws, e) }
+    if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseMove(bws, e) }
     var ed = currentEditor()
     if (app.drag == "editor" && ed != null) {
         var pos = edPosAt(ed, e.x, e.y)
@@ -653,12 +1578,19 @@ func onMouseMove(e) {
     if (app.drag == "split") {
         app.consoleH = surfaceHeight(S) - STATUS_H - e.y
     }
+    if (app.drag == "side") {
+        app.sideW = clamp(e.x - ACT_W, 200, max(200, surfaceWidth(S) - ACT_W - 400))
+    }
 }
 
 func onWheel(e) {
     var id = uiHit(e.x, e.y)
     if (id == "h.diff") {
         app.histScroll = max(0, app.histScroll + e.dy * 3)
+        return
+    }
+    if (id == "side.panel" || startsWith(id, "file:") || startsWith(id, "dir:") || startsWith(id, "sres:")) {
+        app.sideScroll = max(0, app.sideScroll + e.dy * 48)
         return
     }
     var bws = currentBlocks()
@@ -683,12 +1615,17 @@ func onKey(e) {
         }
         return
     }
+    if (app.askLevel) { return }
     if (app.dialog != null) {
         dialogKey(e)
         return
     }
-    if (k == "F5" || (e.ctrl && k == "r")) {
-        if (app.con.running) { conStop(app.con) } else { runCurrent() }
+    if (app.palette != null) {
+        paletteKey(e)
+        return
+    }
+    if (app.offer != null && k == "Escape") {
+        dismissOffer(false)
         return
     }
     if (app.tour >= 0) {
@@ -697,13 +1634,58 @@ func onKey(e) {
         else if (k == "Left") { tourGo(app.tour - 1) }
         return
     }
+    if (k == "F5" || (e.ctrl && k == "r")) {
+        if (app.con.running) { conStop(app.con) } else { runCurrent() }
+        return
+    }
+    if (e.ctrl && e.shift && k == "p") {
+        openPalette("commands")
+        return
+    }
+    if (e.ctrl && e.shift && k == "f") {
+        app.side = "search"
+        app.focus = "search"
+        return
+    }
+    if (e.ctrl && k == "p") {
+        openPalette("files")
+        return
+    }
+    if (e.ctrl && k == "b") {
+        doAction("side.toggle")
+        return
+    }
+    if (e.ctrl && k == "j") {
+        app.panelOpen = !app.panelOpen
+        return
+    }
+    if (e.ctrl && k == "w") {
+        doAction("closetab")
+        return
+    }
+    if (e.ctrl && k == "Tab" && len(app.tabs) > 1) {
+        var i = indexOf(app.tabs, app.active)
+        var step = 1
+        if (e.shift) { step = len(app.tabs) - 1 }
+        openPath(app.tabs[(i + step) % len(app.tabs)])
+        return
+    }
     if (e.ctrl && k == "s") {
         saveAll()
         setStatus("Збережено √")
         return
     }
     if (e.ctrl && k == "n") {
-        doAction("newfile")
+        doAction("newcode")
+        return
+    }
+    if (app.focus == "search") {
+        if (k == "Escape") { app.focus = "editor" }
+        else if (k == "Backspace" && len(app.searchText) > 0) {
+            app.searchText = substring(app.searchText, 0, len(app.searchText) - 1)
+            runSearch()
+        }
+        else if (k == "Enter") { runSearch() }
         return
     }
     if (app.focus == "console" && app.con.running) {
@@ -715,6 +1697,7 @@ func onKey(e) {
         conKey(app.con, e)
         return
     }
+    if (app.active == "") { return }
     if (app.mode == "blocks") {
         var bws = currentBlocks()
         if (bws != null) { blocksKey(bws, e) }
@@ -726,13 +1709,26 @@ func onKey(e) {
 
 func onText(e) {
     if (app.dialog != null) {
-        if (app.dialog.action != "new" || (e.text != "/" && e.text != "\\")) { app.dialog.text = app.dialog.text + e.text }
+        var newKind = app.dialog.action == "newcode" || app.dialog.action == "newblocks"
+        if (!newKind || (e.text != "/" && e.text != "\\")) { app.dialog.text = app.dialog.text + e.text }
+        return
+    }
+    if (app.palette != null) {
+        app.palette.text = app.palette.text + e.text
+        app.palette.sel = 0
+        refreshPalette()
+        return
+    }
+    if (app.focus == "search") {
+        app.searchText = app.searchText + e.text
+        runSearch()
         return
     }
     if (app.focus == "console" && app.con.running) {
         app.con.input = app.con.input + e.text
         return
     }
+    if (app.active == "") { return }
     if (app.mode == "blocks") {
         var bws = currentBlocks()
         if (bws != null) { blocksText(bws, e.text) }
@@ -758,11 +1754,10 @@ func handle(e) {
 
 func startTour(firstRun) {
     app.tourFirstRun = firstRun
-    app.guideOpen = false
-    app.histOpen = false
-    app.filesCollapsed = false
+    app.side = "files"
+    app.offer = null
     app.demo = null
-    if (app.mode != "blocks") { setMode("blocks") }
+    if (app.mode != "blocks" || app.active == "") { setMode("blocks") }
     tourGo(0)
 }
 
@@ -774,15 +1769,14 @@ func tourGo(step) {
     }
     app.tour = step
     app.demo = null
-    app.filesCollapsed = false
+    app.side = "files"
     if (len(TOUR[step][3]) > 0) { startDemo(TOUR[step][3], false) }
 }
 
 func endTour() {
     app.tour = -1
     app.demo = null
-    app.filesCollapsed = false
-    app.guideOpen = true
+    app.side = "learn"
     if (app.tourFirstRun) {
         app.guideTab = "lessons"
         openLesson(0)
@@ -842,7 +1836,7 @@ func saveVersion(msg) {
 }
 
 func historyAction(id) {
-    if (id == "h.close") { app.histOpen = false }
+    if (id == "h.close") { app.side = "" }
     else if (id == "h.save") { openDialog("Що змінилось у цій версії?", "", "version") }
     else if (id == "h.back") { app.histSel = -1 }
     else if (startsWith(id, "h.sel:")) {
@@ -904,10 +1898,15 @@ func openLesson(i) {
     initLessons()
     app.guideLesson = i
     var les = LESSONS[i]
-    if (les.mode != app.mode) { setMode(les.mode) }
-    if (les.check == "tocode") { return }   // урок 7 - про ту саму програму з блоків
+    // урок 7 - про ту саму програму з блоків
+    if (les.check == "tocode") {
+        if (les.mode != app.mode) { setMode(les.mode) }
+        return
+    }
     var num = substring(les.title, 0, indexOf(les.title, "."))
-    var path = joinPath(app.dir, "Урок " + num + ext())
+    var lext = ".nx"
+    if (les.mode == "blocks") { lext = ".nxb" }
+    var path = joinPath(app.dir, "Урок " + num + lext)
     if (!fileExists(path)) {
         if (les.mode == "blocks") {
             var start = newBlock("start")
@@ -945,21 +1944,14 @@ func openExample(name) {
         i = i + 1
     }
     writeFile(joinPath(app.dir, target), readFile(src))
-    if (extn == ".nxb") {
-        setMode("blocks")
-        refreshFiles()
-        openBlocks(joinPath(app.dir, target))
-    } else {
-        setMode("code")
-        refreshFiles()
-        openFile(joinPath(app.dir, target))
-    }
+    refreshFiles()
+    openPath(joinPath(app.dir, target))
     setStatus("Приклад «" + base + "» відкрито - натисни «Запустити»!")
 }
 
 func guideAction(id) {
     initLessons()
-    if (id == "g.close") { app.guideOpen = false }
+    if (id == "g.close") { app.side = "" }
     else if (id == "g.tour") { startTour(false) }
     else if (id == "g.tab.lessons") { app.guideTab = "lessons" }
     else if (id == "g.tab.examples") { app.guideTab = "examples" }
@@ -1092,7 +2084,9 @@ func _demoPlan(step) {
     var kind = step[0]
     if (kind == "cat") {
         var ci = indexOf(CATEGORIES, step[1])
-        append(q, ["move", LEFT_W + 42, TOP_H + 10 + ci * 62 + 14, 500])
+        var cr = uiFind("bcat:" + step[1])
+        if (cr == null) { return q }
+        append(q, ["move", cr[0] + toInt(cr[2] / 2), cr[1] + toInt(cr[3] / 2), 500])
         append(q, ["down"]) append(q, ["up"]) append(q, ["wait", 300])
     } else if (kind == "drag") {
         var src = _palPos(step[1])
@@ -1208,33 +2202,42 @@ func drawDemoCursor() {
 
 func ideInit(dir) {
     if (!dirExists(dir)) { makeDir(dir) }
-    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], guideOpen: false, guideTab: "lessons", guideLesson: -1, done: [], demo: null,
-        cursorX: 0, cursorY: 0, filesCollapsed: false, hintRun: 0, tour: -1, tourFirstRun: false, histOpen: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
-        histDiff: [], histDiffKey: "", con: newConsole(),
-        focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
-        clickCount: 0, dialog: null, status: "", statusTime: 0 }
+    app = App { mode: "code", dir: dir, files: [], expanded: newMap(), editors: newMap(), current: "",
+        blocks: newMap(), currentB: "", tabs: [], active: "", side: "files", sideW: 270, sideScroll: 0,
+        panelOpen: true, panelTab: "console", problems: [], palette: null, searchText: "", searchResults: [],
+        genMap: [], guideTab: "lessons", guideLesson: -1, done: [], demo: null, cursorX: 0, cursorY: 0,
+        hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
+        histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
+        lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
+        statusTime: 0, tooltip: "", probRun: 0, cfg: null, askLevel: false, offer: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
+    app.cfg = loadSettings()
+    if (app.cfg == null) {
+        // перший запуск узагалі: спершу питання "хто ти в програмуванні"
+        app.cfg = defaultSettings("beginner")
+        app.askLevel = true
+    }
     refreshFiles()
-    if (len(app.files) == 0) {
+    // порожня тека - приклад першої програми
+    if (len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {
         var example = joinPath(ideHome(), "examples/привіт.nx")
         var text = "func main() {\n    print(\"Привіт, світе!\")\n}\n"
         if (fileExists(example)) { text = readFile(example) }
         writeFile(joinPath(dir, "привіт.nx"), text)
         refreshFiles()
     }
-    openFile(joinPath(dir, app.files[0]))
-    // прогрес уроків; перший запуск - одразу відкрити перший урок у блоках
     var progressPath = joinPath(joinPath(dir, ".nyx"), "уроки.json")
     if (fileExists(progressPath)) { app.done = loadProgress(progressPath) }
     else {
-        // одразу в режим блоків з програмою уроку 1 (без зайвої "мої блоки")
-        app.mode = "blocks"
-        openLesson(0)
-        startTour(true)
         if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }
         saveProgress(progressPath, [])
+    }
+    // без питання про рівень - відкрити першу програму коду
+    if (!app.askLevel) {
+        var codes = filesOfKind("code")
+        if (len(codes) > 0) { openPath(codes[0]) }
     }
     draw()
     return s

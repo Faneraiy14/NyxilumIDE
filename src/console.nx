@@ -187,29 +187,22 @@ func conKey(con, e) {
     return false
 }
 
+// Тіло консолі (заголовок з вкладками малює нижня панель IDE).
 func conDraw(con, x, y, w, h) {
     con.x = x
     con.y = y
     con.w = w
     con.h = h
     surfaceRect(S, x, y, w, h, C_PANEL2)
-    surfaceRect(S, x, y, w, 1, C_BORDER)
     uiRegion("con.area", x, y, w, h)
-
-    // заголовок
-    surfaceText(S, "Консоль", x + 12, y + 8, 16, C_SUBTEXT, true)
-    if (con.running) {
-        surfaceCircle(S, x + 100, y + 16, 5, C_GREEN)
-        surfaceText(S, "програма працює", x + 112, y + 8, 14, C_GREEN)
-    }
     var bw = uiButtonW("Очистити")
-    uiButton("con.clear", "Очистити", x + w - bw - 8, y + 4, bw, 26, "flat")
+    uiButton("con.clear", "Очистити", x + w - bw - 8, y + 2, bw, 24, "flat")
 
     var inputH = 0
     if (con.running) { inputH = 34 }
     var lh = 18
-    var top = y + 36
-    var areaH = h - 36 - inputH - 4
+    var top = y + 6
+    var areaH = h - 6 - inputH - 4
     var rows = max(1, toInt(areaH / lh))
     surfaceClip(S, x, top, w, areaH)
     var first = max(0, len(con.lines) - rows - con.scroll)
