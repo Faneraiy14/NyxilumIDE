@@ -1,0 +1,86 @@
+// Git: створити репозиторій, змінені файли (літери в панелі й Провіднику),
+// коміт через діалог, різниця з комітом, нова гілка, перемикання гілки
+// (відкритий файл перечитується), гілка в рядку стану.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_git.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, saveAll }
+import "../src/git.nx" { gitRun }
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    if (!dirExists(dir)) { makeDir(dir) }
+    if (gitRun(dir, ["--version"])[0] != 0) {
+        print("ok - git не встановлено - пропущено")
+        print("GIT: УСЕ ГАРАЗД")
+        return
+    }
+    writeFile(dir + "/гра.nx", "func main() {\n    print(1)\n}\n")
+    ideInit(dir)
+    app.side = "git"
+    draw()
+    check(!app.git.isRepo && uiFind("git.init") != null, "не репозиторій - кнопка git init")
+    clickId("git.init")
+    check(app.git.isRepo, "репозиторій створено")
+    // лише для цього тимчасового репозиторію - глобальних налаштувань не чіпаємо
+    gitRun(dir, ["config", "user.email", "test@nyx.ide"])
+    gitRun(dir, ["config", "user.name", "Nyx Test"])
+    gitRun(dir, ["config", "commit.gpgsign", "false"])
+    draw()
+    check(len(app.git.files) == 1 && app.git.files[0][0] == "U" && mapGet(app.git.byPath, dir + "/гра.nx") == "U", "новий файл - U (кирилиця в назві)")
+    clickId("git.commit")
+    check(app.dialog != null && app.dialog.action == "gitcommit", "діалог коміту")
+    typeText("Перша версія гри")
+    key("Enter", false, false)
+    step()
+    check(len(app.git.files) == 0 && contains(gitRun(dir, ["log", "--oneline"])[1], "Перша версія гри"), "коміт зроблено")
+    var defBranch = app.git.branch
+
+    // зміна в редакторі -> M, різниця з комітом
+    openPath(dir + "/гра.nx")
+    var ed = currentEditor()
+    ed.lines[1] = "    print(\"рахунок\")"
+    ed.dirty = true
+    saveAll()
+    var t0 = timeMs()
+    while (timeMs() - t0 < 3000 && len(app.git.files) == 0) { ideStep(50) }
+    check(len(app.git.files) == 1 && app.git.files[0][0] == "M", "збережена зміна - M")
+    app.side = "git"
+    draw()
+    clickId("git.file:" + dir + "/гра.nx")
+    var plus = false
+    var minus = false
+    for r in app.git.diff {
+        if (r[0] == "+" && contains(r[1], "рахунок")) { plus = true }
+        if (r[0] == "-" && contains(r[1], "print(1)")) { minus = true }
+    }
+    check(plus && minus, "різниця з останнім комітом")
+    app.side = "files"
+    draw()
+    shot("g01_explorer_letters")
+    check(uiFind("status.git") != null, "гілка в рядку стану")
+    app.side = "git"
+    draw()
+    shot("g02_git_panel")
+    clickId("git.back")
+
+    // нова гілка, коміт там, повернення на основну - файл перечитано
+    clickId("git.branches")
+    clickId("git.newbranch")
+    typeText("експеримент")
+    key("Enter", false, false)
+    step()
+    check(app.git.branch == "експеримент", "нова гілка")
+    clickId("git.commit")
+    typeText("Рахунок")
+    key("Enter", false, false)
+    step()
+    clickId("git.branches")
+    clickId("git.co:" + defBranch)
+    check(app.git.branch == defBranch && currentEditor().lines[1] == "    print(1)", "перемкнулись на " + defBranch + " - файл перечитано")
+    clickId("git.commit")
+    check(app.dialog == null && app.git.msg == "Нема змін для коміту", "без змін - коміт не пропонується")
+    ideShutdown()
+    print("GIT: УСЕ ГАРАЗД")
+}

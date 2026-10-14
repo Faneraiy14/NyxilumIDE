@@ -139,3 +139,14 @@ func iconCollapseAll(x, y, s, c) {
     surfaceRectLine(S, toInt(x + 2 * a), toInt(y + 2 * a), toInt(12 * a), toInt(12 * a), c, 1)
     _ln(x + 5 * a, y + 8 * a, x + 11 * a, y + 8 * a, c)
 }
+
+// Git: гілка - два кружечки на лінії й відгалуження.
+func iconBranch(x, y, s, c) {
+    var a = s / 24
+    surfaceCircleLine(S, toInt(x + 7 * a), toInt(y + 5 * a), toInt(2.5 * a), c, 2)
+    surfaceCircleLine(S, toInt(x + 7 * a), toInt(y + 19 * a), toInt(2.5 * a), c, 2)
+    surfaceCircleLine(S, toInt(x + 17 * a), toInt(y + 8 * a), toInt(2.5 * a), c, 2)
+    _ln(x + 7 * a, y + 8 * a, x + 7 * a, y + 16 * a, c)
+    _ln(x + 17 * a, y + 11 * a, x + 17 * a, y + 13 * a, c)
+    _ln(x + 17 * a, y + 13 * a, x + 8 * a, y + 16 * a, c)
+}

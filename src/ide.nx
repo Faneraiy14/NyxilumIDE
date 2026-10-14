@@ -22,6 +22,7 @@ import "code_to_blocks.nx"
 import "symbols.nx"
 import "term.nx"
 import "extensions.nx"
+import "git.nx"
 
 var TITLE_H = 36
 var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
@@ -102,6 +103,7 @@ struct App {
     exts: array
     lintJobs: array
     extScroll: i32
+    git: any
 }
 
 var app = null
@@ -290,6 +292,7 @@ func saveEditor(ed) {
     writeFile(ed.path, edText(ed))
     ed.dirty = false
     lintFile(ed.path)
+    app.git.stale = true
 }
 
 func saveAll() {
@@ -671,6 +674,82 @@ func renameSymbol(word, nw) {
     setStatus("Перейменовано «" + word + "» → «" + nw + "»: " + toString(total) + " місць у " + toString(files) + " файл(ах)")
 }
 
+// ---------- git ----------
+
+func gitAction(id) {
+    var g = app.git
+    if (id == "git.init") {
+        var r = gitRun(app.dir, ["init"])
+        if (r[0] == 0) {
+            // службова тека IDE - не в git (локально, без .gitignore)
+            var ex = joinPath(app.dir, ".git/info/exclude")
+            if (fileExists(ex)) { appendFile(ex, "\n# Nx IDE\n.nyx/\n") }
+            setStatus("Репозиторій створено - тепер можна робити коміти")
+        } else { g.msg = trim(r[2]) }
+        gitRefresh(g, app.dir)
+    }
+    else if (id == "git.branches") { g.showBranches = !g.showBranches }
+    else if (startsWith(id, "git.co:")) {
+        saveAll()
+        var b = substring(id, 7, len(id) - 7)
+        var r2 = gitCheckout(g, b, false)
+        g.msg = ""
+        if (r2[0]) {
+            setStatus("Гілка " + b)
+            reloadFromDisk()
+        } else { g.msg = r2[1] }
+        g.showBranches = false
+        gitRefresh(g, app.dir)
+    }
+    else if (id == "git.newbranch") { openDialog("Нова гілка: назва", "", "gitbranch") }
+    else if (id == "git.commit") {
+        saveAll()
+        gitRefresh(g, app.dir)
+        if (len(g.files) == 0) { g.msg = "Нема змін для коміту" }
+        else {
+            g.msg = ""
+            openDialog("Коміт: що змінилось? (" + toString(len(g.files)) + " файл.)", "", "gitcommit")
+        }
+    }
+    else if (id == "git.push" || id == "git.pull") {
+        saveAll()
+        app.panelOpen = true
+        app.panelTab = "terminal"
+        app.focus = "terminal"
+        if (app.term.running) { termStop(app.term) }
+        app.term.cwd = app.dir
+        if (id == "git.push") {
+            // гілка без upstream - одразу з -u, як пропонує сам git
+            if (g.upstream) { termExec(app.term, "git push") } else { termExec(app.term, "git push -u origin " + g.branch) }
+        } else { termExec(app.term, "git pull") }
+    }
+    else if (startsWith(id, "git.file:")) {
+        var p = substring(id, 9, len(id) - 9)
+        g.sel = p
+        g.scroll = 0
+        var now = ""
+        if (fileExists(p)) {
+            if (mapHas(app.editors, p)) { now = edText(mapGet(app.editors, p)) } else { now = replace(readFile(p), "\r", "") }
+        }
+        g.diff = gitCompactDiff(diffLines(gitHeadText(g, p), now))
+        if (fileExists(p) && fileKind(p) != "blocks") { openPath(p) }
+    }
+    else if (id == "git.back") { g.sel = "" }
+}
+
+// Після перемикання гілки файли на диску інші - відкриті редактори перечитати.
+func reloadFromDisk() {
+    for p in mapKeys(app.editors) {
+        var ed = mapGet(app.editors, p)
+        if (fileExists(p)) { edSetText(ed, readFile(p)) }
+        ed.dirty = false
+    }
+    for p2 in mapKeys(app.blocks) {
+        if (fileExists(p2)) { mapSet(app.blocks, p2, newBlocksWs(p2, readFile(p2))) }
+    }
+    refreshFiles()
+}
+
 // "Відкрити як блоки": проста програма кодом стає програмою з блоків
 // (code_to_blocks.nx). Чого блоками не скласти - пояснення в консолі.
 func codeToBlocksFile(path) {
@@ -833,7 +912,8 @@ func openDialog(title, text, action) {
         okLabel = "Видалити"
         suffix = ""
     }
-    if (action == "newblock" || action == "newext") { suffix = "" }
+    if (action == "newblock" || action == "newext" || action == "gitcommit" || action == "gitbranch") { suffix = "" }
+    if (action == "gitcommit") { okLabel = "Коміт" }
     if (action == "renamesym") {
         okLabel = "Перейменувати"
         suffix = ""
@@ -856,6 +936,20 @@ func closeDialog(ok) {
         openPath(edir + "/extension.json")
         openPath(edir + "/lint.nx")
         setStatus("Розширення «" + trim(d.text) + "» створено - зміни lint.nx і збережи будь-який .nx")
+    }
+    if (ok && d.action == "gitcommit") {
+        saveAll()
+        var cr = gitCommit(app.git, trim(d.text))
+        app.git.msg = ""
+        if (cr[0]) { setStatus("Коміт зроблено: " + cr[1]) } else { app.git.msg = cr[1] }
+        app.git.sel = ""
+        gitRefresh(app.git, app.dir)
+    }
+    if (ok && d.action == "gitbranch" && trim(d.text) != "") {
+        var br = gitCheckout(app.git, replace(trim(d.text), " ", "-"), true)
+        if (br[0]) { setStatus("Нова гілка: " + trim(d.text)) } else { app.git.msg = br[1] }
+        app.git.showBranches = false
+        gitRefresh(app.git, app.dir)
     }
     if (ok && d.action == "renamesym") { renameSymbol(d.target, trim(d.text)) }
     if (ok && d.action == "newblock") {
@@ -1419,7 +1513,7 @@ func drawTitleBar(W) {
     }
 }
 
-var ALL_ACTIVITIES = [["files", "Провідник"], ["search", "Пошук у файлах"], ["history", "Історія версій"], ["learn", "Навчання"], ["ext", "Розширення"], ["settings", "Налаштування"]]
+var ALL_ACTIVITIES = [["files", "Провідник"], ["search", "Пошук у файлах"], ["history", "Історія версій"], ["git", "Git"], ["learn", "Навчання"], ["ext", "Розширення"], ["settings", "Налаштування"]]
 
 // Видимі дії (без "Навчання", якщо уроки вимкнено; налаштування - окремо внизу).
 func activities() {
@@ -1468,6 +1562,7 @@ func drawActivityBar(y, h) {
         if (a[0] == "files") { iconFiles(ix, iy + 12, 24, c) }
         if (a[0] == "search") { iconSearch(ix, iy + 12, 24, c) }
         if (a[0] == "history") { iconHistory(ix, iy + 12, 24, c) }
+        if (a[0] == "git") { iconBranch(ix, iy + 12, 24, c) }
         if (a[0] == "learn") { iconLearn(ix, iy + 12, 24, c) }
         if (a[0] == "ext") { iconExt(ix, iy + 12, 24, c) }
         uiRegion("act:" + a[0], 0, iy, ACT_W, ACT_W)
@@ -1499,6 +1594,11 @@ func drawSidebar(x, y, w, h) {
         drawGuide(app.guideTab, app.guideLesson, app.done, lessonCtx(), x, cy, w, ch)
     }
     else if (app.side == "ext") { drawExtensionsView(x, cy, w, ch) }
+    else if (app.side == "git") {
+        if (app.git.stale || timeMs() - app.git.last > 3000) { gitRefresh(app.git, app.dir) }
+        uiRegion("git.panel", x, cy, w, ch)
+        drawGit(app.git, x, cy, w, ch)
+    }
     else if (app.side == "settings") { drawSettingsView(x, cy, w, ch) }
 }
 
@@ -1792,6 +1892,13 @@ func drawExplorer(x, y, w, h) {
                 iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
                 var col = C_SUBTEXT
                 if (on) { col = C_TEXT }
+                // стан у git: літера праворуч і колір назви (як у VS Code)
+                var gl = ""
+                if (app.git.isRepo && mapHas(app.git.byPath, path)) {
+                    gl = mapGet(app.git.byPath, path)
+                    col = gitLetterColor(gl)
+                    surfaceText(S, gl, x + w - 34, ry + 4, 14, col, true)
+                }
                 surfaceText(S, uiFit(f[1], w - indent - 64, 16), x + indent + 42, ry + 4, 16, col)
                 if (_isDirty(path)) { surfaceCircle(S, x + w - 16, ry + 12, 4, C_PEACH) }
                 uiRegion("file:" + path, x, ry, w, rowH)
@@ -2195,6 +2302,15 @@ func drawStatus(W, H) {
     surfaceRect(S, 0, y, W, STATUS_H, bg)
     var fg = 0xffffff
     var x = 10
+    // гілка git (клік - панель Git)
+    if (app.git.isRepo) {
+        iconBranch(x, y + 3, 18, fg)
+        var gw = surfaceText(S, app.git.branch, x + 22, y + 5, 14, fg)
+        if (len(app.git.files) > 0) { gw = gw + surfaceText(S, "*", x + 24 + gw, y + 5, 14, fg) }
+        uiRegion("status.git", 0, y, x + 30 + gw, STATUS_H)
+        x = x + 40 + gw
+    }
+    var xp = x
     var errs = 0
     var warns = 0
     for p in app.problems {
@@ -2207,7 +2323,7 @@ func drawStatus(W, H) {
     x = x + 14 + surfaceText(S, toString(errs), x + 14, y + 5, 14, fg)
     surfaceText(S, "!", x + 10, y + 5, 14, fg, true)
     x = x + 22 + surfaceText(S, toString(warns), x + 22, y + 5, 14, fg)
-    uiRegion("status.problems", 0, y, x + 10, STATUS_H)
+    uiRegion("status.problems", xp - 6, y, x + 16 - xp, STATUS_H)
     if (app.status != "" && timeMs() - app.statusTime < 4000) {
         surfaceText(S, uiFit(app.status, W - x - 480, 14), x + 24, y + 5, 14, fg)
     } else if (app.con.running && app.con.paused) {
@@ -2352,6 +2468,7 @@ func doAction(id) {
     else if (id == "codetoblocks") { codeToBlocksFile(app.current) }
     else if (id == "split.close") { app.split = "" }
     else if (startsWith(id, "ext.") || startsWith(id, "extcmd:")) { extAction(id) }
+    else if (startsWith(id, "git.")) { gitAction(id) }
     else if (id == "terminal") {
         app.panelOpen = true
         app.panelTab = "terminal"
@@ -2387,6 +2504,10 @@ func doAction(id) {
     else if (startsWith(id, "ptab:")) {
         app.panelTab = substring(id, 5, len(id) - 5)
         if (app.panelTab == "terminal") { app.focus = "terminal" }
+    }
+    else if (id == "status.git") {
+        app.side = "git"
+        app.git.stale = true
     }
     else if (id == "status.problems") {
         app.panelOpen = true
@@ -2663,6 +2784,8 @@ func onWheel(e) {
         app.con.scroll = max(0, app.con.scroll - e.dy * 3)
     } else if (startsWith(id, "ext.")) {
         app.extScroll = max(0, app.extScroll + e.dy * 48)
+    } else if (id == "git.diff") {
+        app.git.scroll = max(0, app.git.scroll + e.dy * 3)
     } else if (id == "term.area") {
         app.term.scroll = max(0, app.term.scroll - e.dy * 3)
     }
@@ -3381,7 +3504,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0 }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo() }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
@@ -3435,8 +3558,17 @@ func ideStep(wait) {
         if (conPoll(app.con)) { dirty = true }
         afterPoll()
     }
-    if (app.term.running && termPoll(app.term)) { dirty = true }
+    if (app.term.running && termPoll(app.term)) {
+        dirty = true
+        // команда (git push/pull, ...) завершилась - стан git міг змінитись
+        if (!app.term.running) { app.git.stale = true }
+    }
     if (len(app.lintJobs) > 0 && pollLint()) { dirty = true }
+    // git: після збереження/команди - перечитати стан (не частіше ніж раз на 0.7 с)
+    if (app.git.stale && app.git.available && timeMs() - app.git.last > 700) {
+        gitRefresh(app.git, app.dir)
+        dirty = true
+    }
     // програма на сцені - кадр оновлюється безперервно; перший кадр -
     // перемалювати, щоб сцена відкрилась навіть без руху миші
     if (app.stageOpen && app.con.running) { dirty = true }

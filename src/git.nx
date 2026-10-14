@@ -1,0 +1,351 @@
+// Git у Nx IDE (як «Система контролю версій» у VS Code): гілка, змінені
+// файли (і літери біля них у Провіднику), різниця з останнім комітом,
+// коміт, гілки, push/pull (у терміналі - там видно, що відповідає сервер).
+//
+// Усе через програму git (procRun); якщо її нема - панель пояснює, що
+// встановити. «Історія версій» - наш маленький git для новачків; ця
+// панель - справжній, для проєктів на GitHub.
+
+import "theme.nx"
+import "ui.nx"
+import "history.nx"
+
+struct GitInfo {
+    available: bool
+    isRepo: bool
+    root: string
+    branch: string
+    files: array
+    byPath: any
+    branches: array
+    ahead: i32
+    behind: i32
+    upstream: bool
+    stale: bool
+    last: i32
+    sel: string
+    diff: array
+    scroll: i32
+    showBranches: bool
+    msg: string
+}
+
+func newGitInfo() {
+    return GitInfo { available: true, isRepo: false, root: "", branch: "", files: [], byPath: newMap(), branches: [],
+        ahead: 0, behind: 0, upstream: false, stale: true, last: 0, sel: "", diff: [], scroll: 0, showBranches: false, msg: "" }
+}
+
+// [код виходу, stdout, stderr]; код -1 - git не запустився.
+func gitRun(dir, args) {
+    var o = newMap()
+    mapSet(o, "cwd", dir)
+    try {
+        var r = procRun("git", args, o)
+        return [toInt(r.exitCode), r.stdout, r.stderr]
+    } catch (e) {
+        return [-1, "", toString(e)]
+    }
+}
+
+func _gitLines(text) {
+    var out = []
+    for l in split(replace(text, "\r", ""), "\n") { if (trim(l) != "") { append(out, l) } }
+    return out
+}
+
+// Літера стану з двох символів "XY" git status --porcelain.
+func gitLetter(xy) {
+    if (xy == "??") { return "U" }
+    var x = xy[0]
+    var y = xy[1]
+    if (x == "D" || y == "D") { return "D" }
+    if (x == "A") { return "A" }
+    if (x == "R") { return "R" }
+    if (x == "U" || y == "U") { return "!" }
+    return "M"
+}
+
+func gitLetterColor(l) {
+    if (l == "U" || l == "A") { return C_GREEN }
+    if (l == "D" || l == "!") { return C_RED }
+    if (l == "R") { return C_ACCENT }
+    return C_YELLOW
+}
+
+func gitLetterName(l) {
+    if (l == "U") { return "новий" }
+    if (l == "A") { return "доданий" }
+    if (l == "D") { return "видалений" }
+    if (l == "R") { return "перейменований" }
+    if (l == "!") { return "конфлікт" }
+    return "змінений"
+}
+
+// Перечитати стан репозиторію теки dir.
+func gitRefresh(g, dir) {
+    g.stale = false
+    g.last = timeMs()
+    var r = gitRun(dir, ["rev-parse", "--show-toplevel"])
+    if (r[0] == -1) {
+        g.available = false
+        g.isRepo = false
+        return
+    }
+    g.available = true
+    if (r[0] != 0) {
+        g.isRepo = false
+        g.files = []
+        g.byPath = newMap()
+        return
+    }
+    g.isRepo = true
+    g.root = trim(r[1])
+    g.branch = trim(gitRun(dir, ["branch", "--show-current"])[1])
+    if (g.branch == "") { g.branch = "(без гілки)" }
+    var files = []
+    var byPath = newMap()
+    for l in _gitLines(gitRun(dir, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall"])[1]) {
+        if (len(l) < 4) { continue }
+        var xy = substring(l, 0, 2)
+        var rel = substring(l, 3, len(l) - 3)
+        var arrow = indexOf(rel, " -> ")
+        if (arrow >= 0) { rel = substring(rel, arrow + 4, len(rel) - arrow - 4) }
+        if (startsWith(rel, "\"") && endsWith(rel, "\"")) { rel = _gitUnquote(substring(rel, 1, len(rel) - 2)) }
+        // службова тека IDE (уроки, сцена, історія версій) - не проєкт
+        if (startsWith(rel, ".nyx/") || contains(rel, "/.nyx/")) { continue }
+        var absP = g.root + "/" + rel
+        var letter = gitLetter(xy)
+        append(files, [letter, rel, absP])
+        mapSet(byPath, absP, letter)
+    }
+    g.files = files
+    g.byPath = byPath
+    g.branches = []
+    for b in _gitLines(gitRun(dir, ["branch", "--format=%(refname:short)"])[1]) { append(g.branches, trim(b)) }
+    var ab = gitRun(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+    g.upstream = ab[0] == 0
+    g.ahead = 0
+    g.behind = 0
+    if (g.upstream) {
+        var parts = split(replace(trim(ab[1]), "\t", " "), " ")
+        if (len(parts) >= 2) {
+            g.behind = toInt(parts[0])
+            g.ahead = toInt(parts[len(parts) - 1])
+        }
+    }
+}
+
+// Назва в лапках (є \" чи \\): прибрати екранування.
+func _gitUnquote(s) {
+    var out = ""
+    var i = 0
+    while (i < len(s)) {
+        if (s[i] == "\\" && i + 1 < len(s)) {
+            out = out + s[i + 1]
+            i = i + 2
+            continue
+        }
+        out = out + s[i]
+        i = i + 1
+    }
+    return out
+}
+
+func _gitBase(p) {
+    var parts = split(replace(p, "\\", "/"), "/")
+    return parts[len(parts) - 1]
+}
+
+// Вміст файла в останньому коміті ("" - файла там ще нема).
+func gitHeadText(g, path) {
+    if (!startsWith(path, g.root + "/")) { return "" }
+    var rel = substring(path, len(g.root) + 1, len(path) - len(g.root) - 1)
+    var r = gitRun(g.root, ["show", "HEAD:" + rel])
+    if (r[0] != 0) { return "" }
+    return replace(r[1], "\r", "")
+}
+
+// Коміт усіх змін: [вдалося, повідомлення].
+func gitCommit(g, msg) {
+    var a = gitRun(g.root, ["add", "-A"])
+    if (a[0] != 0) { return [false, trim(a[2])] }
+    var c = gitRun(g.root, ["commit", "-m", msg])
+    if (c[0] != 0) {
+        var why = trim(c[2] + "\n" + c[1])
+        if (contains(why, "user.email") || contains(why, "user.name") || contains(why, "Please tell me who you are")) {
+            why = "git не знає, хто ти: у терміналі виконай  git config --global user.name \"Ім'я\"  і  git config --global user.email \"пошта\""
+        }
+        if (contains(why, "nothing to commit")) { why = "Нема змін для коміту" }
+        return [false, split(why, "\n")[0]]
+    }
+    return [true, split(trim(c[1]), "\n")[0]]
+}
+
+func gitCheckout(g, branch, create) {
+    var args = ["checkout", branch]
+    if (create) { args = ["checkout", "-b", branch] }
+    var r = gitRun(g.root, args)
+    if (r[0] != 0) {
+        var why = trim(r[2])
+        if (contains(why, "would be overwritten")) { why = "Спершу зроби коміт - є незбережені в git зміни, які перемкнення затерло б" }
+        return [false, split(why, "\n")[0]]
+    }
+    return [true, ""]
+}
+
+// ---------- панель ----------
+
+func drawGit(g, x, y, w, h) {
+    surfaceClip(S, x, y, w, h)
+    var cy = y + 4
+    if (!g.available) {
+        for l in wrapLines("Програму git не знайдено. Встанови її (git-scm.com або «sudo apt install git») і перезапусти IDE.", w - 28, 14) {
+            surfaceText(S, l, x + 14, cy, 14, C_SUBTEXT)
+            cy = cy + 18
+        }
+        surfaceUnclip(S)
+        return
+    }
+    if (!g.isRepo) {
+        for l in wrapLines("Ця тека ще не git-репозиторій. Git зберігає історію проєкту (коміти) і дає викласти його на GitHub. Як «Історія версій», лише для справжніх проєктів.", w - 28, 14) {
+            surfaceText(S, l, x + 14, cy, 14, C_SUBTEXT)
+            cy = cy + 18
+        }
+        uiButton("git.init", "Створити репозиторій (git init)", x + 12, cy + 10, w - 24, 32, "primary")
+        surfaceUnclip(S)
+        return
+    }
+    // гілка і синхронізація
+    var bw = surfaceText(S, "Гілка:", x + 14, cy + 6, 14, C_DIM)
+    var bbw = w - bw - 120
+    uiButton("git.branches", uiFit(g.branch, bbw - 30, 14), x + 20 + bw, cy, bbw, 28, "normal")
+    // шеврон "розкрити" (у шрифті нема ▾)
+    var chx = x + 20 + bw + bbw - 16
+    surfaceLine(S, chx - 4, cy + 12, chx, cy + 16, C_SUBTEXT, 2)
+    surfaceLine(S, chx, cy + 16, chx + 4, cy + 12, C_SUBTEXT, 2)
+    if (g.upstream) {
+        var sync = "↑" + toString(g.ahead) + " ↓" + toString(g.behind)
+        surfaceText(S, sync, x + w - 90, cy + 6, 14, C_SUBTEXT)
+    }
+    cy = cy + 36
+    if (g.showBranches) {
+        for b in g.branches {
+            var on = b == g.branch
+            if (uiHover(x + 8, cy, w - 16, 26)) { surfaceRoundRect(S, x + 8, cy, w - 16, 26, 4, C_SURFACE) }
+            if (on) { surfaceCircle(S, x + 20, cy + 13, 4, C_GREEN) }
+            surfaceText(S, b, x + 32, cy + 5, 14, C_TEXT, on)
+            uiRegion("git.co:" + b, x + 8, cy, w - 16, 26)
+            cy = cy + 28
+        }
+        uiButton("git.newbranch", "+ Нова гілка", x + 12, cy + 2, w - 24, 28, "flat")
+        cy = cy + 40
+    }
+    var half = toInt((w - 32) / 3)
+    uiButton("git.commit", "Коміт", x + 12, cy, half, 30, "primary")
+    uiButton("git.pull", "Pull", x + 16 + half, cy, half, 30, "normal")
+    uiButton("git.push", "Push", x + 20 + half * 2, cy, half, 30, "normal")
+    cy = cy + 40
+    if (g.msg != "") {
+        for l in wrapLines(g.msg, w - 28, 13) {
+            surfaceText(S, l, x + 14, cy, 13, C_YELLOW)
+            cy = cy + 17
+        }
+        cy = cy + 4
+    }
+
+    if (g.sel != "") {
+        uiButton("git.back", "← Усі зміни", x + 8, cy, 130, 28, "flat")
+        cy = cy + 34
+        surfaceText(S, uiFit(_gitBase(g.sel), w - 28, 14), x + 14, cy, 14, C_TEXT, true)
+        cy = cy + 22
+        surfaceText(S, "Що змінилось після останнього коміту:", x + 14, cy, 13, C_DIM)
+        cy = cy + 22
+        _drawDiff(g.diff, g.scroll, x, cy, w, y + h - cy)
+        uiRegion("git.diff", x, cy, w, y + h - cy)
+        surfaceUnclip(S)
+        return
+    }
+    surfaceText(S, "ЗМІНИ (" + toString(len(g.files)) + ")", x + 14, cy, 13, C_SUBTEXT, true)
+    cy = cy + 22
+    if (len(g.files) == 0) {
+        surfaceText(S, "Усе збережено в коміті - змін нема.", x + 14, cy, 14, C_DIM)
+    }
+    var i = 0
+    while (i < len(g.files) && cy < y + h) {
+        var f = g.files[i]
+        if (uiHover(x, cy, w, 24)) { surfaceRect(S, x, cy, w, 24, C_BG) }
+        var name = _gitBase(f[1])
+        var nw = surfaceText(S, uiFit(name, w - 70, 15), x + 14, cy + 4, 15, C_TEXT)
+        var dirPart = substring(f[1], 0, len(f[1]) - len(name))
+        if (dirPart != "") { surfaceText(S, uiFit(dirPart, w - nw - 70, 12), x + 22 + nw, cy + 6, 12, C_DIM) }
+        surfaceText(S, f[0], x + w - 24, cy + 4, 15, gitLetterColor(f[0]), true)
+        uiRegion("git.file:" + f[2], x, cy, w, 24)
+        cy = cy + 24
+        i = i + 1
+    }
+    surfaceUnclip(S)
+}
+
+func _drawDiff(d, scroll, x, y, w, h) {
+    var cw = textWidth("M", 14)
+    var lh = 17
+    var cy = y
+    var row = 0
+    var shown = 0
+    for r in d {
+        // лише змінене й по 2 рядки навколо - як у git diff
+        if (row >= scroll && cy + lh < y + h) {
+            var bg = -1
+            var fg = C_DIM
+            if (r[0] == "+") {
+                bg = 0x1f3b2a
+                fg = C_GREEN
+            }
+            if (r[0] == "-") {
+                bg = 0x3d2230
+                fg = C_RED
+            }
+            if (bg >= 0) { surfaceRect(S, x + 8, cy - 1, w - 16, lh, bg) }
+            surfaceText(S, r[0], x + 12, cy, 14, fg)
+            surfaceText(S, r[1], x + 12 + 2 * cw, cy, 14, fg)
+            cy = cy + lh
+            shown = shown + 1
+        }
+        row = row + 1
+    }
+    if (len(d) == 0) { surfaceText(S, "Без змін.", x + 14, y, 14, C_DIM) }
+}
+
+// Лише змінені рядки з 2 рядками контексту (у великому файлі зміна не губиться).
+func gitCompactDiff(d) {
+    var keep = []
+    var n = len(d)
+    var i = 0
+    while (i < n) {
+        append(keep, false)
+        i = i + 1
+    }
+    i = 0
+    while (i < n) {
+        if (d[i][0] != " ") {
+            var k = max(0, i - 2)
+            while (k <= min(n - 1, i + 2)) {
+                keep[k] = true
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    var out = []
+    var gap = false
+    i = 0
+    while (i < n) {
+        if (keep[i]) {
+            if (gap && len(out) > 0) { append(out, [" ", "..."]) }
+            append(out, d[i])
+            gap = false
+        } else { gap = true }
+        i = i + 1
+    }
+    return out
+}
