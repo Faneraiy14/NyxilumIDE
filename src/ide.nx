@@ -927,7 +927,7 @@ func offerAction(id) {
     } else if (id == "offer.code") {
         app.side = "learn"
         app.guideTab = "lessons"
-        app.guideLesson = 7
+        app.guideLesson = firstCodeLesson()
     } else if (id == "offer.history") {
         startTour(false)
         tourGo(9)
@@ -2459,7 +2459,8 @@ func lessonCtx() {
     if (ed != null) { code = edText(ed) }
     var cur = app.current
     if (app.mode == "blocks") { cur = app.currentB }
-    return [stacks, code, app.con.lastOk, app.con.lastOutput, app.mode, fileName(cur), app.con.runs]
+    // ctx[7] - програма зараз працює без помилки (малювання/герой не завершуються самі)
+    return [stacks, code, app.con.lastOk, app.con.lastOutput, app.mode, fileName(cur), app.con.runs, app.con.running && app.con.runs >= 0 && len(app.problems) == 0]
 }
 
 // Позначити виконані уроки (перевіряється відкритий урок).
@@ -2472,6 +2473,16 @@ func checkLessons() {
         saveProgress(joinPath(joinPath(app.dir, ".nyx"), "уроки.json"), app.done)
         setStatus("Урок пройдено: " + les.title + "!")
     }
+}
+
+func firstCodeLesson() {
+    initLessons()
+    var i = 0
+    while (i < len(LESSONS)) {
+        if (LESSONS[i].mode == "code") { return i }
+        i = i + 1
+    }
+    return 0
 }
 
 // Кожен урок - своя чиста програма ("Урок 2.nxb" лише з шапкою), щоб
@@ -2844,8 +2855,10 @@ func ideStep(wait) {
         if (conPoll(app.con)) { dirty = true }
         afterPoll()
     }
-    // програма на сцені - кадр оновлюється безперервно
+    // програма на сцені - кадр оновлюється безперервно; перший кадр -
+    // перемалювати, щоб сцена відкрилась навіть без руху миші
     if (app.stageOpen && app.con.running) { dirty = true }
+    if (!app.stageOpen && app.con.running && fileExists(stageFrame())) { dirty = true }
     if (app.demo != null) {
         demoTick()
         dirty = true

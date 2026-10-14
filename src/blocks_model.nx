@@ -69,6 +69,13 @@ func initSpecs() {
     _spec("set", "cmd", "Змінні", "запам'ятати в %v значення %s", ["рахунок", "0"], "$1 = $2")
     _spec("change", "cmd", "Змінні", "збільшити %v на %n", ["рахунок", "1"], "$1 = $1 + $2")
     _spec("var", "rep", "Змінні", "%v", ["рахунок"], "$1")
+    // списки (%l - назва списку): номери елементів з 1, як у Scratch
+    _spec("listadd", "cmd", "Змінні", "додати %s до списку %l", ["яблуко", "список"], "append($2, $1)")
+    _spec("listitem", "rep", "Змінні", "елемент %n списку %l", ["1", "список"], "_елемент($2, $1)")
+    _spec("listlen", "rep", "Змінні", "довжина списку %l", ["список"], "len($1)")
+    _spec("listhas", "bool", "Змінні", "список %l містить %s", ["список", "яблуко"], "contains($1, $2)")
+    _spec("listclear", "cmd", "Змінні", "очистити список %l", ["список"], "clear($1)")
+    _spec("list", "rep", "Змінні", "список %l", ["список"], "$1")
 
     _spec("add", "rep", "Оператори", "%n + %n", ["", ""], "$1 + $2")
     _spec("sub", "rep", "Оператори", "%n - %n", ["", ""], "$1 - $2")
@@ -110,11 +117,14 @@ func initSpecs() {
     _spec("heroy", "rep", "Рух", "y героя", [], "round(_герY)")
     _spec("herodir", "rep", "Рух", "напрямок героя", [], "round(_герКут)")
     _spec("onedge", "bool", "Рух", "герой на краю", [], "_наКраю()")
+    _spec("touching", "bool", "Рух", "герой торкається предмета", [], "_торкається()")
     _spec("costume", "cmd", "Вигляд", "показати героя %h", ["кіт"], "_костюм($1)")
     _spec("hide", "cmd", "Вигляд", "сховати героя", [], "_сховати()")
     _spec("say2", "cmd", "Вигляд", "герой каже %s", ["Привіт!"], "_каже($1)")
     _spec("size", "cmd", "Вигляд", "розмір героя %n відсотків", ["100"], "_розмір($1)")
     _spec("backdrop", "cmd", "Вигляд", "колір тла %c", ["блакитний"], "_тло($1)")
+    _spec("item", "cmd", "Вигляд", "поставити предмет %h в x %n y %n", ["зірка", "100", "100"], "_предмет($1, $2, $3)")
+    _spec("hideitem", "cmd", "Вигляд", "сховати предмет", [], "_сховатиПредмет()")
 
     for sp in SPECS { mapSet(_specById, sp.id, sp) }
 }
@@ -255,6 +265,8 @@ var _genVars = null
 var _genId = 0
 var _usesDrawing = false
 var _usesSprites = false
+var _usesLists = false
+var _genLists = null
 var _reserved = null
 
 func _isIdentChar(c, first) {
@@ -333,6 +345,12 @@ func _genArg(a, t) {
     if (typeOf(a) == "struct") { return _genExpr(a) }
     var s = toString(a)
     if (t == "v") { return _useVar(s) }
+    if (t == "l") {
+        var lid = _useVar(s)
+        mapSet(_genLists, lid, true)
+        _usesLists = true
+        return lid
+    }
     if (t == "b") { return "false" }
     if (t == "c") {
         var ci = indexOf(COLOR_NAMES, trim(toLower(s)))
@@ -460,6 +478,8 @@ func generateCode(stacks, title) {
     _genId = 0
     _usesDrawing = false
     _usesSprites = false
+    _usesLists = false
+    _genLists = newMap()
 
     var body = []
     var bodyBlocks = []
@@ -482,10 +502,14 @@ func generateCode(stacks, title) {
     if (_usesSprites) {
         for l in split(preludeText("спрайти.nx"), "\n") { append(lines, l)  append(blocks, null) }
     }
+    if (_usesLists) {
+        for l in split(preludeText("списки.nx"), "\n") { append(lines, l)  append(blocks, null) }
+    }
     append(lines, "func main() {")
     append(blocks, null)
     for v in mapKeys(_genVars) {
-        append(lines, "    var " + v + " = 0")
+        if (mapHas(_genLists, v)) { append(lines, "    var " + v + " = []") }
+        else { append(lines, "    var " + v + " = 0") }
         append(blocks, null)
     }
     // герой видно одразу, ще до першого блока руху

@@ -132,6 +132,8 @@ func conRun(con, path, dir, debugMode, breaks, stageDir) {
     mapSet(opts, "interactive", true)
     mapSet(opts, "cwd", dir)
     var env = newMap()
+    // програма завершиться сама, якщо IDE закриється аварійно
+    mapSet(env, "NX_EXIT_WITH_PARENT", "1")
     if (con.debug) { mapSet(env, "NX_DEBUG", "1") }
     con.stageDir = stageDir
     if (stageDir != "") {

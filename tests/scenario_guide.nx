@@ -86,6 +86,21 @@ func main() {
     doAction("bclear")
     check(len(ws.stacks) == 1 && ws.stacks[0].next == null, "«Почати спочатку» лишає шапку")
 
+    // урок 7 "Герой на сцені": показ збирає програму з героєм; вона не
+    // завершується сама (сцена), тож урок зараховується, поки вона працює
+    doAction("g.open:6")
+    doAction("g.demo")
+    var th = timeMs()
+    while (timeMs() - th < 30000 && app.demo != null) { ideStep(16) }
+    th = timeMs()
+    while (timeMs() - th < 5000 && (indexOf(app.done, LESSONS[6].title) < 0 || !app.stageOpen)) { ideStep(16) }
+    check(app.con.running && app.stageOpen, "програма з героєм працює на сцені")
+    check(indexOf(app.done, LESSONS[6].title) >= 0, "урок «Герой на сцені» зараховано")
+    shot("g05_hero")
+    key("F5", false, true)
+    th = timeMs()
+    while (timeMs() - th < 3000 && app.con.running) { ideStep(16) }
+
     doAction("g.tab.examples")
     shot("g04_examples")
     doAction("g.ex:Вгадай число.nxb")

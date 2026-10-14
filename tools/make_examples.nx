@@ -139,6 +139,42 @@ func rocket() {
         loop])])
 }
 
+func catchStar() {
+    var r = a("if", [a("key", ["Right"])])
+    r.body = a("changex", ["6"])
+    var l = a("if", [a("key", ["Left"])])
+    l.body = a("changex", ["-6"])
+    var u = a("if", [a("key", ["Up"])])
+    u.body = a("changey", ["-6"])
+    var d = a("if", [a("key", ["Down"])])
+    d.body = a("changey", ["6"])
+    var got = a("if", [b("touching")])
+    got.body = chain([
+        a("change", ["рахунок", "1"]),
+        a("item", ["зірка", a("random", ["30", "450"]), a("random", ["30", "330"])]),
+        a("say2", [a("join", ["Рахунок: ", v("рахунок")])])])
+    var loop = b("forever")
+    loop.body = chain([r, l, u, d, got])
+    save("Упіймай зірку", [chain([b("start"),
+        a("backdrop", ["зелений"]),
+        a("costume", ["кіт"]),
+        a("set", ["рахунок", "0"]),
+        a("item", ["зірка", "380", "120"]),
+        a("say2", ["Лови зірку стрілками!"]),
+        loop])])
+}
+
+func shoppingList() {
+    var rep = a("repeat", ["3"])
+    rep.body = chain([a("ask", ["Що купити?", "відповідь"]), a("listadd", [v("відповідь"), "покупки"])])
+    save("Список покупок", [chain([b("start"),
+        a("say", ["Складемо список покупок (3 речі)."]),
+        rep,
+        a("say", ["Твій список:"]),
+        a("say", [a("list", ["покупки"])]),
+        a("say", [a("join", ["Усього: ", a("listlen", ["покупки"])])])])])
+}
+
 func main() {
     if (!dirExists("examples/.gen")) { makeDir("examples/.gen") }
     guessNumber()
@@ -148,4 +184,6 @@ func main() {
     countdown()
     walkingCat()
     rocket()
+    catchStar()
+    shoppingList()
 }

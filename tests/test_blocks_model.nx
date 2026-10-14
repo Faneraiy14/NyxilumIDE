@@ -155,5 +155,56 @@ func main() {
     print(rh.stdout + rh.stderr)
     check(rh.exitCode == 0 && len(trim(rh.stdout)) > 0, "герой рухається без помилок, x = " + trim(rh.stdout))
 
+    // списки і предмет
+    var ls = newBlock("start")
+    var add1 = newBlock("listadd")
+    add1.args[0] = "яблуко"
+    var add2 = newBlock("listadd")
+    add2.args[0] = "груша"
+    var sayLen = newBlock("say")
+    sayLen.args[0] = newBlock("listlen")
+    var sayIt = newBlock("say")
+    var it2 = newBlock("listitem")
+    it2.args[0] = "2"
+    sayIt.args[0] = it2
+    var sayOut = newBlock("say")
+    var it9 = newBlock("listitem")
+    it9.args[0] = "9"
+    sayOut.args[0] = it9
+    var ifHas = newBlock("if")
+    ifHas.args[0] = newBlock("listhas")
+    var sayHas = newBlock("say")
+    sayHas.args[0] = "є яблуко"
+    ifHas.body = sayHas
+    var itm = newBlock("item")
+    var gotoItem = newBlock("goto")
+    gotoItem.args[0] = "100"
+    gotoItem.args[1] = "100"
+    var ifT = newBlock("if")
+    ifT.args[0] = newBlock("touching")
+    var sayT = newBlock("say")
+    sayT.args[0] = "упіймав"
+    ifT.body = sayT
+    var fin2 = newBlock("stop")
+    ls.next = add1
+    add1.next = add2
+    add2.next = sayLen
+    sayLen.next = sayIt
+    sayIt.next = sayOut
+    sayOut.next = ifHas
+    ifHas.next = itm
+    itm.next = gotoItem
+    gotoItem.next = ifT
+    ifT.next = fin2
+    var gl = generateCode([ls], "списки")
+    check(contains(gl[0], "var список = []"), "список оголошено як []")
+    writeFile(dir + "/lists.nx", gl[0])
+    var rl = procRun(nxPath(), [dir + "/lists.nx"])
+    print(rl.stdout + rl.stderr)
+    var outs = split(trim(rl.stdout), "\n")
+    check(rl.exitCode == 0 && outs[0] == "2" && outs[1] == "груша", "довжина 2, елемент 2 - груша")
+    check(contains(rl.stdout, "є яблуко"), "список містить яблуко")
+    check(contains(rl.stdout, "упіймав"), "герой торкається предмета")
+
     print("МОДЕЛЬ БЛОКІВ: УСЕ ГАРАЗД")
 }

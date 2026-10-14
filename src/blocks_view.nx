@@ -161,7 +161,7 @@ func _measureArg(a, t) {
     if (t == "b") { return [44, SLOT_H] }
     var tw = textWidth(_slotText(a, t), BF)
     if (t == "c") { return [tw + 40, SLOT_H] }
-    if (t == "v" || t == "k" || t == "h") { return [tw + 34, SLOT_H] }
+    if (t == "v" || t == "k" || t == "h" || t == "l") { return [tw + 34, SLOT_H] }
     return [max(tw + 16, 34), SLOT_H]
 }
 
@@ -217,7 +217,7 @@ func _drawSlot(b, k, t, x, y, color, ws) {
     var editing = ws != null && ws.edit == b && ws.editIdx == k && _record
     if (t == "b") {
         _hexagon(x, sy, sw, SLOT_H, _darken(color))
-    } else if (t == "v" || t == "k" || t == "h") {
+    } else if (t == "v" || t == "k" || t == "h" || t == "l") {
         surfaceRoundRect(S, x, sy, sw, SLOT_H, 5, _darken(color))
         surfaceText(S, _slotText(a, t), x + 8, sy + 5, BF, 0xffffff)
         var ax = x + sw - 16
@@ -371,6 +371,26 @@ func _collectVars(b, names) {
         }
         if (b.body != null) { _collectVars(b.body, names) }
         if (b.body2 != null) { _collectVars(b.body2, names) }
+        b = b.next
+    }
+}
+
+// Назви списків (віконця %l) у ланцюжку блоків.
+func _collectLists(b, names) {
+    while (b != null) {
+        var types = slotTypes(specOf(b.spec))
+        var k = 0
+        while (k < len(b.args)) {
+            var a = b.args[k]
+            if (typeOf(a) == "struct") { _collectLists(a, names) }
+            else if (k < len(types) && types[k] == "l") {
+                var n = trim(toString(a))
+                if (n != "" && indexOf(names, n) < 0) { append(names, n) }
+            }
+            k = k + 1
+        }
+        if (b.body != null) { _collectLists(b.body, names) }
+        if (b.body2 != null) { _collectLists(b.body2, names) }
         b = b.next
     }
 }
@@ -634,7 +654,7 @@ func findSnap(ws) {
         var k = len(_sHits) - 7
         while (k >= 0) {
             var t = _sHits[k + 2]
-            if (t != "v" && t != "k" && t != "c" && t != "h" && px >= _sHits[k + 3] - 8 && px <= _sHits[k + 3] + _sHits[k + 5] && py >= _sHits[k + 4] - 6 && py <= _sHits[k + 4] + _sHits[k + 6] + 6) {
+            if (t != "v" && t != "k" && t != "c" && t != "h" && t != "l" && px >= _sHits[k + 3] - 8 && px <= _sHits[k + 3] + _sHits[k + 5] && py >= _sHits[k + 4] - 6 && py <= _sHits[k + 4] + _sHits[k + 6] + 6) {
                 return ["slot", _sHits[k], _sHits[k + 1], t, _sHits[k + 3], _sHits[k + 4], _sHits[k + 5], _sHits[k + 6]]
             }
             k = k - 7
@@ -883,6 +903,12 @@ func _slotMenu(ws, b, k, t, x, y) {
         for c in COLOR_NAMES { append(items, [c, "set:" + c]) }
     } else if (t == "h") {
         for c2 in COSTUMES { append(items, [c2, "set:" + c2]) }
+    } else if (t == "l") {
+        var lists = []
+        for st in ws.stacks { _collectLists(st, lists) }
+        if (len(lists) == 0) { append(lists, "список") }
+        for n2 in lists { append(items, [n2, "set:" + n2]) }
+        append(items, ["+ новий список…", "newvar"])
     } else if (t == "k") {
         var i = 0
         while (i < len(KEY_NAMES)) {
@@ -924,6 +950,9 @@ func endEdit(ws) {
         var types = slotTypes(specOf(ws.edit.spec))
         if (types[ws.editIdx] == "v" && trim(toString(ws.edit.args[ws.editIdx])) == "") {
             ws.edit.args[ws.editIdx] = "змінна"
+        }
+        if (types[ws.editIdx] == "l" && trim(toString(ws.edit.args[ws.editIdx])) == "") {
+            ws.edit.args[ws.editIdx] = "список"
         }
     }
     ws.edit = null
@@ -1067,7 +1096,7 @@ func blocksMouseUp(ws, e) {
     if (ws.pending != null && !ws.pendingPal && ws.pendingSlot >= 0) {
         var b = ws.pending
         var t = ws.pendingSlotType
-        if (t == "v" || t == "c" || t == "k" || t == "h") {
+        if (t == "v" || t == "c" || t == "k" || t == "h" || t == "l") {
             _slotMenu(ws, b, ws.pendingSlot, t, e.x, e.y + 8)
         } else if (t != "b") {
             wsSnapshot(ws)
