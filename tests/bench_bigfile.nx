@@ -1,0 +1,79 @@
+// Заміри швидкості на великому файлі (не входить у run_all):
+//   NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/bench_bigfile.nx <тека> [рядків]
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, openPath, currentEditor, draw }
+
+func ms(label, t0, n) {
+    print(label + ": " + toFixed((timeMs() - t0) / n, 2) + " мс")
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    var n = 20000
+    if (len(scriptArgs()) > 1) { n = toInt(scriptArgs()[1]) }
+    presetConfig("advanced", false, false, false)
+    if (!dirExists(dir)) { makeDir(dir) }
+    var parts = ["/* довгий коментар\n   на два рядки */\n"]
+    var i = 0
+    while (i < n / 5) {
+        append(parts, "func f" + toString(i) + "(x) {\n    var y = x * 2 + " + toString(i) + "\n    // коментар\n    return \"рядок \" + toString(y)\n}\n")
+        i = i + 1
+    }
+    writeFile(dir + "/великий.nx", join(parts, ""))
+    var t0 = timeMs()
+    ideInit(dir)
+    openPath(dir + "/великий.nx")
+    draw()
+    ms("відкрити + перший кадр", t0, 1)
+    var ed = currentEditor()
+    print("рядків: " + toString(len(ed.lines)))
+    t0 = timeMs()
+    var k = 0
+    while (k < 20) { draw()  k = k + 1 }
+    ms("кадр зверху", t0, 20)
+    ed.cy = len(ed.lines) - 3
+    ed.top = len(ed.lines) - 40
+    draw()
+    t0 = timeMs()
+    k = 0
+    while (k < 20) { draw()  k = k + 1 }
+    ms("кадр знизу", t0, 20)
+    t0 = timeMs()
+    k = 0
+    while (k < 20) {
+        typeText("a")
+        ideStep(0)
+        k = k + 1
+    }
+    ms("друк символу знизу (з кадром)", t0, 20)
+    ed.cy = 1
+    ed.cx = 0
+    ed.top = 0
+    t0 = timeMs()
+    k = 0
+    while (k < 10) {
+        typeText("*")
+        ideStep(0)
+        k = k + 1
+    }
+    ms("друк у коментарі зверху (з кадром)", t0, 10)
+    t0 = timeMs()
+    k = 0
+    while (k < 10) {
+        key("PageDown", false, false)
+        ideStep(0)
+        k = k + 1
+    }
+    ms("PageDown", t0, 10)
+    t0 = timeMs()
+    saveAll2()
+    ms("збереження", t0, 1)
+    ideShutdown()
+}
+
+func saveAll2() {
+    var ed = currentEditor()
+    ed.dirty = true
+    key("s", true, false)
+    ideStep(0)
+}

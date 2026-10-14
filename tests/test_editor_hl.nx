@@ -1,0 +1,60 @@
+// Підсвітка після правок (інкрементна: перевіряються лише рядки від зміни):
+// відкрити й закрити багаторядковий коментар, вставити й видалити рядки,
+// скасувати - токени збігаються з повним перерахунком.
+import "../src/editor.nx"
+import "../src/highlight.nx"
+import "../src/theme.nx"
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+// Токени редактора = токени повного перерахунку з нуля.
+func same(ed) {
+    _warmTokens(ed, len(ed.lines) - 1)
+    var inC = false
+    var i = 0
+    while (i < len(ed.lines)) {
+        var r = hlLine(ed.lines[i], inC)
+        if (toString(r[0]) != toString(ed.hlTok[i])) { return false }
+        inC = r[1]
+        i = i + 1
+    }
+    return true
+}
+
+func main() {
+    var lines = []
+    var i = 0
+    while (i < 300) {
+        append(lines, "var x" + toString(i) + " = \"рядок\" // " + toString(i))
+        i = i + 1
+    }
+    var ed = newEditor(join(lines, "\n"), "t.nx")
+    _warmTokens(ed, 40)
+    check(same(ed), "початкова підсвітка")
+    // відкрити /* у рядку 10 - решта файла стає коментарем
+    ed.cy = 10
+    ed.cx = 0
+    edInsert(ed, "/* ")
+    check(same(ed), "відкритий /* змінює рядки нижче")
+    check(ed.hlTok[200][2] == HL_COMMENT, "рядок 200 - коментар")
+    // закрити в рядку 20
+    ed.cy = 20
+    ed.cx = 0
+    edInsert(ed, "*/ ")
+    check(same(ed), "закритий */ повертає код")
+    // нові рядки в середині й видалення
+    ed.cy = 150
+    ed.cx = 3
+    edNewline(ed)
+    edNewline(ed)
+    check(same(ed), "вставлені рядки")
+    edBackspace(ed)
+    check(same(ed), "Backspace з'єднав рядки")
+    edUndo(ed)
+    edUndo(ed)
+    check(same(ed), "Ctrl+Z")
+    print("ПІДСВІТКА: УСЕ ГАРАЗД")
+}

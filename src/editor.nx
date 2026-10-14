@@ -47,6 +47,9 @@ struct Editor {
     breaks: array
     dbgLine: i32
     marks: array
+    hlOk: i32
+    acNames: any
+    acTime: i32
 }
 
 func newEditor(text, path) {
@@ -54,7 +57,7 @@ func newEditor(text, path) {
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
         x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
-        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1, marks: [] }
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1, marks: [], hlOk: 0, acNames: null, acTime: 0 }
     edSetText(ed, text)
     return ed
 }
@@ -81,7 +84,14 @@ func normalizeText(text) {
     return replace(text, "\t", "    ")
 }
 
+// Підсвітка рядків до hlOk точно актуальна (великі файли: кадр не
+// перевіряє всі 20 000 рядків). Зміна в рядку line - звідти перевіряти знову.
+func _hlFrom(ed, line) {
+    if (line < ed.hlOk) { ed.hlOk = max(0, line) }
+}
+
 func edSetText(ed, text) {
+    ed.hlOk = 0
     ed.lines = split(normalizeText(text), "\n")
     if (len(ed.lines) == 0) { ed.lines = [""] }
     ed.cx = 0
@@ -115,6 +125,7 @@ func edSelText(ed) {
 }
 
 func edDeleteSel(ed) {
+    _hlFrom(ed, min(ed.cy, max(ed.ay, 0)))
     if (!edHasSel(ed)) { ed.ay = -1  return }
     var r = edSelRange(ed)
     var first = ed.lines[r[0]]
@@ -141,6 +152,10 @@ func edSnapshot(ed) { return [slice(ed.lines, 0), ed.cx, ed.cy] }
 // Перед кожною зміною. Підряд набрані символи одного виду (kind) за
 // секунду - одна дія скасування, як у звичайних редакторах.
 func edBeginEdit(ed, kind) {
+    var first = ed.cy
+    if (ed.ay >= 0) { first = min(first, ed.ay) }
+    // Backspace на початку рядка міняє й попередній
+    _hlFrom(ed, first - 1)
     var now = timeMs()
     if (kind != ed.lastKind || now - ed.lastTime > 1000 || kind == "other") {
         append(ed.undo, edSnapshot(ed))
@@ -154,6 +169,7 @@ func edBeginEdit(ed, kind) {
 }
 
 func _restore(ed, snap) {
+    ed.hlOk = 0
     ed.lines = slice(snap[0], 0)
     ed.cy = min(snap[2], len(ed.lines) - 1)
     ed.cx = min(snap[1], len(ed.lines[ed.cy]))
@@ -177,6 +193,7 @@ func edRedo(ed) {
 // ---------- зміни тексту ----------
 
 func edInsert(ed, text) {
+    _hlFrom(ed, ed.cy - 1)
     edDeleteSel(ed)
     var parts = split(normalizeText(text), "\n")
     var line = ed.lines[ed.cy]
@@ -201,6 +218,7 @@ func edInsert(ed, text) {
 }
 
 func edBackspace(ed) {
+    _hlFrom(ed, ed.cy - 1)
     if (edHasSel(ed)) { edDeleteSel(ed)  return }
     var line = ed.lines[ed.cy]
     if (ed.cx > 0) {
@@ -234,6 +252,7 @@ func edBackspace(ed) {
 }
 
 func edDelete(ed) {
+    _hlFrom(ed, ed.cy - 1)
     if (edHasSel(ed)) { edDeleteSel(ed)  return }
     var line = ed.lines[ed.cy]
     if (ed.cx < len(line)) {
@@ -247,6 +266,7 @@ func edDelete(ed) {
 // Enter з автовідступом: новий рядок отримує відступ поточного, після "{" -
 // ще +4, а якщо курсор стоїть між { і } - дужка переїжджає на свій рядок.
 func edNewline(ed) {
+    _hlFrom(ed, ed.cy - 1)
     edDeleteSel(ed)
     var line = ed.lines[ed.cy]
     var indent = leadingSpaces(line)
@@ -278,6 +298,7 @@ func _selLines(ed) {
 }
 
 func edIndent(ed, outdent) {
+    if (ed.ay >= 0) { _hlFrom(ed, min(ed.cy, ed.ay)) } else { _hlFrom(ed, ed.cy) }
     var ys = _selLines(ed)
     var multi = edHasSel(ed) && ys[1] > ys[0]
     if (!multi && !outdent) {
@@ -304,6 +325,7 @@ func edIndent(ed, outdent) {
 
 // Ctrl+/ - закоментувати/розкоментувати рядки.
 func edToggleComment(ed) {
+    if (ed.ay >= 0) { _hlFrom(ed, min(ed.cy, ed.ay)) } else { _hlFrom(ed, ed.cy) }
     var ys = _selLines(ed)
     var allCommented = true
     var minIndent = 100000
@@ -337,12 +359,14 @@ func edToggleComment(ed) {
 }
 
 func edDuplicateLine(ed) {
+    _hlFrom(ed, ed.cy)
     insert(ed.lines, ed.cy + 1, ed.lines[ed.cy])
     ed.cy = ed.cy + 1
 }
 
 // Набраний символ (подія "text"): автопари дужок і лапок.
 func edType(ed, t) {
+    _hlFrom(ed, ed.cy - 1)
     var line = ed.lines[ed.cy]
     var nxt = ""
     if (ed.cx < len(line)) { nxt = line[ed.cx] }
@@ -498,6 +522,7 @@ func edJumpTo(ed, line, col) {
 // Нові рядки однією дією скасування (перейменування тощо).
 func edReplaceLines(ed, lines) {
     edBeginEdit(ed, "other")
+    ed.hlOk = 0
     ed.lines = lines
     ed.cy = min(ed.cy, len(ed.lines) - 1)
     ed.cx = min(ed.cx, len(ed.lines[ed.cy]))
@@ -552,6 +577,8 @@ func _wordBefore(ed) {
 
 // Назви з усього файлу (з кешу підсвітки - перераховуються лише змінені рядки).
 func _fileNames(ed) {
+    // великий файл: назви збираються не частіше ніж раз на 1.5 с
+    if (len(ed.lines) > 2000 && ed.acNames != null && timeMs() - ed.acTime < 1500) { return ed.acNames }
     _warmTokens(ed, len(ed.lines) - 1)
     var names = []
     var seen = newMap()
@@ -573,6 +600,8 @@ func _fileNames(ed) {
         }
         i = i + 1
     }
+    ed.acNames = names
+    ed.acTime = timeMs()
     return names
 }
 
@@ -614,6 +643,7 @@ func edUpdateCompletion(ed) {
 }
 
 func edAcceptCompletion(ed) {
+    _hlFrom(ed, ed.cy)
     var item = ed.acItems[ed.acSel]
     var wb = _wordBefore(ed)
     var line = ed.lines[ed.cy]
@@ -842,7 +872,9 @@ func edZoom(ed, dir) {
 // чий стан "всередині /* */" на вході змінився). Прохід зверху до
 // останнього видимого рядка - щоб стан коментаря був правильним.
 func _warmTokens(ed, upTo) {
-    var i = 0
+    ed.hlOk = min(ed.hlOk, len(ed.lines))
+    var i = ed.hlOk
+    if (i > upTo) { return }
     while (i <= upTo && i < len(ed.lines)) {
         while (len(ed.hlSrc) < len(ed.lines)) {
             append(ed.hlSrc, null) append(ed.hlIn, false) append(ed.hlTok, []) append(ed.hlOut, false)
@@ -860,6 +892,7 @@ func _warmTokens(ed, upTo) {
         }
         i = i + 1
     }
+    ed.hlOk = max(ed.hlOk, min(upTo + 1, len(ed.lines)))
 }
 
 func edDraw(ed, x, y, w, h, focused) {
