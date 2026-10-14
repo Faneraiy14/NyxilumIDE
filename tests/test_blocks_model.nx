@@ -124,5 +124,36 @@ func main() {
     print(r.stdout + r.stderr)
     check(r.exitCode == 0 && contains(r.stdout, "намальовано"), "блоки малювання працюють (сцена без вікна)")
 
+    // Рух і Вигляд: герой ходить, повертає, відбивається, каже, міняє костюм
+    var hs = newBlock("start")
+    var cos1 = newBlock("costume")
+    cos1.args[0] = "ракета"
+    var back = newBlock("backdrop")
+    var rp2 = newBlock("repeat")
+    rp2.args[0] = "40"
+    var go1 = newBlock("go")
+    var bo = newBlock("bounce")
+    var tu = newBlock("turn")
+    tu.args[0] = "5"
+    go1.next = bo
+    bo.next = tu
+    rp2.body = go1
+    var sy2 = newBlock("say2")
+    var xs = newBlock("say")
+    xs.args[0] = newBlock("herox")
+    var en = newBlock("stop")
+    hs.next = cos1
+    cos1.next = back
+    back.next = rp2
+    rp2.next = sy2
+    sy2.next = xs
+    xs.next = en
+    var gh = generateCode([hs], "герой")
+    check(contains(gh[0], "func _кадр()") && contains(gh[0], "_іти(10)"), "код героя з прелюдією спрайтів")
+    writeFile(dir + "/hero.nx", gh[0])
+    var rh = procRun(nxPath(), [dir + "/hero.nx"])
+    print(rh.stdout + rh.stderr)
+    check(rh.exitCode == 0 && len(trim(rh.stdout)) > 0, "герой рухається без помилок, x = " + trim(rh.stdout))
+
     print("МОДЕЛЬ БЛОКІВ: УСЕ ГАРАЗД")
 }

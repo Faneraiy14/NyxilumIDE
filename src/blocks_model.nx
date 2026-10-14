@@ -36,8 +36,11 @@ struct Spec {
     gen: string
 }
 
-var CATEGORIES = ["Події", "Вивід", "Керування", "Змінні", "Оператори", "Малювання"]
-var CAT_COLORS = [0xd4a000, 0x4c8fe8, 0xe8901a, 0xe8642c, 0x3faa4a, 0x8a5cf0]
+var CATEGORIES = ["Події", "Рух", "Вигляд", "Вивід", "Керування", "Змінні", "Оператори", "Малювання"]
+var CAT_COLORS = [0xd4a000, 0x2f9fd0, 0xc05ad8, 0x4c8fe8, 0xe8901a, 0xe8642c, 0x3faa4a, 0x8a5cf0]
+
+// Костюми героя (віконце %h).
+var COSTUMES = ["кіт", "м'яч", "ракета", "зірка", "робот"]
 
 var SPECS = []
 var _specById = null
@@ -93,6 +96,25 @@ func initSpecs() {
     _spec("key", "bool", "Малювання", "натиснуто клавішу %k", ["Right"], "_клавіша($1)")
     _spec("mousex", "rep", "Малювання", "миша x", [], "_мишаX()")
     _spec("mousey", "rep", "Малювання", "миша y", [], "_мишаY()")
+    _spec("mousedown", "bool", "Малювання", "миша натиснута", [], "_мишаНатиснута()")
+
+    // Рух і Вигляд: герой-спрайт, як у Scratch (src/prelude/спрайти.nx)
+    _spec("go", "cmd", "Рух", "іти на %n кроків", ["10"], "_іти($1)")
+    _spec("turn", "cmd", "Рух", "повернути на %n градусів", ["15"], "_повернути($1)")
+    _spec("goto", "cmd", "Рух", "перейти в x %n y %n", ["240", "180"], "_перейти($1, $2)")
+    _spec("changex", "cmd", "Рух", "змінити x на %n", ["10"], "_змінитиX($1)")
+    _spec("changey", "cmd", "Рух", "змінити y на %n", ["10"], "_змінитиY($1)")
+    _spec("point", "cmd", "Рух", "дивитися в напрямку %n", ["0"], "_напрям($1)")
+    _spec("bounce", "cmd", "Рух", "якщо на краю - відбитися", [], "_відбитися()")
+    _spec("herox", "rep", "Рух", "x героя", [], "round(_герX)")
+    _spec("heroy", "rep", "Рух", "y героя", [], "round(_герY)")
+    _spec("herodir", "rep", "Рух", "напрямок героя", [], "round(_герКут)")
+    _spec("onedge", "bool", "Рух", "герой на краю", [], "_наКраю()")
+    _spec("costume", "cmd", "Вигляд", "показати героя %h", ["кіт"], "_костюм($1)")
+    _spec("hide", "cmd", "Вигляд", "сховати героя", [], "_сховати()")
+    _spec("say2", "cmd", "Вигляд", "герой каже %s", ["Привіт!"], "_каже($1)")
+    _spec("size", "cmd", "Вигляд", "розмір героя %n відсотків", ["100"], "_розмір($1)")
+    _spec("backdrop", "cmd", "Вигляд", "колір тла %c", ["блакитний"], "_тло($1)")
 
     for sp in SPECS { mapSet(_specById, sp.id, sp) }
 }
@@ -232,6 +254,7 @@ var _genBlocks = []
 var _genVars = null
 var _genId = 0
 var _usesDrawing = false
+var _usesSprites = false
 var _reserved = null
 
 func _isIdentChar(c, first) {
@@ -317,7 +340,7 @@ func _genArg(a, t) {
         if (isNumberText(s)) { return trim(s) }
         return "0xffffff"
     }
-    if (t == "k") { return _quote(s) }
+    if (t == "k" || t == "h") { return _quote(s) }
     if (t == "n") {
         if (isNumberText(s)) { return trim(s) }
         if (trim(s) == "") { return "0" }
@@ -381,6 +404,7 @@ func _fill(sp, b) {
         i = i + 1
     }
     if (sp.cat == "Малювання") { _usesDrawing = true }
+    if (sp.cat == "Рух" || sp.cat == "Вигляд") { _usesSprites = true }
     return out
 }
 
@@ -417,7 +441,15 @@ func _genChain(b, indent) {
 
 var PRELUDE_ANSWER = "// Відповідь-число стає числом (щоб з нею можна було рахувати).\nfunc _відповідь(t) {\n    var s = trim(t)\n    try {\n        return toDouble(s)\n    } catch (e) {\n        return s\n    }\n}\n"
 
-var PRELUDE_DRAWING = "// Сцена для блоків «Малювання».\nvar _s = null\nfunc _сцена(w, h) {\n    if (_s == null) { _s = surfaceOpen(\"Сцена\", toInt(w), toInt(h)) }\n}\nfunc _готово() {\n    if (_s == null) { _сцена(480, 360) }\n    if (!surfaceIsOpen(_s)) { exit(0) }\n}\nfunc _очистити(c) {\n    _готово()\n    surfaceClear(_s, c)\n}\nfunc _коло(x, y, r, c) {\n    _готово()\n    surfaceCircle(_s, toInt(x), toInt(y), toInt(r), c)\n}\nfunc _прямокутник(x, y, w, h, c) {\n    _готово()\n    surfaceRect(_s, toInt(x), toInt(y), toInt(w), toInt(h), c)\n}\nfunc _лінія(x1, y1, x2, y2, c) {\n    _готово()\n    surfaceLine(_s, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 3)\n}\nfunc _текст(t, x, y, c) {\n    _готово()\n    surfaceText(_s, toString(t), toInt(x), toInt(y), 20, c)\n}\nfunc _показати() {\n    _готово()\n    surfacePresent(_s)\n    var e = surfaceNextEvent(_s, 0)\n    while (e != null) { e = surfaceNextEvent(_s, 0) }\n    if (!surfaceIsOpen(_s)) { exit(0) }\n}\nfunc _клавіша(k) {\n    _готово()\n    return surfaceKeyDown(_s, k)\n}\nfunc _мишаX() {\n    _готово()\n    return surfaceMouseX(_s)\n}\nfunc _мишаY() {\n    _готово()\n    return surfaceMouseY(_s)\n}\n"
+// Код підтримки блоків лежить у src/prelude/*.nx (читається під час
+// генерації). Шукаємо поруч з головним скриптом: IDE (src/), тести й
+// інструменти (tests/, tools/ - тоді ../src/prelude).
+func preludeText(name) {
+    for p in [scriptDir() + "/prelude/" + name, scriptDir() + "/../src/prelude/" + name] {
+        if (fileExists(p)) { return readFile(p) }
+    }
+    throw "Не знайдено прелюдію блоків " + name
+}
 
 // Програма з блоків -> [текст коду, масив блок-на-рядок (null для службових рядків)].
 func generateCode(stacks, title) {
@@ -427,6 +459,7 @@ func generateCode(stacks, title) {
     _genVars = newMap()
     _genId = 0
     _usesDrawing = false
+    _usesSprites = false
 
     var body = []
     var bodyBlocks = []
@@ -443,13 +476,21 @@ func generateCode(stacks, title) {
     var lines = ["// Програма з блоків «" + title + "» - код створено Nyx IDE.", ""]
     var blocks = [null, null]
     for l in split(PRELUDE_ANSWER, "\n") { append(lines, l)  append(blocks, null) }
-    if (_usesDrawing) {
-        for l in split(PRELUDE_DRAWING, "\n") { append(lines, l)  append(blocks, null) }
+    if (_usesDrawing || _usesSprites) {
+        for l in split(preludeText("малювання.nx"), "\n") { append(lines, l)  append(blocks, null) }
+    }
+    if (_usesSprites) {
+        for l in split(preludeText("спрайти.nx"), "\n") { append(lines, l)  append(blocks, null) }
     }
     append(lines, "func main() {")
     append(blocks, null)
     for v in mapKeys(_genVars) {
         append(lines, "    var " + v + " = 0")
+        append(blocks, null)
+    }
+    // герой видно одразу, ще до першого блока руху
+    if (_usesSprites) {
+        append(lines, "    _кадр()")
         append(blocks, null)
     }
     var k = 0
@@ -458,7 +499,7 @@ func generateCode(stacks, title) {
         append(blocks, bodyBlocks[k])
         k = k + 1
     }
-    if (_usesDrawing) {
+    if (_usesDrawing || _usesSprites) {
         // Сцена не закривається одразу після останнього блока.
         append(lines, "    while (_s != null && surfaceIsOpen(_s)) { _показати()  sleep(30) }")
         append(blocks, null)

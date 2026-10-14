@@ -161,7 +161,7 @@ func _measureArg(a, t) {
     if (t == "b") { return [44, SLOT_H] }
     var tw = textWidth(_slotText(a, t), BF)
     if (t == "c") { return [tw + 40, SLOT_H] }
-    if (t == "v" || t == "k") { return [tw + 34, SLOT_H] }
+    if (t == "v" || t == "k" || t == "h") { return [tw + 34, SLOT_H] }
     return [max(tw + 16, 34), SLOT_H]
 }
 
@@ -217,7 +217,7 @@ func _drawSlot(b, k, t, x, y, color, ws) {
     var editing = ws != null && ws.edit == b && ws.editIdx == k && _record
     if (t == "b") {
         _hexagon(x, sy, sw, SLOT_H, _darken(color))
-    } else if (t == "v" || t == "k") {
+    } else if (t == "v" || t == "k" || t == "h") {
         surfaceRoundRect(S, x, sy, sw, SLOT_H, 5, _darken(color))
         surfaceText(S, _slotText(a, t), x + 8, sy + 5, BF, 0xffffff)
         var ax = x + sw - 16
@@ -399,18 +399,21 @@ func drawPalette(ws, x, y, h) {
     // смуга категорій
     surfaceRect(S, x, y, STRIP_W, h, C_PANEL2)
     uiRegion("bcatstrip", x, y, STRIP_W, h)
-    var cy = y + 10
+    var cy = y + 6
     var i = 0
+    // висота рядка категорії - під 8 категорій навіть у невисокому вікні
+    var rowH = clamp(toInt((h - 12) / len(CATEGORIES)), 44, 62)
     while (i < len(CATEGORIES)) {
         var cat = CATEGORIES[i]
         var on = ws.cat == cat
-        if (on) { surfaceRect(S, x, cy - 4, STRIP_W, 58, C_SURFACE) }
-        else if (uiHover(x, cy - 4, STRIP_W, 58)) { surfaceRect(S, x, cy - 4, STRIP_W, 58, C_BG) }
-        surfaceCircle(S, x + toInt(STRIP_W / 2), cy + 14, 13, CAT_COLORS[i])
+        if (on) { surfaceRect(S, x, cy - 2, STRIP_W, rowH - 2, C_SURFACE) }
+        else if (uiHover(x, cy - 2, STRIP_W, rowH - 2)) { surfaceRect(S, x, cy - 2, STRIP_W, rowH - 2, C_BG) }
+        var rr = min(13, toInt((rowH - 22) / 2))
+        surfaceCircle(S, x + toInt(STRIP_W / 2), cy + rr + 2, rr, CAT_COLORS[i])
         var tw = textWidth(cat, 12)
-        surfaceText(S, cat, x + toInt((STRIP_W - tw) / 2), cy + 32, 12, C_SUBTEXT)
-        uiRegion("bcat:" + cat, x, cy - 4, STRIP_W, 58)
-        cy = cy + 62
+        surfaceText(S, cat, x + toInt((STRIP_W - tw) / 2), cy + rr * 2 + 6, 12, C_SUBTEXT)
+        uiRegion("bcat:" + cat, x, cy - 2, STRIP_W, rowH - 2)
+        cy = cy + rowH
         i = i + 1
     }
 
@@ -631,7 +634,7 @@ func findSnap(ws) {
         var k = len(_sHits) - 7
         while (k >= 0) {
             var t = _sHits[k + 2]
-            if (t != "v" && t != "k" && t != "c" && px >= _sHits[k + 3] - 8 && px <= _sHits[k + 3] + _sHits[k + 5] && py >= _sHits[k + 4] - 6 && py <= _sHits[k + 4] + _sHits[k + 6] + 6) {
+            if (t != "v" && t != "k" && t != "c" && t != "h" && px >= _sHits[k + 3] - 8 && px <= _sHits[k + 3] + _sHits[k + 5] && py >= _sHits[k + 4] - 6 && py <= _sHits[k + 4] + _sHits[k + 6] + 6) {
                 return ["slot", _sHits[k], _sHits[k + 1], t, _sHits[k + 3], _sHits[k + 4], _sHits[k + 5], _sHits[k + 6]]
             }
             k = k - 7
@@ -878,6 +881,8 @@ func _slotMenu(ws, b, k, t, x, y) {
         append(items, ["+ нова змінна…", "newvar"])
     } else if (t == "c") {
         for c in COLOR_NAMES { append(items, [c, "set:" + c]) }
+    } else if (t == "h") {
+        for c2 in COSTUMES { append(items, [c2, "set:" + c2]) }
     } else if (t == "k") {
         var i = 0
         while (i < len(KEY_NAMES)) {
@@ -1062,7 +1067,7 @@ func blocksMouseUp(ws, e) {
     if (ws.pending != null && !ws.pendingPal && ws.pendingSlot >= 0) {
         var b = ws.pending
         var t = ws.pendingSlotType
-        if (t == "v" || t == "c" || t == "k") {
+        if (t == "v" || t == "c" || t == "k" || t == "h") {
             _slotMenu(ws, b, ws.pendingSlot, t, e.x, e.y + 8)
         } else if (t != "b") {
             wsSnapshot(ws)

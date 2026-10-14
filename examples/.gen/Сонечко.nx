@@ -10,7 +10,7 @@ func _відповідь(t) {
     }
 }
 
-// Сцена для блоків «Малювання».
+// Сцена для блоків «Малювання» (додається до коду програми з блоків).
 var _s = null
 func _сцена(w, h) {
     if (_s == null) { _s = surfaceOpen("Сцена", toInt(w), toInt(h)) }
@@ -57,6 +57,10 @@ func _мишаX() {
 func _мишаY() {
     _готово()
     return surfaceMouseY(_s)
+}
+func _мишаНатиснута() {
+    _готово()
+    return surfaceMouseDown(_s)
 }
 
 func main() {

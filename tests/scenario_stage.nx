@@ -1,0 +1,64 @@
+// Сцена в IDE: програма з блоків «Ракета» малює прямо в IDE; клік по сцені
+// віддає їй клавіатуру; стрілка вгору рухає ракету (кадр змінюється).
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw }
+
+// "Відбиток" сцени: сума кольорів сітки точок у прямокутнику кадру.
+func stageSum() {
+    draw()
+    var r = app.stageRect
+    if (len(r) == 0) { return -1 }
+    var sum = 0
+    var gy = 0
+    while (gy < 24) {
+        var gx = 0
+        while (gx < 24) {
+            sum = sum + surfaceGetPixel(S, r[0] + toInt(r[2] * gx / 24), r[1] + toInt(r[3] * gy / 24)) % 9973
+            gx = gx + 1
+        }
+        gy = gy + 1
+    }
+    return sum
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("middle", false, true, true)
+    ideInit(dir)
+    doAction("g.ex:Ракета.nxb")
+    check(endsWith(app.active, "Ракета.nxb"), "відкрито приклад «Ракета»")
+    key("F5", false, false)
+    step()
+    var t0 = timeMs()
+    while (timeMs() - t0 < 6000 && !app.stageOpen) { ideStep(16) }
+    check(app.stageOpen, "сцена з'явилась сама")
+    t0 = timeMs()
+    while (timeMs() - t0 < 600) { ideStep(16) }
+    var before = stageSum()
+    check(before > 0, "кадр програми видно в IDE")
+    shot("st01_stage")
+    var r = app.stageRect
+    click(r[0] + 10, r[1] + 10)
+    check(app.focus == "stage", "клік по сцені віддає їй клавіатуру")
+    var i = 0
+    while (i < 20) {
+        key("Up", false, false)
+        ideStep(16)
+        i = i + 1
+    }
+    t0 = timeMs()
+    while (timeMs() - t0 < 500) { ideStep(16) }
+    var after = stageSum()
+    check(after != before, "стрілка вгору зрушила ракету (кадр змінився)")
+    shot("st02_moved")
+    key("Escape", false, false)
+    step()
+    check(app.focus != "stage", "Escape повертає клавіатуру IDE")
+    key("F5", false, true)
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && app.con.running) { ideStep(16) }
+    check(!app.con.running, "Shift+F5 зупинив програму")
+    ideShutdown()
+    print("СЦЕНА: УСЕ ГАРАЗД")
+}

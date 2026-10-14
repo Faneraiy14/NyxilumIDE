@@ -31,6 +31,7 @@ struct Console {
     locals: array
     globals: array
     errBuf: string
+    stageDir: string
     x: i32
     y: i32
     w: i32
@@ -41,7 +42,7 @@ func newConsole() {
     return Console { lines: [], proc: null, outLen: 0, errLen: 0, running: false, startMs: 0,
         scroll: 0, errLine: -1, input: "", focused: false, runs: 0, lastOk: false, lastOutput: "",
         debug: false, dbgStart: "", dbgBreaks: [], paused: false, pauseLine: -1, pauseFunc: "", pauses: 0,
-        locals: [], globals: [], errBuf: "", x: 0, y: 0, w: 0, h: 0 }
+        locals: [], globals: [], errBuf: "", stageDir: "", x: 0, y: 0, w: 0, h: 0 }
 }
 
 // Рядок консолі - [текст, вид]; вид: "out" | "err" | "info" | "ok" | "in".
@@ -108,7 +109,8 @@ func conClear(con) {
 
 // debugMode: "" - звичайний запуск; "step" - з паузою на першому рядку;
 // "cont" - до першої точки зупинки (breaks - номери рядків, з 1).
-func conRun(con, path, dir, debugMode, breaks) {
+// stageDir - тека сцени (NX_STAGE_DIR): вікно програми показується в IDE.
+func conRun(con, path, dir, debugMode, breaks, stageDir) {
     if (con.running) { conStop(con) }
     conClear(con)
     con.errLine = -1
@@ -129,11 +131,17 @@ func conRun(con, path, dir, debugMode, breaks) {
     var opts = newMap()
     mapSet(opts, "interactive", true)
     mapSet(opts, "cwd", dir)
-    if (con.debug) {
-        var env = newMap()
-        mapSet(env, "NX_DEBUG", "1")
-        mapSet(opts, "env", env)
+    var env = newMap()
+    if (con.debug) { mapSet(env, "NX_DEBUG", "1") }
+    con.stageDir = stageDir
+    if (stageDir != "") {
+        if (!dirExists(stageDir)) { makeDir(stageDir) }
+        // старий кадр і ввід попереднього запуску - геть
+        deleteFile(stageDir + "/frame.raw")
+        writeFile(stageDir + "/input.txt", "")
+        mapSet(env, "NX_STAGE_DIR", stageDir)
     }
+    mapSet(opts, "env", env)
     try {
         con.proc = procStart(nxPath(), [path], opts)
         con.running = true
@@ -198,6 +206,12 @@ func _dbgEvent(con, json) {
         con.locals = mapGet(ev, "locals")
         con.globals = mapGet(ev, "globals")
     }
+}
+
+// Подія для програми на сцені (рядок у input.txt).
+func conStageInput(con, line) {
+    if (!con.running || con.stageDir == "") { return }
+    appendFile(con.stageDir + "/input.txt", line + "\n")
 }
 
 func conStop(con) {

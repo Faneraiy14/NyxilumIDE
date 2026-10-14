@@ -1,0 +1,52 @@
+// Сцена для блоків «Малювання» (додається до коду програми з блоків).
+var _s = null
+func _сцена(w, h) {
+    if (_s == null) { _s = surfaceOpen("Сцена", toInt(w), toInt(h)) }
+}
+func _готово() {
+    if (_s == null) { _сцена(480, 360) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _очистити(c) {
+    _готово()
+    surfaceClear(_s, c)
+}
+func _коло(x, y, r, c) {
+    _готово()
+    surfaceCircle(_s, toInt(x), toInt(y), toInt(r), c)
+}
+func _прямокутник(x, y, w, h, c) {
+    _готово()
+    surfaceRect(_s, toInt(x), toInt(y), toInt(w), toInt(h), c)
+}
+func _лінія(x1, y1, x2, y2, c) {
+    _готово()
+    surfaceLine(_s, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 3)
+}
+func _текст(t, x, y, c) {
+    _готово()
+    surfaceText(_s, toString(t), toInt(x), toInt(y), 20, c)
+}
+func _показати() {
+    _готово()
+    surfacePresent(_s)
+    var e = surfaceNextEvent(_s, 0)
+    while (e != null) { e = surfaceNextEvent(_s, 0) }
+    if (!surfaceIsOpen(_s)) { exit(0) }
+}
+func _клавіша(k) {
+    _готово()
+    return surfaceKeyDown(_s, k)
+}
+func _мишаX() {
+    _готово()
+    return surfaceMouseX(_s)
+}
+func _мишаY() {
+    _готово()
+    return surfaceMouseY(_s)
+}
+func _мишаНатиснута() {
+    _готово()
+    return surfaceMouseDown(_s)
+}

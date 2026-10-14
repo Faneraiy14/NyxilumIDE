@@ -113,6 +113,32 @@ func countdown() {
         a("say", ["Старт!"])])])
 }
 
+func walkingCat() {
+    var loop = b("forever")
+    loop.body = chain([a("go", ["4"]), b("bounce")])
+    save("Кіт гуляє", [chain([b("start"),
+        a("costume", ["кіт"]),
+        a("say2", ["Мяу! Я гуляю."]),
+        a("point", ["30"]),
+        loop])])
+}
+
+func rocket() {
+    var r = a("if", [a("key", ["Right"])])
+    r.body = a("turn", ["5"])
+    var l = a("if", [a("key", ["Left"])])
+    l.body = a("turn", ["-5"])
+    var u = a("if", [a("key", ["Up"])])
+    u.body = a("go", ["6"])
+    var loop = b("forever")
+    loop.body = chain([r, l, u, b("bounce")])
+    save("Ракета", [chain([b("start"),
+        a("backdrop", ["чорний"]),
+        a("costume", ["ракета"]),
+        a("say2", ["Стрілки - керувати!"]),
+        loop])])
+}
+
 func main() {
     if (!dirExists("examples/.gen")) { makeDir("examples/.gen") }
     guessNumber()
@@ -120,4 +146,6 @@ func main() {
     sunny()
     moveCircle()
     countdown()
+    walkingCat()
+    rocket()
 }

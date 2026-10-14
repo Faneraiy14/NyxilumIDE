@@ -80,6 +80,9 @@ struct App {
     lastAutosave: i32
     dbgPath: string
     lastPauses: i32
+    stageOpen: bool
+    stageRect: array
+    sideBeforeStage: string
     entry: any
     ctx: any
     cfg: any
@@ -340,7 +343,7 @@ func runWith(debugMode) {
         if (!dirExists(genDir)) { makeDir(genDir) }
         var genPath = joinPath(genDir, blocksTitle(ws) + ".nx")
         writeFile(genPath, g[0])
-        conRun(app.con, genPath, app.dir, debugMode, [])
+        conRun(app.con, genPath, app.dir, debugMode, [], stageDir())
         app.focus = "console"
         return
     }
@@ -349,8 +352,53 @@ func runWith(debugMode) {
     ed.errLine = -1
     var breaks = []
     if (debugMode != "") { breaks = edBreakLines(ed) }
-    conRun(app.con, ed.path, app.dir, debugMode, breaks)
+    conRun(app.con, ed.path, app.dir, debugMode, breaks, stageDir())
     app.focus = "console"
+}
+
+func stageDir() { return joinPath(joinPath(app.dir, ".nyx"), "сцена") }
+func stageFrame() { return stageDir() + "/frame.raw" }
+
+// Сцена: вікно програми (малювання, ігри) - прямо в IDE, праворуч.
+func drawStage(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    surfaceRect(S, x, y, 1, h, C_BORDER)
+    uiRegion("stage.panel", x, y, w, h)
+    surfaceText(S, "СЦЕНА", x + 12, y + 8, 13, C_SUBTEXT, true)
+    uiButton("stage.close", "×", x + w - 30, y + 3, 26, 24, "flat")
+    var by = y + 30
+    var bh = h - 30
+    surfaceRect(S, x + 8, by, w - 16, bh - 8, 0x000000)
+    var r = surfaceDrawFrame(S, stageFrame(), x + 8, by, w - 16, bh - 8)
+    if (r == null) {
+        var t = "Тут з'явиться малюнок програми"
+        surfaceText(S, t, x + toInt((w - textWidth(t, 14)) / 2), by + toInt(bh / 2) - 8, 14, C_DIM)
+        app.stageRect = []
+        return
+    }
+    // куди саме вписано кадр - для перерахунку координат миші
+    var k = min((w - 16) / r[0], (bh - 8) / r[1])
+    var dw = toInt(r[0] * k)
+    var dh = toInt(r[1] * k)
+    var fx = x + 8 + toInt((w - 16 - dw) / 2)
+    var fy = by + toInt((bh - 8 - dh) / 2)
+    app.stageRect = [fx, fy, dw, dh, r[0], r[1]]
+    if (app.focus == "stage") { surfaceRectLine(S, fx - 2, fy - 2, dw + 4, dh + 4, C_ACCENT, 2) }
+    uiRegion("stage.frame", fx, fy, dw, dh)
+}
+
+// Миша над сценою -> подія для програми в координатах її вікна.
+func stageMouse(kind, e) {
+    var r = app.stageRect
+    if (len(r) == 0 || !app.con.running) { return false }
+    if (e.x < r[0] || e.y < r[1] || e.x >= r[0] + r[2] || e.y >= r[1] + r[3]) { return false }
+    var sx = toInt((e.x - r[0]) * r[4] / r[2])
+    var sy = toInt((e.y - r[1]) * r[5] / r[3])
+    var b = 1
+    if (e.button != null) { b = e.button }
+    if (kind == "move") { conStageInput(app.con, "move " + toString(sx) + " " + toString(sy)) }
+    else { conStageInput(app.con, kind + " " + toString(sx) + " " + toString(sy) + " " + toString(b)) }
+    return true
 }
 
 // Підсвітка місця паузи: рядок у редакторі коду, блок у редакторі блоків.
@@ -600,6 +648,7 @@ func commandList() {
         ["btogglecode", "Блоки: показати/сховати код", ""],
         ["bopencode", "Блоки: відкрити як код", ""],
         ["con.clear", "Очистити консоль", ""],
+        ["stage.toggle", "Показати/сховати сцену", ""],
         ["quickopen", "Відкрити файл…", "Ctrl+P"]
     ]
     return list
@@ -1717,6 +1766,25 @@ func draw() {
     var edH = bodyH - TABS_H - panelH
 
     syncDebugView()
+    // сцена з'являється сама, щойно програма щось намалювала
+    if (app.con.running && !app.stageOpen && fileExists(stageFrame())) {
+        app.stageOpen = true
+        // як у Scratch: на вузькому екрані бічна панель ховається, поки працює сцена
+        if (W < 1500 && app.side != "") {
+            app.sideBeforeStage = app.side
+            app.side = ""
+        }
+    }
+    // програма зупинилась - бічна панель повертається
+    if (!app.con.running && app.sideBeforeStage != "-") {
+        if (app.side == "") { app.side = app.sideBeforeStage }
+        app.sideBeforeStage = "-"
+    }
+    var stageW = 0
+    if (app.stageOpen) {
+        stageW = clamp(toInt(ew * 0.4), 260, 560)
+        ew = ew - stageW
+    }
     if (len(app.tabs) == 0) {
         drawWelcome(ex, bodyY, ew, bodyH - panelH)
     } else {
@@ -1729,9 +1797,10 @@ func draw() {
             if (ed != null) { edDraw(ed, ex, edY, ew, edH, app.focus == "editor" && app.dialog == null && app.palette == null) }
         }
     }
+    if (app.stageOpen) { drawStage(ex + ew, bodyY, stageW, bodyH - panelH) }
     if (app.panelOpen) {
-        drawPanel(ex, bodyY + bodyH - panelH, ew, panelH)
-        uiRegion("split", ex, bodyY + bodyH - panelH - 3, ew, 7)
+        drawPanel(ex, bodyY + bodyH - panelH, ew + stageW, panelH)
+        uiRegion("split", ex, bodyY + bodyH - panelH - 3, ew + stageW, 7)
     }
     drawStatus(W, H)
     if (app.tooltip != "" && app.palette == null && app.dialog == null) { uiTooltip(app.tooltip) }
@@ -1793,6 +1862,11 @@ func doAction(id) {
     else if (id == "dialog.cancel") { closeDialog(false) }
     else if (startsWith(id, "act:")) { toggleSide(substring(id, 4, len(id) - 4)) }
     else if (id == "side.collapse") { app.side = "" }
+    else if (id == "stage.close") {
+        app.stageOpen = false
+        if (app.focus == "stage") { app.focus = "editor" }
+    }
+    else if (id == "stage.toggle") { app.stageOpen = !app.stageOpen }
     else if (id == "side.toggle") {
         if (app.side == "") { app.side = "files" } else { app.side = "" }
     }
@@ -1967,6 +2041,13 @@ func onMouseDown(e) {
         if (app.con.running && app.con.debug && app.dbgPath == ed.path) { conSetBreaks(app.con, edBreakLines(ed)) }
         return
     }
+    if (id == "stage.frame") {
+        app.focus = "stage"
+        app.con.focused = false
+        stageMouse("down", e)
+        return
+    }
+    if (app.focus == "stage" && id != "stage.panel") { app.focus = "editor" }
     if (id == "split") {
         app.drag = "split"
         return
@@ -1989,6 +2070,7 @@ func onMouseDown(e) {
 }
 
 func onMouseUp(e) {
+    if (app.focus == "stage" && stageMouse("up", e)) { return }
     var bws = currentBlocks()
     if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseUp(bws, e) }
     var id = uiHit(e.x, e.y)
@@ -2000,6 +2082,7 @@ func onMouseUp(e) {
 func onMouseMove(e) {
     uiMouseX = e.x
     uiMouseY = e.y
+    if (app.stageOpen && app.con.running) { stageMouse("move", e) }
     var bws = currentBlocks()
     if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseMove(bws, e) }
     var ed = currentEditor()
@@ -2145,6 +2228,12 @@ func onKey(e) {
         doAction("newcode")
         return
     }
+    // сцена у фокусі: клавіші - програмі (Escape - повернути фокус IDE)
+    if (app.focus == "stage") {
+        if (k == "Escape") { app.focus = "editor" }
+        else { conStageInput(app.con, "key " + k) }
+        return
+    }
     if (app.focus == "search") {
         if (k == "Escape") { app.focus = "editor" }
         else if (k == "Backspace" && len(app.searchText) > 0) {
@@ -2190,6 +2279,10 @@ func onText(e) {
         refreshPalette()
         return
     }
+    if (app.focus == "stage") {
+        conStageInput(app.con, "text " + e.text)
+        return
+    }
     if (app.focus == "search") {
         app.searchText = app.searchText + e.text
         runSearch()
@@ -2218,6 +2311,7 @@ func handle(e) {
     else if (t == "mouseup") { onMouseUp(e) }
     else if (t == "wheel") { onWheel(e) }
     else if (t == "key") { onKey(e) }
+    else if (t == "keyup") { if (app.focus == "stage") { conStageInput(app.con, "keyup " + e.key) } }
     else if (t == "text") { onText(e) }
 }
 
@@ -2697,7 +2791,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
@@ -2736,6 +2830,7 @@ func ideInit(dir) {
 // false - вікно закрили.
 func ideStep(wait) {
     if (app.con.running && (wait < 0 || wait > 40)) { wait = 40 }
+    if (app.con.running && app.stageOpen && (wait < 0 || wait > 16)) { wait = 16 }
     if (app.demo != null && (wait < 0 || wait > 16)) { wait = 16 }
     var e = surfaceNextEvent(S, wait)
     var dirty = false
@@ -2749,6 +2844,8 @@ func ideStep(wait) {
         if (conPoll(app.con)) { dirty = true }
         afterPoll()
     }
+    // програма на сцені - кадр оновлюється безперервно
+    if (app.stageOpen && app.con.running) { dirty = true }
     if (app.demo != null) {
         demoTick()
         dirty = true
