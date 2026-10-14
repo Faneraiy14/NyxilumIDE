@@ -18,19 +18,15 @@ func main() {
     check(ed != null && len(ed.lines) > 5, "відкрито приклад привіт.nx (" + toString(len(app.tabs)) + " вкладка)")
     check(app.side == "files" && app.panelOpen, "Провідник і нижня панель відкриті")
 
-    // нова програма кодом через Провідник
-    clickId("newcode")
-    check(app.dialog != null, "діалог нової програми")
-    var n = 0
-    while (n < 12) {
-        key("Backspace", false, false)
-        n = n + 1
-    }
+    // новий файл - як у VS Code: іконка в заголовку Провідника, назва прямо в дереві
+    clickId("ex.newfile")
+    check(app.entry != null && app.entry.mode == "newfile", "з'явився рядок для назви нового файла")
     typeText("тест")
+    shot("01b_entry")
     key("Enter", false, false)
     step()
     ed = currentEditor()
-    check(endsWith(ed.path, "тест.nx") && len(app.tabs) == 2, "створено тест.nx у новій вкладці")
+    check(endsWith(ed.path, "тест.nx") && len(app.tabs) == 2, "створено тест.nx (без розширення - .nx) у новій вкладці")
 
     key("a", true, false)
     key("Delete", false, false)
@@ -104,7 +100,7 @@ func main() {
     typeText("бічну")
     step()
     check(len(app.palette.items) == 1, "палітра фільтрує команди")
-    key("Enter", false, false)
+    clickId("pal:0")
     step()
     check(app.side == "", "команда з палітри сховала бічну панель")
     key("b", true, false)
@@ -150,10 +146,69 @@ func main() {
     step()
     check(contains(edText(ed), "// новий рядок"), "повернення можна скасувати Ctrl+Z")
 
+    // Провідник: нова тека, файл у ній, перейменування, видалення
+    clickId("act:files")
+    clickId("ex.newdir")
+    typeText("ігри")
+    key("Enter", false, false)
+    step()
+    check(dirExists(dir + "/ігри") && app.exSel == dir + "/ігри", "створено теку «ігри»")
+    clickId("ex.newfile")
+    check(app.entry.dir == dir + "/ігри", "новий файл - у виділеній теці")
+    typeText("змійка.nxb")
+    key("Enter", false, false)
+    step()
+    check(fileExists(dir + "/ігри/змійка.nxb") && endsWith(app.active, "змійка.nxb"), "у теці створено програму з блоків")
+    draw()
+    var fr = uiFind("file:" + dir + "/ігри/змійка.nxb")
+    check(fr != null, "файл видно в дереві під текою")
+    ev("mousedown", fr[0] + 40, fr[1] + 10)
+    var m3 = newMap()
+    mapSet(m3, "type", "mousedown") mapSet(m3, "x", fr[0] + 40) mapSet(m3, "y", fr[1] + 10) mapSet(m3, "button", 3)
+    surfacePostEvent(S, m3)
+    ev("mouseup", fr[0] + 40, fr[1] + 10)
+    step()
+    check(app.ctx != null && len(app.ctx.items) == 4, "права кнопка - меню файла")
+    shot("07_ctx")
+    clickId("ctx:rename")
+    check(app.entry != null && app.entry.mode == "rename" && app.entry.text == "змійка.nxb", "перейменування з поточною назвою")
+    var bs = 0
+    while (bs < 10) {
+        key("Backspace", false, false)
+        bs = bs + 1
+    }
+    typeText("пітон.nxb")
+    key("Enter", false, false)
+    step()
+    check(fileExists(dir + "/ігри/пітон.nxb") && !fileExists(dir + "/ігри/змійка.nxb"), "файл перейменовано")
+    check(endsWith(app.active, "пітон.nxb") && indexOf(app.tabs, dir + "/ігри/пітон.nxb") >= 0, "вкладка теж перейменувалась")
+    // F2 по виділеній теці
+    app.exSel = dir + "/ігри"
+    key("F2", false, false)
+    step()
+    check(app.entry != null && app.entry.target == dir + "/ігри", "F2 - перейменувати виділене")
+    key("Escape", false, false)
+    step()
+    check(app.entry == null, "Escape скасовує")
+    // видалення теки з підтвердженням
+    draw()
+    var dr = uiFind("dir:" + dir + "/ігри")
+    var m4 = newMap()
+    mapSet(m4, "type", "mousedown") mapSet(m4, "x", dr[0] + 40) mapSet(m4, "y", dr[1] + 10) mapSet(m4, "button", 3)
+    surfacePostEvent(S, m4)
+    ev("mouseup", dr[0] + 40, dr[1] + 10)
+    step()
+    clickId("ctx:delete")
+    check(app.dialog != null && app.dialog.action == "delete", "видалення питає підтвердження")
+    shot("08_delete")
+    clickId("dialog.ok")
+    check(!dirExists(dir + "/ігри") && indexOf(app.tabs, dir + "/ігри/пітон.nxb") < 0, "теку видалено, її вкладки закрито")
+
     // закриття вкладки
+    var before = len(app.tabs)
     key("w", true, false)
     step()
-    check(len(app.tabs) == 1, "Ctrl+W закрив вкладку")
+    check(len(app.tabs) == before - 1, "Ctrl+W закрив вкладку")
 
     ideShutdown()
     check(fileExists(dir + "/тест.nx"), "файл збережено на диск")

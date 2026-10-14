@@ -99,3 +99,43 @@ func iconGear(x, y, s, c) {
         k = k + 1
     }
 }
+
+// Новий файл: аркуш із "+".
+func iconNewFile(x, y, s, c) {
+    var a = s / 16
+    surfaceRectLine(S, toInt(x + 2 * a), toInt(y + 1 * a), toInt(9 * a), toInt(13 * a), c, 1)
+    _ln(x + 11 * a, y + 9 * a, x + 11 * a, y + 15 * a, c)
+    _ln(x + 8 * a, y + 12 * a, x + 14 * a, y + 12 * a, c)
+}
+
+// Нова тека: тека із "+".
+func iconNewFolder(x, y, s, c) {
+    var a = s / 16
+    surfaceRectLine(S, toInt(x + 1 * a), toInt(y + 4 * a), toInt(11 * a), toInt(9 * a), c, 1)
+    surfaceRect(S, toInt(x + 1 * a), toInt(y + 2 * a), toInt(5 * a), 2, c)
+    _ln(x + 12 * a, y + 9 * a, x + 12 * a, y + 15 * a, c)
+    _ln(x + 9 * a, y + 12 * a, x + 15 * a, y + 12 * a, c)
+}
+
+// Оновити: незамкнене коло зі стрілкою.
+func iconRefresh(x, y, s, c) {
+    var a = s / 16
+    var cx = x + 8 * a
+    var cy = y + 8 * a
+    var k = 0
+    while (k < 10) {
+        var a1 = 0.6 + k * 0.5
+        var a2 = 0.6 + (k + 1) * 0.5
+        _ln(cx + cos(a1) * 5 * a, cy + sin(a1) * 5 * a, cx + cos(a2) * 5 * a, cy + sin(a2) * 5 * a, c)
+        k = k + 1
+    }
+    _ln(cx + 5 * a, cy - 4 * a, cx + 5 * a, cy + 0 * a, c)
+    _ln(cx + 5 * a, cy + 0 * a, cx + 1 * a, cy + 0 * a, c)
+}
+
+// Згорнути все: квадрат з мінусом.
+func iconCollapseAll(x, y, s, c) {
+    var a = s / 16
+    surfaceRectLine(S, toInt(x + 2 * a), toInt(y + 2 * a), toInt(12 * a), toInt(12 * a), c, 1)
+    _ln(x + 5 * a, y + 8 * a, x + 11 * a, y + 8 * a, c)
+}

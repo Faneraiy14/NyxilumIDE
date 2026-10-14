@@ -76,6 +76,9 @@ struct App {
     statusTime: i32
     tooltip: string
     probRun: i32
+    exSel: string
+    entry: any
+    ctx: any
     cfg: any
     askLevel: bool
     offer: any
@@ -449,6 +452,7 @@ struct Dialog {
     action: string
     okLabel: string
     suffix: string
+    target: string
 }
 
 // action: "newcode" | "newblocks" | "version"
@@ -460,7 +464,11 @@ func openDialog(title, text, action) {
         okLabel = "Зберегти"
         suffix = ""
     }
-    app.dialog = Dialog { title: title, text: text, action: action, okLabel: okLabel, suffix: suffix }
+    if (action == "delete") {
+        okLabel = "Видалити"
+        suffix = ""
+    }
+    app.dialog = Dialog { title: title, text: text, action: action, okLabel: okLabel, suffix: suffix, target: "" }
     app.focus = "dialog"
 }
 
@@ -471,6 +479,7 @@ func closeDialog(ok) {
     if (ok && d.action == "newcode") { newFile(d.text, "code") }
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
+    if (ok && d.action == "delete") { deletePath(d.target) }
 }
 
 func drawDialog() {
@@ -483,7 +492,14 @@ func drawDialog() {
     var x = toInt((W - w) / 2)
     var y = toInt((H - h) / 2)
     surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
-    surfaceText(S, d.title, x + 20, y + 18, 20, C_TEXT, true)
+    surfaceText(S, uiFit(d.title, w - 40, 20), x + 20, y + 18, 20, C_TEXT, true)
+    if (d.action == "delete") {
+        // підтвердження: без поля вводу
+        surfaceText(S, uiFit(d.text, w - 40, 16), x + 20, y + 64, 16, C_SUBTEXT)
+        uiButton("dialog.cancel", "Скасувати", x + w - 250, y + h - 52, 110, 34, "normal")
+        uiButton("dialog.ok", d.okLabel, x + w - 130, y + h - 52, 110, 34, "danger")
+        return
+    }
     surfaceRoundRect(S, x + 20, y + 58, w - 40, 36, 6, C_ACCENT)
     surfaceRoundRect(S, x + 21, y + 59, w - 42, 34, 6, C_BG)
     var tw = surfaceText(S, d.text, x + 32, y + 68, 16, C_TEXT)
@@ -503,6 +519,7 @@ func dialogKey(e) {
         closeDialog(false)
         return
     }
+    if (d.action == "delete") { return }
     if (e.key == "Backspace" && len(d.text) > 0) { d.text = substring(d.text, 0, len(d.text) - 1) }
 }
 
@@ -601,6 +618,7 @@ func drawCmdPalette() {
     var h = 48 + len(p.items) * rowH + 8
     surfaceRoundRect(S, x + 4, y + 4, w, h, 8, 0x88000000)
     surfaceRoundRect(S, x, y, w, h, 8, C_PANEL)
+    uiRegion("pal.box", x, y, w, h)
     surfaceRoundRect(S, x + 8, y + 8, w - 16, 32, 6, C_ACCENT)
     surfaceRoundRect(S, x + 9, y + 9, w - 18, 30, 6, C_BG)
     var prefix = "> "
@@ -628,7 +646,6 @@ func drawCmdPalette() {
         iy = iy + rowH
         i = i + 1
     }
-    uiRegion("pal.box", x, y, w, h)
 }
 
 // ---------- пошук у файлах ----------
@@ -1058,25 +1075,273 @@ func _isDirty(path) {
     return false
 }
 
-func drawExplorer(x, y, w, h) {
-    // кнопки "нова програма"
-    if (app.cfg.blocks) {
-        var bw = toInt((w - 36) / 2)
-        uiButton("newcode", "+ Код", x + 12, y, bw, 28, "normal")
-        uiButton("newblocks", "+ Блоки", x + 24 + bw, y, bw, 28, "normal")
-    } else {
-        uiButton("newcode", "+ Нова програма", x + 12, y, w - 24, 28, "normal")
+// ---------- Провідник (як у VS Code) ----------
+
+struct Entry {
+    mode: string
+    dir: string
+    text: string
+    target: string
+}
+
+func parentDir(path) {
+    var p = replace(path, "\\", "/")
+    var i = len(p) - 1
+    while (i > 0 && p[i] != "/") { i = i - 1 }
+    if (i <= 0) { return app.dir }
+    return substring(path, 0, i)
+}
+
+// Тека для нового файла: виділена тека, тека виділеного файла, інакше корінь.
+func targetDir() {
+    if (app.exSel == "") { return app.dir }
+    if (dirExists(app.exSel)) { return app.exSel }
+    return parentDir(app.exSel)
+}
+
+func startEntry(mode, dir, text, target) {
+    app.entry = Entry { mode: mode, dir: dir, text: text, target: target }
+    app.focus = "entry"
+    app.ctx = null
+    if (dir != app.dir) { mapSet(app.expanded, dir, true) }
+    if (app.side != "files") { app.side = "files" }
+    refreshFiles()
+}
+
+func commitEntry() {
+    var e = app.entry
+    app.entry = null
+    app.focus = "editor"
+    var name = trim(e.text)
+    if (name == "" || contains(name, "/") || contains(name, "\\")) { return }
+    if (e.mode == "rename") {
+        var to = joinPath(parentDir(e.target), name)
+        if (to == e.target) { return }
+        if (fileExists(to) || dirExists(to)) {
+            setStatus("«" + name + "» вже є")
+            return
+        }
+        saveAll()
+        try { movePath(e.target, to) } catch (err) {
+            setStatus("Не вдалося перейменувати: " + toString(err))
+            return
+        }
+        _renameOpen(e.target, to)
+        refreshFiles()
+        return
     }
-    var top = y + 38
+    if (e.mode == "newdir") {
+        var dp = joinPath(e.dir, name)
+        if (dirExists(dp) || fileExists(dp)) {
+            setStatus("«" + name + "» вже є")
+            return
+        }
+        makeDir(dp)
+        mapSet(app.expanded, dp, true)
+        app.exSel = dp
+        refreshFiles()
+        return
+    }
+    // новий файл: без розширення - програма .nx
+    if (indexOf(name, ".") < 0) { name = name + ".nx" }
+    var fp = joinPath(e.dir, name)
+    if (fileExists(fp) || dirExists(fp)) {
+        setStatus("«" + name + "» вже є - відкрито його")
+    } else {
+        var content = ""
+        if (fileKind(fp) == "blocks") { content = starterBlocksJson() }
+        if (fileKind(fp) == "code") { content = "func main() {\n    print(\"Привіт!\")\n}\n" }
+        writeFile(fp, content)
+    }
+    refreshFiles()
+    app.exSel = fp
+    openPath(fp)
+}
+
+// Після перейменування: вкладки й відкриті редактори - на нові шляхи
+// (і для файлів усередині перейменованої теки).
+func _renameOpen(from, to) {
+    var i = 0
+    while (i < len(app.tabs)) {
+        var t = app.tabs[i]
+        if (t == from || startsWith(t, from + "/")) {
+            var nt = to + substring(t, len(from), len(t) - len(from))
+            app.tabs[i] = nt
+            if (mapHas(app.editors, t)) {
+                var ed = mapGet(app.editors, t)
+                ed.path = nt
+                mapSet(app.editors, nt, ed)
+                mapRemove(app.editors, t)
+            }
+            if (mapHas(app.blocks, t)) {
+                var ws = mapGet(app.blocks, t)
+                ws.path = nt
+                mapSet(app.blocks, nt, ws)
+                mapRemove(app.blocks, t)
+            }
+            if (app.active == t) { app.active = nt }
+            if (app.current == t) { app.current = nt }
+            if (app.currentB == t) { app.currentB = nt }
+        }
+        i = i + 1
+    }
+    if (app.exSel == from) { app.exSel = to }
+}
+
+func askDelete(path) {
+    openDialog("Видалити «" + fileName(path) + "»?", "Це не можна скасувати.", "delete")
+    app.dialog.target = path
+}
+
+func deletePath(path) {
+    // закрити вкладки цього файла / файлів у цій теці
+    var t = len(app.tabs) - 1
+    while (t >= 0) {
+        var p = app.tabs[t]
+        if (p == path || startsWith(p, path + "/")) {
+            mapRemove(app.editors, p)
+            mapRemove(app.blocks, p)
+            closeTab(p)
+        }
+        t = t - 1
+    }
+    if (dirExists(path)) { deleteDir(path) } else { deleteFile(path) }
+    if (app.exSel == path) { app.exSel = "" }
+    refreshFiles()
+    setStatus("Видалено «" + fileName(path) + "»")
+}
+
+func entryKey(e) {
+    if (e.key == "Enter") { commitEntry() }
+    else if (e.key == "Escape") {
+        app.entry = null
+        app.focus = "editor"
+    }
+    else if (e.key == "Backspace" && len(app.entry.text) > 0) { app.entry.text = substring(app.entry.text, 0, len(app.entry.text) - 1) }
+}
+
+// Контекстне меню Провідника (права кнопка).
+struct Ctx {
+    items: array
+    x: i32
+    y: i32
+    path: string
+}
+
+func openCtx(path, x, y) {
+    var items = []
+    if (path == "") {
+        items = [["Новий файл", "newfile"], ["Нова тека", "newdir"]]
+    } else if (dirExists(path)) {
+        items = [["Новий файл", "newfile"], ["Нова тека", "newdir"], ["Перейменувати", "rename"], ["Видалити", "delete"], ["Копіювати шлях", "copypath"]]
+    } else {
+        items = [["Відкрити", "open"], ["Перейменувати", "rename"], ["Видалити", "delete"], ["Копіювати шлях", "copypath"]]
+    }
+    if (path != "") { app.exSel = path }
+    app.ctx = Ctx { items: items, x: x, y: y, path: path }
+}
+
+func ctxAction(act) {
+    var c = app.ctx
+    app.ctx = null
+    var path = c.path
+    var dir = app.dir
+    if (path != "") { if (dirExists(path)) { dir = path } else { dir = parentDir(path) } }
+    if (act == "newfile") { startEntry("newfile", dir, "", "") }
+    else if (act == "newdir") { startEntry("newdir", dir, "", "") }
+    else if (act == "rename") { startEntry("rename", parentDir(path), fileName(path), path) }
+    else if (act == "delete") { askDelete(path) }
+    else if (act == "open") { openPath(path) }
+    else if (act == "copypath") {
+        clipboardSet(path)
+        setStatus("Шлях скопійовано")
+    }
+}
+
+func drawCtx() {
+    var c = app.ctx
+    var w = 60
+    for it in c.items { w = max(w, textWidth(it[0], 14) + 36) }
+    var h = len(c.items) * 26 + 8
+    var x = min(c.x, surfaceWidth(S) - w - 4)
+    var y = min(c.y, surfaceHeight(S) - h - 4)
+    surfaceRoundRect(S, x + 3, y + 3, w, h, 6, 0x66000000)
+    surfaceRoundRect(S, x, y, w, h, 6, C_SURFACE)
+    // спершу все меню, потім пункти - пізніші області "зверху" для кліку
+    uiRegion("ctx.box", x, y, w, h)
+    var iy = y + 4
+    for it in c.items {
+        if (uiHover(x, iy, w, 26)) { surfaceRoundRect(S, x + 4, iy, w - 8, 26, 4, C_ACCENT) }
+        var col = C_TEXT
+        if (it[1] == "delete") { col = C_RED }
+        if (uiHover(x, iy, w, 26)) { col = 0x11111b }
+        surfaceText(S, it[0], x + 14, iy + 6, 14, col)
+        uiRegion("ctx:" + it[1], x, iy, w, 26)
+        iy = iy + 26
+    }
+}
+
+func _entryRow(x, ry, w, depth, kind) {
+    var indent = 10 + depth * 14
+    iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
+    var bx = x + indent + 40
+    surfaceRect(S, bx, ry + 1, w - (bx - x) - 6, 22, C_BG)
+    surfaceRectLine(S, bx, ry + 1, w - (bx - x) - 6, 22, C_ACCENT, 1)
+    var tw = surfaceText(S, app.entry.text, bx + 4, ry + 4, 16, C_TEXT)
+    surfaceRect(S, bx + 5 + tw, ry + 3, 2, 18, C_ACCENT)
+}
+
+func _exIcon(id, x, y, tip) {
+    var hover = uiHover(x, y, 22, 22)
+    if (hover) {
+        surfaceRoundRect(S, x, y, 22, 22, 4, C_SURFACE2)
+        app.tooltip = tip
+    }
+    var c = C_SUBTEXT
+    if (id == "ex.newfile") { iconNewFile(x + 3, y + 3, 16, c) }
+    if (id == "ex.newdir") { iconNewFolder(x + 3, y + 3, 16, c) }
+    if (id == "ex.refresh") { iconRefresh(x + 3, y + 3, 16, c) }
+    if (id == "ex.collapse") { iconCollapseAll(x + 3, y + 3, 16, c) }
+    uiRegion(id, x, y, 22, 22)
+}
+
+func drawExplorer(x, y, w, h) {
+    // заголовок: назва теки + іконки (новий файл, нова тека, оновити, згорнути все)
+    var title = toUpper(fileName(app.dir))
+    surfaceText(S, uiFit(title, w - 120, 13), x + 14, y + 4, 13, C_SUBTEXT, true)
+    var ix = x + w - 26
+    _exIcon("ex.collapse", ix, y, "Згорнути всі теки")
+    _exIcon("ex.refresh", ix - 24, y, "Оновити")
+    _exIcon("ex.newdir", ix - 48, y, "Нова тека")
+    _exIcon("ex.newfile", ix - 72, y, "Новий файл (без розширення - .nx, .nxb - блоки)")
+    var top = y + 28
     var rowH = 24
-    surfaceClip(S, x, top, w, h - 38)
+    uiRegion("ex.empty", x, top, w, h - 28)
+    surfaceClip(S, x, top, w, h - 28)
     var ry = top - app.sideScroll
+    var e = app.entry
+    // новий файл/тека в корені - рядок вводу першим
+    if (e != null && e.mode != "rename" && e.dir == app.dir) {
+        var k0 = "code"
+        if (e.mode == "newdir") { k0 = "dir" } else { k0 = fileKind(e.text) }
+        _entryRow(x, ry, w, 0, k0)
+        ry = ry + rowH
+    }
     for f in app.files {
+        var path = f[0]
+        if (e != null && e.mode == "rename" && e.target == path) {
+            var kr = "dir"
+            if (!f[3]) { kr = fileKind(e.text) }
+            _entryRow(x, ry, w, f[2], kr)
+            ry = ry + rowH
+            continue
+        }
         if (ry + rowH >= top && ry < top + h) {
-            var path = f[0]
             var on = path == app.active
+            var sel = path == app.exSel
             var indent = 10 + f[2] * 14
             if (on) { surfaceRect(S, x, ry, w, rowH, C_SURFACE) }
+            else if (sel) { surfaceRect(S, x, ry, w, rowH, C_BG) }
             else if (uiHover(x, ry, w, rowH)) { surfaceRect(S, x, ry, w, rowH, C_BG) }
             if (f[3]) {
                 iconChevron(x + indent, ry + 2, 20, mapHas(app.expanded, path), C_SUBTEXT)
@@ -1086,17 +1351,25 @@ func drawExplorer(x, y, w, h) {
             } else {
                 var kind = fileKind(path)
                 iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
-                var label = f[1]
-                if (kind == "blocks") { label = substring(label, 0, len(label) - 4) }
-                if (kind == "code") { label = substring(label, 0, len(label) - 3) }
                 var col = C_SUBTEXT
                 if (on) { col = C_TEXT }
-                surfaceText(S, uiFit(label, w - indent - 64, 16), x + indent + 42, ry + 4, 16, col)
+                surfaceText(S, uiFit(f[1], w - indent - 64, 16), x + indent + 42, ry + 4, 16, col)
                 if (_isDirty(path)) { surfaceCircle(S, x + w - 16, ry + 12, 4, C_PEACH) }
                 uiRegion("file:" + path, x, ry, w, rowH)
             }
         }
         ry = ry + rowH
+        // новий файл/тека всередині цієї теки - одразу під нею
+        if (f[3] && e != null && e.mode != "rename" && e.dir == path) {
+            var k1 = "code"
+            if (e.mode == "newdir") { k1 = "dir" } else { k1 = fileKind(e.text) }
+            _entryRow(x, ry, w, f[2] + 1, k1)
+            ry = ry + rowH
+        }
+    }
+    if (len(app.files) == 0 && e == null) {
+        surfaceText(S, "Тека порожня.", x + 14, ry + 6, 14, C_DIM)
+        uiButton("ex.newfile2", "Створити файл", x + 14, ry + 30, w - 28, 28, "normal")
     }
     surfaceUnclip(S)
 }
@@ -1355,6 +1628,7 @@ func draw() {
     drawStatus(W, H)
     if (app.tooltip != "" && app.palette == null && app.dialog == null) { uiTooltip(app.tooltip) }
     if (app.offer != null && app.tour < 0 && app.palette == null && app.dialog == null) { drawOffer(W, H) }
+    if (app.ctx != null) { drawCtx() }
     if (app.palette != null) { drawCmdPalette() }
     if (app.dialog != null) { drawDialog() }
     if (app.askLevel) { drawLevelAsk(W, H) }
@@ -1399,8 +1673,8 @@ func doAction(id) {
             setStatus("Почали спочатку (Ctrl+Z - повернути блоки)")
         }
     }
-    else if (id == "newcode") { openDialog("Назва нової програми (код)", freeName("code"), "newcode") }
-    else if (id == "newblocks") { openDialog("Назва нової програми з блоків", freeName("blocks"), "newblocks") }
+    else if (id == "newcode") { startEntry("newfile", targetDir(), freeName("code") + ".nx", "") }
+    else if (id == "newblocks") { startEntry("newfile", targetDir(), freeName("blocks") + ".nxb", "") }
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
@@ -1435,6 +1709,7 @@ func doAction(id) {
     else if (startsWith(id, "tab:")) { openPath(substring(id, 4, len(id) - 4)) }
     else if (startsWith(id, "dir:")) {
         var d = substring(id, 4, len(id) - 4)
+        app.exSel = d
         if (mapHas(app.expanded, d)) { mapRemove(app.expanded, d) } else { mapSet(app.expanded, d, true) }
         refreshFiles()
     }
@@ -1459,7 +1734,21 @@ func doAction(id) {
     else if (id == "t.prev") { tourGo(app.tour - 1) }
     else if (id == "t.skip") { endTour() }
     else if (startsWith(id, "g.")) { guideAction(id) }
-    else if (startsWith(id, "file:")) { openPath(substring(id, 5, len(id) - 5)) }
+    else if (startsWith(id, "file:")) {
+        app.exSel = substring(id, 5, len(id) - 5)
+        openPath(app.exSel)
+    }
+    else if (id == "ex.newfile" || id == "ex.newfile2") { startEntry("newfile", targetDir(), "", "") }
+    else if (id == "ex.newdir") { startEntry("newdir", targetDir(), "", "") }
+    else if (id == "ex.refresh") {
+        refreshFiles()
+        setStatus("Оновлено")
+    }
+    else if (id == "ex.collapse") {
+        app.expanded = newMap()
+        refreshFiles()
+    }
+    else if (startsWith(id, "ctx:")) { ctxAction(substring(id, 4, len(id) - 4)) }
     else if (startsWith(id, "offer.")) { offerAction(id) }
     else if (startsWith(id, "set.")) { settingsAction(id) }
     else if (startsWith(id, "level:")) { applyLevel(substring(id, 6, len(id) - 6), true) }
@@ -1483,6 +1772,28 @@ func onMouseDown(e) {
         if (startsWith(id, "pal:")) { uiPressedId = id }
         else if (id != "pal.box") { app.palette = null }
         return
+    }
+    if (app.ctx != null) {
+        if (startsWith(id, "ctx:")) { uiPressedId = id }
+        else if (id != "ctx.box") { app.ctx = null }
+        return
+    }
+    // клік повз поле нового файла/перейменування - як у VS Code, прийняти
+    if (app.entry != null && !_synthetic) { commitEntry() }
+    // права кнопка в Провіднику - меню
+    if (e.button == 3) {
+        if (startsWith(id, "file:")) {
+            openCtx(substring(id, 5, len(id) - 5), e.x, e.y)
+            return
+        }
+        if (startsWith(id, "dir:")) {
+            openCtx(substring(id, 4, len(id) - 4), e.x, e.y)
+            return
+        }
+        if (id == "ex.empty") {
+            openCtx("", e.x, e.y)
+            return
+        }
     }
 
     // подвійний/потрійний клік: те саме місце (±4 px) протягом 400 мс
@@ -1630,6 +1941,14 @@ func onKey(e) {
         paletteKey(e)
         return
     }
+    if (app.entry != null) {
+        entryKey(e)
+        return
+    }
+    if (app.ctx != null && k == "Escape") {
+        app.ctx = null
+        return
+    }
     if (app.offer != null && k == "Escape") {
         dismissOffer(false)
         return
@@ -1681,6 +2000,10 @@ func onKey(e) {
         setStatus("Збережено √")
         return
     }
+    if (k == "F2" && app.exSel != "" && app.side == "files") {
+        startEntry("rename", parentDir(app.exSel), fileName(app.exSel), app.exSel)
+        return
+    }
     if (e.ctrl && k == "n") {
         doAction("newcode")
         return
@@ -1715,8 +2038,13 @@ func onKey(e) {
 
 func onText(e) {
     if (app.dialog != null) {
+        if (app.dialog.action == "delete") { return }
         var newKind = app.dialog.action == "newcode" || app.dialog.action == "newblocks"
         if (!newKind || (e.text != "/" && e.text != "\\")) { app.dialog.text = app.dialog.text + e.text }
+        return
+    }
+    if (app.entry != null) {
+        if (e.text != "/" && e.text != "\\") { app.entry.text = app.entry.text + e.text }
         return
     }
     if (app.palette != null) {
@@ -2232,7 +2560,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, cfg: null, askLevel: false, offer: null }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", entry: null, ctx: null, cfg: null, askLevel: false, offer: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)

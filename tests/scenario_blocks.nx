@@ -30,14 +30,9 @@ func main() {
     ideInit(dir)
     step()
 
-    clickId("newblocks")
-    check(app.dialog != null, "діалог нової програми з блоків")
-    var n = 0
-    while (n < 12) {
-        key("Backspace", false, false)
-        n = n + 1
-    }
-    typeText("мої блоки")
+    clickId("ex.newfile")
+    check(app.entry != null, "рядок для назви нового файла")
+    typeText("мої блоки.nxb")
     key("Enter", false, false)
     step()
     var ws = currentBlocks()
@@ -69,7 +64,7 @@ func main() {
     var sp0 = slotPos(j, 0)
     click(sp0[0], sp0[1])
     check(ws.edit == j, "віконце редагується")
-    n = 0
+    var n = 0
     while (n < 10) {
         key("Backspace", false, false)
         n = n + 1
