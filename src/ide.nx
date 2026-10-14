@@ -8,6 +8,8 @@ import "theme.nx"
 import "ui.nx"
 import "editor.nx"
 import "console.nx"
+import "blocks_model.nx"
+import "blocks_view.nx"
 
 var TOP_H = 48
 var LEFT_W = 230
@@ -19,6 +21,9 @@ struct App {
     files: array
     editors: map
     current: string
+    blocks: map
+    currentB: string
+    genMap: array
     con: any
     focus: string
     drag: string
@@ -53,13 +58,18 @@ func fileName(path) {
     return parts[len(parts) - 1]
 }
 
+func ext() {
+    if (app.mode == "blocks") { return ".nxb" }
+    return ".nx"
+}
+
 // Тека IDE (там, де лежить src/): приклади, гайд.
 func ideHome() { return joinPath(scriptDir(), "..") }
 
 func refreshFiles() {
     var names = []
     for n in listDir(app.dir) {
-        if (endsWith(n, ".nx") && fileExists(joinPath(app.dir, n))) { append(names, n) }
+        if (endsWith(n, ext()) && fileExists(joinPath(app.dir, n))) { append(names, n) }
     }
     app.files = sort(names)
 }
@@ -67,6 +77,39 @@ func refreshFiles() {
 func currentEditor() {
     if (app.current == "") { return null }
     return mapGet(app.editors, app.current)
+}
+
+func currentBlocks() {
+    if (app.currentB == "") { return null }
+    return mapGet(app.blocks, app.currentB)
+}
+
+func openBlocks(path) {
+    if (!mapHas(app.blocks, path)) {
+        var text = ""
+        if (fileExists(path)) { text = readFile(path) }
+        mapSet(app.blocks, path, newBlocksWs(path, text))
+    }
+    app.currentB = path
+    surfaceTitle(S, "Nyx IDE — " + fileName(path))
+}
+
+// Перейти в режим (вкладка Блоки/Код): свій список файлів, свій відкритий файл.
+func setMode(mode) {
+    saveAll()
+    app.mode = mode
+    refreshFiles()
+    if (mode == "blocks") {
+        if (app.currentB == "") {
+            if (len(app.files) == 0) {
+                writeFile(joinPath(app.dir, "мої блоки.nxb"), starterBlocksJson())
+                refreshFiles()
+            }
+            openBlocks(joinPath(app.dir, app.files[0]))
+        } else { surfaceTitle(S, "Nyx IDE — " + fileName(app.currentB)) }
+    } else if (app.current != "") {
+        surfaceTitle(S, "Nyx IDE — " + fileName(app.current))
+    }
 }
 
 func openFile(path) {
@@ -88,6 +131,13 @@ func saveEditor(ed) {
 
 func saveAll() {
     for p in mapKeys(app.editors) { saveEditor(mapGet(app.editors, p)) }
+    for p in mapKeys(app.blocks) {
+        var ws = mapGet(app.blocks, p)
+        if (ws.dirty) {
+            writeFile(ws.path, stacksToJson(ws.stacks))
+            ws.dirty = false
+        }
+    }
 }
 
 func setStatus(text) {
@@ -98,37 +148,85 @@ func setStatus(text) {
 func newFile(name) {
     name = trim(name)
     if (name == "") { return }
-    if (!endsWith(name, ".nx")) { name = name + ".nx" }
+    if (!endsWith(name, ext())) { name = name + ext() }
     var path = joinPath(app.dir, name)
     if (fileExists(path)) {
         setStatus("Файл " + name + " вже є - відкрито його")
+    } else if (app.mode == "blocks") {
+        writeFile(path, starterBlocksJson())
     } else {
         writeFile(path, "func main() {\n    print(\"Привіт!\")\n}\n")
     }
     refreshFiles()
-    openFile(path)
+    if (app.mode == "blocks") { openBlocks(path) } else { openFile(path) }
 }
 
 func freeName() {
     var i = 1
-    while (fileExists(joinPath(app.dir, "програма" + toString(i) + ".nx"))) { i = i + 1 }
+    while (fileExists(joinPath(app.dir, "програма" + toString(i) + ext()))) { i = i + 1 }
     return "програма" + toString(i)
 }
 
 // ---------- запуск ----------
 
+func blocksTitle(ws) {
+    var n = fileName(ws.path)
+    return substring(n, 0, len(n) - 4)
+}
+
 func runCurrent() {
+    saveAll()
+    if (app.mode == "blocks") {
+        var ws = currentBlocks()
+        if (ws == null) { return }
+        ws.errBlock = null
+        var g = generateCode(ws.stacks, blocksTitle(ws))
+        app.genMap = g[1]
+        var genDir = joinPath(app.dir, ".nyx")
+        if (!dirExists(genDir)) { makeDir(genDir) }
+        var genPath = joinPath(genDir, blocksTitle(ws) + ".nx")
+        writeFile(genPath, g[0])
+        conRun(app.con, genPath, app.dir)
+        app.focus = "console"
+        return
+    }
     var ed = currentEditor()
     if (ed == null) { return }
-    saveAll()
     ed.errLine = -1
     conRun(app.con, ed.path, app.dir)
     app.focus = "console"
 }
 
+// "Відкрити як код": код з блоків стає звичайною програмою .nx.
+func blocksToCode() {
+    var ws = currentBlocks()
+    if (ws == null) { return }
+    var g = generateCode(ws.stacks, blocksTitle(ws))
+    var base = blocksTitle(ws) + " (код)"
+    var name = base + ".nx"
+    var i = 2
+    while (fileExists(joinPath(app.dir, name))) {
+        name = base + " " + toString(i) + ".nx"
+        i = i + 1
+    }
+    writeFile(joinPath(app.dir, name), g[0])
+    setMode("code")
+    openFile(joinPath(app.dir, name))
+    setStatus("Код з блоків відкрито як " + name)
+}
+
 // Після завершення з помилкою - підсвітити рядок у редакторі й перейти до нього.
 func afterPoll() {
     var con = app.con
+    if (!con.running && con.errLine >= 0 && app.mode == "blocks") {
+        var ws = currentBlocks()
+        if (ws != null && con.errLine < len(app.genMap)) {
+            ws.errBlock = app.genMap[con.errLine]
+            if (ws.errBlock != null) { setStatus("Помилка в блоці, що обведений червоним") }
+        }
+        con.errLine = -1
+        return
+    }
     if (!con.running && con.errLine >= 0) {
         var ed = currentEditor()
         if (ed != null) {
@@ -233,16 +331,17 @@ func drawFiles(H) {
     var y = y0 + 44
     for name in app.files {
         var path = joinPath(app.dir, name)
-        var on = path == app.current
+        var on = path == app.current || path == app.currentB
         var hover = uiHover(0, y, LEFT_W, 30)
         if (on) { surfaceRect(S, 0, y, LEFT_W, 30, C_SURFACE) }
         else if (hover) { surfaceRect(S, 0, y, LEFT_W, 30, C_BG) }
         if (on) { surfaceRect(S, 0, y, 3, 30, C_ACCENT) }
-        var label = substring(name, 0, len(name) - 3)
+        var label = substring(name, 0, len(name) - len(ext()))
         var color = C_SUBTEXT
         if (on) { color = C_TEXT }
         surfaceText(S, uiFit(label, LEFT_W - 50, 16), 20, y + 7, 16, color)
-        if (mapHas(app.editors, path) && mapGet(app.editors, path).dirty) {
+        var on2 = (mapHas(app.editors, path) && mapGet(app.editors, path).dirty) || (mapHas(app.blocks, path) && mapGet(app.blocks, path).dirty)
+        if (on2) {
             surfaceCircle(S, LEFT_W - 20, y + 15, 4, C_PEACH)
         }
         uiRegion("file:" + path, 0, y, LEFT_W, 30)
@@ -257,23 +356,22 @@ func drawStatus(W, H) {
     surfaceRect(S, 0, y, W, STATUS_H, C_PANEL2)
     var ed = currentEditor()
     var left = ""
-    if (ed != null) {
+    if (app.mode == "blocks") {
+        var ws = currentBlocks()
+        if (ws != null) {
+            left = fileName(ws.path)
+            if (ws.dirty) { left = left + "   • не збережено" } else { left = left + "   √ збережено" }
+        }
+    } else if (ed != null) {
         left = fileName(ed.path) + "   рядок " + toString(ed.cy + 1) + ", стовпчик " + toString(ed.cx + 1)
         if (ed.dirty) { left = left + "   • не збережено" } else { left = left + "   √ збережено" }
     }
     surfaceText(S, left, 12, y + 5, 14, C_SUBTEXT)
     var msg = "F5 - запустити   Ctrl+S - зберегти   Ctrl+Z - скасувати   Ctrl+/ - коментар   Ctrl+= / Ctrl+- - шрифт"
+    if (app.mode == "blocks") { msg = "Тягни блоки мишею   Права кнопка - меню блока   F5 - запустити   Ctrl+Z - скасувати" }
     if (app.status != "" && timeMs() - app.statusTime < 4000) { msg = app.status }
     var mw = textWidth(msg, 14)
     surfaceText(S, msg, W - mw - 12, y + 5, 14, C_DIM)
-}
-
-func drawBlocksPlaceholder(x, y, w, h) {
-    surfaceRect(S, x, y, w, h, C_BG)
-    var t1 = "Режим блоків скоро буде тут"
-    var t2 = "Поки що пиши код у вкладці «Код»"
-    surfaceText(S, t1, x + toInt((w - textWidth(t1, 24, true)) / 2), y + toInt(h / 2) - 30, 24, C_TEXT, true)
-    surfaceText(S, t2, x + toInt((w - textWidth(t2, 16)) / 2), y + toInt(h / 2) + 10, 16, C_SUBTEXT)
 }
 
 func layoutConsoleH(H) {
@@ -297,7 +395,8 @@ func draw() {
     var edH = H - TOP_H - STATUS_H - conH
     var ed = currentEditor()
     if (app.mode == "blocks") {
-        drawBlocksPlaceholder(cx, edY, cw, edH)
+        var ws = currentBlocks()
+        if (ws != null) { blocksDraw(ws, cx, edY, cw, edH, blocksTitle(ws)) }
     } else if (ed != null) {
         edDraw(ed, cx, edY, cw, edH, app.focus == "editor" && app.dialog == null)
     }
@@ -317,8 +416,13 @@ func doAction(id) {
         saveAll()
         setStatus("Збережено √")
     }
-    else if (id == "mode.blocks") { app.mode = "blocks" }
-    else if (id == "mode.code") { app.mode = "code" }
+    else if (id == "mode.blocks") { setMode("blocks") }
+    else if (id == "mode.code") { setMode("code") }
+    else if (id == "btogglecode") {
+        var ws = currentBlocks()
+        if (ws != null) { ws.showCode = !ws.showCode }
+    }
+    else if (id == "bopencode") { blocksToCode() }
     else if (id == "newfile") { openDialog("Назва нової програми", freeName(), "new") }
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
@@ -326,8 +430,8 @@ func doAction(id) {
     else if (id == "help") { setStatus("Довідку й гайд додамо разом з режимом блоків") }
     else if (startsWith(id, "file:")) {
         saveAll()
-        openFile(substring(id, 5, len(id) - 5))
-        app.mode = "code"
+        var path = substring(id, 5, len(id) - 5)
+        if (app.mode == "blocks") { openBlocks(path) } else { openFile(path) }
     }
 }
 
@@ -344,6 +448,15 @@ func onMouseDown(e) {
     app.lastClickTime = timeMs()
     app.lastClickX = e.x
     app.lastClickY = e.y
+
+    var bws = currentBlocks()
+    if (app.mode == "blocks" && bws != null && (startsWith(id, "b") || len(bws.menu) > 0)) {
+        if (blocksMouseDown(bws, e, id)) {
+            app.focus = "blocks"
+            app.con.focused = false
+            return
+        }
+    }
 
     if (e.button != 1) { return }
     var ed = currentEditor()
@@ -388,6 +501,8 @@ func onMouseDown(e) {
 }
 
 func onMouseUp(e) {
+    var bws = currentBlocks()
+    if (app.mode == "blocks" && bws != null) { blocksMouseUp(bws, e) }
     var id = uiHit(e.x, e.y)
     if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
     uiPressedId = ""
@@ -397,6 +512,8 @@ func onMouseUp(e) {
 func onMouseMove(e) {
     uiMouseX = e.x
     uiMouseY = e.y
+    var bws = currentBlocks()
+    if (app.mode == "blocks" && bws != null) { blocksMouseMove(bws, e) }
     var ed = currentEditor()
     if (app.drag == "editor" && ed != null) {
         var pos = edPosAt(ed, e.x, e.y)
@@ -412,6 +529,11 @@ func onMouseMove(e) {
 
 func onWheel(e) {
     var id = uiHit(e.x, e.y)
+    var bws = currentBlocks()
+    if (app.mode == "blocks" && bws != null && startsWith(id, "b")) {
+        blocksWheel(bws, e)
+        return
+    }
     var ed = currentEditor()
     if (id == "editor" && ed != null) {
         if (e.ctrl) { edZoom(ed, -e.dy) } else { edScroll(ed, e.dy * 3) }
@@ -448,6 +570,11 @@ func onKey(e) {
         conKey(app.con, e)
         return
     }
+    if (app.mode == "blocks") {
+        var bws = currentBlocks()
+        if (bws != null) { blocksKey(bws, e) }
+        return
+    }
     var ed = currentEditor()
     if (ed != null && app.mode == "code") { edKey(ed, e) }
 }
@@ -459,6 +586,11 @@ func onText(e) {
     }
     if (app.focus == "console" && app.con.running) {
         app.con.input = app.con.input + e.text
+        return
+    }
+    if (app.mode == "blocks") {
+        var bws = currentBlocks()
+        if (bws != null) { blocksText(bws, e.text) }
         return
     }
     var ed = currentEditor()
@@ -479,7 +611,7 @@ func handle(e) {
 
 func ideInit(dir) {
     if (!dirExists(dir)) { makeDir(dir) }
-    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", con: newConsole(),
+    app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], con: newConsole(),
         focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
         clickCount: 0, dialog: null, status: "", statusTime: 0 }
 

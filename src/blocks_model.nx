@@ -1,0 +1,468 @@
+// Режим "Блоки": модель - які бувають блоки, як вони з'єднані, як із
+// них виходить справжній код NyxilumLang і як вони зберігаються (.nxb).
+//
+// Блок має специфікацію (spec - id з таблиці SPECS), аргументи (args - для
+// кожного "віконця" або рядок-значення, або вкладений блок-репортер),
+// тіла (body, body2 - перший блок вкладеного ланцюжка для "повторити",
+// "якщо ... інакше") і next - наступний блок під ним.
+
+import "theme.nx"
+import "builtins.nx"
+
+struct Block {
+    spec: string
+    args: array
+    body: any
+    body2: any
+    next: any
+    x: i32
+    y: i32
+    sx: i32
+    sy: i32
+    w: i32
+    hh: i32
+    h: i32
+}
+
+// Вид блока: "hat" (шапка - з неї починається програма), "cmd" (команда),
+// "c" (обіймає інші блоки), "c2" (якщо/інакше), "rep" (значення), "bool"
+// (так/ні). У підписі %s - текст, %n - число, %b - умова, %v - змінна.
+struct Spec {
+    id: string
+    kind: string
+    cat: string
+    label: string
+    defs: array
+    gen: string
+}
+
+var CATEGORIES = ["Події", "Вивід", "Керування", "Змінні", "Оператори", "Малювання"]
+var CAT_COLORS = [0xd4a000, 0x4c8fe8, 0xe8901a, 0xe8642c, 0x3faa4a, 0x8a5cf0]
+
+var SPECS = []
+var _specById = null
+
+func _spec(id, kind, cat, label, defs, gen) {
+    append(SPECS, Spec { id: id, kind: kind, cat: cat, label: label, defs: defs, gen: gen })
+}
+
+func initSpecs() {
+    if (_specById != null) { return }
+    _specById = newMap()
+    _spec("start", "hat", "Події", "коли натиснуто «Запустити»", [], "")
+
+    _spec("say", "cmd", "Вивід", "сказати %s", ["Привіт!"], "print($1)")
+    _spec("saynl", "cmd", "Вивід", "сказати в той самий рядок %s", ["..."], "printNoNewLine($1)")
+    _spec("ask", "cmd", "Вивід", "запитати %s і запам'ятати в %v", ["Як тебе звати?", "відповідь"], "printNoNewLine($S1 + \" \")\n$2 = _відповідь(readLine())")
+
+    _spec("repeat", "c", "Керування", "повторити %n разів", ["10"], "for крок$ID in 0..$I1 {")
+    _spec("forever", "c", "Керування", "повторювати завжди", [], "while (true) {")
+    _spec("while", "c", "Керування", "поки %b", [""], "while ($1) {")
+    _spec("if", "c", "Керування", "якщо %b", [""], "if ($1) {")
+    _spec("ifelse", "c2", "Керування", "якщо %b", [""], "if ($1) {")
+    _spec("wait", "cmd", "Керування", "чекати %n секунд", ["1"], "sleep(toInt($1 * 1000))")
+    _spec("stop", "cmd", "Керування", "зупинити програму", [], "exit(0)")
+
+    _spec("set", "cmd", "Змінні", "запам'ятати в %v значення %s", ["рахунок", "0"], "$1 = $2")
+    _spec("change", "cmd", "Змінні", "збільшити %v на %n", ["рахунок", "1"], "$1 = $1 + $2")
+    _spec("var", "rep", "Змінні", "%v", ["рахунок"], "$1")
+
+    _spec("add", "rep", "Оператори", "%n + %n", ["", ""], "$1 + $2")
+    _spec("sub", "rep", "Оператори", "%n - %n", ["", ""], "$1 - $2")
+    _spec("mul", "rep", "Оператори", "%n × %n", ["", ""], "$1 * $2")
+    _spec("div", "rep", "Оператори", "%n ÷ %n", ["", ""], "$1 / $2")
+    _spec("mod", "rep", "Оператори", "остача від %n ÷ %n", ["", ""], "$1 % $2")
+    _spec("random", "rep", "Оператори", "випадкове від %n до %n", ["1", "10"], "randomInt($1, $2)")
+    _spec("round", "rep", "Оператори", "округлити %n", [""], "round($1)")
+    _spec("join", "rep", "Оператори", "з'єднати %s %s", ["привіт ", "світе"], "$S1 + $S2")
+    _spec("length", "rep", "Оператори", "довжина %s", ["слово"], "len($S1)")
+    _spec("eq", "bool", "Оператори", "%s = %s", ["", ""], "$1 == $2")
+    _spec("lt", "bool", "Оператори", "%n < %n", ["", ""], "$1 < $2")
+    _spec("gt", "bool", "Оператори", "%n > %n", ["", ""], "$1 > $2")
+    _spec("and", "bool", "Оператори", "%b і %b", ["", ""], "$1 && $2")
+    _spec("or", "bool", "Оператори", "%b або %b", ["", ""], "$1 || $2")
+    _spec("not", "bool", "Оператори", "не %b", [""], "!($1)")
+
+    _spec("scene", "cmd", "Малювання", "відкрити сцену %n × %n", ["480", "360"], "_сцена($1, $2)")
+    _spec("clear", "cmd", "Малювання", "залити сцену кольором %c", ["чорний"], "_очистити($1)")
+    _spec("circle", "cmd", "Малювання", "коло x %n y %n радіус %n колір %c", ["240", "180", "40", "жовтий"], "_коло($1, $2, $3, $4)")
+    _spec("rect", "cmd", "Малювання", "прямокутник x %n y %n ширина %n висота %n колір %c", ["100", "100", "80", "50", "синій"], "_прямокутник($1, $2, $3, $4, $5)")
+    _spec("line", "cmd", "Малювання", "лінія від %n %n до %n %n колір %c", ["0", "0", "480", "360", "білий"], "_лінія($1, $2, $3, $4, $5)")
+    _spec("text", "cmd", "Малювання", "текст %s x %n y %n колір %c", ["Привіт!", "20", "20", "білий"], "_текст($1, $2, $3, $4)")
+    _spec("show", "cmd", "Малювання", "показати малюнок", [], "_показати()")
+    _spec("key", "bool", "Малювання", "натиснуто клавішу %k", ["Right"], "_клавіша($1)")
+    _spec("mousex", "rep", "Малювання", "миша x", [], "_мишаX()")
+    _spec("mousey", "rep", "Малювання", "миша y", [], "_мишаY()")
+
+    for sp in SPECS { mapSet(_specById, sp.id, sp) }
+}
+
+func specOf(id) {
+    initSpecs()
+    return mapGet(_specById, id)
+}
+
+func catColor(cat) {
+    var i = indexOf(CATEGORIES, cat)
+    if (i < 0) { return C_DIM }
+    return CAT_COLORS[i]
+}
+
+// Типи віконець у підписі - по порядку.
+func slotTypes(sp) {
+    var types = []
+    var lab = sp.label
+    var i = 0
+    while (i < len(lab) - 1) {
+        if (lab[i] == "%") {
+            append(types, lab[i + 1])
+            i = i + 2
+        } else { i = i + 1 }
+    }
+    return types
+}
+
+func newBlock(specId) {
+    var sp = specOf(specId)
+    var args = []
+    for d in sp.defs { append(args, d) }
+    return Block { spec: specId, args: args, body: null, body2: null, next: null,
+        x: 0, y: 0, sx: 0, sy: 0, w: 0, hh: 0, h: 0 }
+}
+
+func isReporter(b) {
+    var k = specOf(b.spec).kind
+    return k == "rep" || k == "bool"
+}
+
+func lastOfChain(b) {
+    while (b.next != null) { b = b.next }
+    return b
+}
+
+// Глибока копія (дублювання блока; next не копіюється).
+func cloneBlock(b) {
+    var c = newBlock(b.spec)
+    var k = 0
+    while (k < len(b.args)) {
+        if (typeOf(b.args[k]) == "struct") { c.args[k] = cloneChain(b.args[k]) } else { c.args[k] = b.args[k] }
+        k = k + 1
+    }
+    if (b.body != null) { c.body = cloneChain(b.body) }
+    if (b.body2 != null) { c.body2 = cloneChain(b.body2) }
+    return c
+}
+
+func cloneChain(b) {
+    var first = cloneBlock(b)
+    var cur = first
+    var src = b.next
+    while (src != null) {
+        cur.next = cloneBlock(src)
+        cur = cur.next
+        src = src.next
+    }
+    return first
+}
+
+// ---------- збереження (.nxb = JSON) ----------
+
+func _blockToData(b) {
+    if (b == null) { return null }
+    var m = newMap()
+    mapSet(m, "s", b.spec)
+    var args = []
+    for a in b.args {
+        if (typeOf(a) == "struct") { append(args, _blockToData(a)) } else { append(args, a) }
+    }
+    mapSet(m, "a", args)
+    if (b.body != null) { mapSet(m, "b", _blockToData(b.body)) }
+    if (b.body2 != null) { mapSet(m, "e", _blockToData(b.body2)) }
+    if (b.next != null) { mapSet(m, "n", _blockToData(b.next)) }
+    mapSet(m, "x", b.x)
+    mapSet(m, "y", b.y)
+    return m
+}
+
+func _dataToBlock(m) {
+    if (m == null) { return null }
+    var id = mapGet(m, "s")
+    if (specOf(id) == null) { return null }
+    var b = newBlock(id)
+    var args = mapGet(m, "a")
+    var k = 0
+    while (k < len(args) && k < len(b.args)) {
+        var a = args[k]
+        if (typeOf(a) == "map") { b.args[k] = _dataToBlock(a) } else { b.args[k] = toString(a) }
+        if (b.args[k] == null) { b.args[k] = "" }
+        k = k + 1
+    }
+    if (mapHas(m, "b")) { b.body = _dataToBlock(mapGet(m, "b")) }
+    if (mapHas(m, "e")) { b.body2 = _dataToBlock(mapGet(m, "e")) }
+    if (mapHas(m, "n")) { b.next = _dataToBlock(mapGet(m, "n")) }
+    if (mapHas(m, "x")) { b.x = toInt(mapGet(m, "x")) }
+    if (mapHas(m, "y")) { b.y = toInt(mapGet(m, "y")) }
+    return b
+}
+
+func stacksToJson(stacks) {
+    var arr = []
+    for s in stacks { append(arr, _blockToData(s)) }
+    var root = newMap()
+    mapSet(root, "nyxBlocks", 1)
+    mapSet(root, "stacks", arr)
+    return toJson(root)
+}
+
+func stacksFromJson(text) {
+    var stacks = []
+    if (trim(text) == "") { return stacks }
+    var root = fromJson(text)
+    for d in mapGet(root, "stacks") {
+        var b = _dataToBlock(d)
+        if (b != null) { append(stacks, b) }
+    }
+    return stacks
+}
+
+// ---------- код з блоків ----------
+
+var _genLines = []
+var _genBlocks = []
+var _genVars = null
+var _genId = 0
+var _usesDrawing = false
+var _reserved = null
+
+func _isIdentChar(c, first) {
+    var code = charCode(c)
+    if ((code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code == 95 || (code >= 0x400 && code <= 0x4ff)) { return true }
+    return !first && code >= 48 && code <= 57
+}
+
+// Назва змінної, яку ввів учень -> правильний ідентифікатор мови.
+func varIdent(name) {
+    if (_reserved == null) {
+        _reserved = newMap()
+        for k in ["func", "var", "if", "else", "while", "for", "return", "break", "continue", "in", "struct",
+                  "self", "import", "extends", "super", "try", "catch", "throw", "true", "false", "null", "main"] {
+            mapSet(_reserved, k, true)
+        }
+        for b in BUILTIN_NAMES { mapSet(_reserved, b, true) }
+    }
+    var t = trim(toString(name))
+    var out = ""
+    var i = 0
+    while (i < len(t)) {
+        var c = t[i]
+        if (_isIdentChar(c, len(out) == 0)) { out = out + c }
+        else if (c == " " || c == "-") { out = out + "_" }
+        else if (c == "'" && len(out) > 0) { out = out + c }
+        i = i + 1
+    }
+    if (out == "") { out = "змінна" }
+    if (mapHas(_reserved, out)) { out = out + "_" }
+    return out
+}
+
+func _quote(s) {
+    s = replace(s, "\\", "\\\\")
+    s = replace(s, "\"", "\\\"")
+    s = replace(s, "\n", "\\n")
+    // "${" у тексті учня інакше стало б інтерполяцією в згенерованому коді.
+    // (У цьому файлі теж не можна писати "${" прямо - звідси "$" + "{".)
+    s = replace(s, "$" + "{", "$\" + \"" + "{")
+    return "\"" + s + "\""
+}
+
+func _isIntText(s) {
+    if (s == "") { return false }
+    var i = 0
+    while (i < len(s)) {
+        var code = charCode(s[i])
+        if ((code < 48 || code > 57) && !(i == 0 && s[i] == "-")) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+func isNumberText(s) {
+    s = trim(s)
+    if (s == "" || s == "-" || s == ".") { return false }
+    var dots = 0
+    var i = 0
+    while (i < len(s)) {
+        var c = s[i]
+        var code = charCode(c)
+        if (c == "-" && i == 0) { i = i + 1  continue }
+        if (c == ".") { dots = dots + 1 }
+        else if (code < 48 || code > 57) { return false }
+        i = i + 1
+    }
+    return dots <= 1
+}
+
+var COLOR_NAMES = ["чорний", "білий", "червоний", "зелений", "синій", "жовтий", "помаранчевий", "фіолетовий", "рожевий", "блакитний", "сірий", "коричневий"]
+var COLOR_VALUES = [0x000000, 0xffffff, 0xe83030, 0x30c040, 0x3060e8, 0xf0d020, 0xf08c20, 0x8a40d0, 0xf080b0, 0x40c0f0, 0x808080, 0x8a5a30]
+
+// Вираз з віконця типу t.
+func _genArg(a, t) {
+    if (typeOf(a) == "struct") { return _genExpr(a) }
+    var s = toString(a)
+    if (t == "v") { return _useVar(s) }
+    if (t == "b") { return "false" }
+    if (t == "c") {
+        var ci = indexOf(COLOR_NAMES, trim(toLower(s)))
+        if (ci >= 0) { return toString(COLOR_VALUES[ci]) }
+        if (isNumberText(s)) { return trim(s) }
+        return "0xffffff"
+    }
+    if (t == "k") { return _quote(s) }
+    if (t == "n") {
+        if (isNumberText(s)) { return trim(s) }
+        if (trim(s) == "") { return "0" }
+        return _quote(s)
+    }
+    // Текстове віконце з числом ("5") - число: "запам'ятати 5", потім
+    // "збільшити на 1" має дати 6, а не "51".
+    if (isNumberText(s)) { return trim(s) }
+    return _quote(s)
+}
+
+func _useVar(name) {
+    var id = varIdent(name)
+    if (!mapHas(_genVars, id)) { mapSet(_genVars, id, true) }
+    return id
+}
+
+// Шаблон коду -> код: $1..$9 - віконця, $ID - унікальний номер блока.
+// Один прохід по шаблону (а не replace по черзі) - текст учня у віконці
+// може містити "$1", і він не має підставлятися вдруге.
+func _fill(sp, b) {
+    var types = slotTypes(sp)
+    var g = sp.gen
+    var out = ""
+    var i = 0
+    while (i < len(g)) {
+        var c = g[i]
+        if (c == "$" && i + 1 < len(g)) {
+            // $S1 - як текст, $I1 - як ціле: toString/toInt лише там, де
+            // значення ще не того виду (код для учня - без зайвого шуму).
+            var mode = ""
+            var at = i + 1
+            if (g[at] == "S" || g[at] == "I") {
+                if (at + 1 < len(g) && charCode(g[at + 1]) >= 49 && charCode(g[at + 1]) <= 57) {
+                    mode = g[at]
+                    at = at + 1
+                }
+            }
+            var d = charCode(g[at]) - 48
+            if (d >= 1 && d <= 9 && d <= len(types)) {
+                var expr = _genArg(b.args[d - 1], types[d - 1])
+                // Вираз-оператор (a + b) усередині іншого оператора - у дужках;
+                // у команді (сказати, якщо, поки) дужки не потрібні.
+                var arg = b.args[d - 1]
+                if ((sp.kind == "rep" || sp.kind == "bool") && typeOf(arg) == "struct" && contains(specOf(arg.spec).gen, " ")) {
+                    expr = "(" + expr + ")"
+                }
+                if (mode == "S" && !startsWith(expr, "\"")) { expr = "toString(" + expr + ")" }
+                if (mode == "I" && !_isIntText(expr)) { expr = "toInt(" + expr + ")" }
+                out = out + expr
+                i = at + 1
+                continue
+            }
+            if (i + 2 < len(g) && g[i + 1] == "I" && g[i + 2] == "D") {
+                out = out + toString(_genId)
+                i = i + 3
+                continue
+            }
+        }
+        out = out + c
+        i = i + 1
+    }
+    if (sp.cat == "Малювання") { _usesDrawing = true }
+    return out
+}
+
+func _genExpr(b) {
+    return _fill(specOf(b.spec), b)
+}
+
+func _emit(line, b) {
+    append(_genLines, line)
+    append(_genBlocks, b)
+}
+
+func _genChain(b, indent) {
+    var pad = repeat("    ", indent)
+    while (b != null) {
+        var sp = specOf(b.spec)
+        if (sp.kind == "cmd") {
+            for part in split(_fill(sp, b), "\n") { _emit(pad + part, b) }
+        } else if (sp.kind == "c" || sp.kind == "c2") {
+            _genId = _genId + 1
+            var head = _fill(sp, b)
+            _emit(pad + head, b)
+            _genChain(b.body, indent + 1)
+            if (sp.kind == "c2") {
+                _emit(pad + "} else {", b)
+                _genChain(b.body2, indent + 1)
+            }
+            _emit(pad + "}", b)
+        }
+        b = b.next
+    }
+}
+
+var PRELUDE_ANSWER = "// Відповідь-число стає числом (щоб з нею можна було рахувати).\nfunc _відповідь(t) {\n    var s = trim(t)\n    try {\n        return toDouble(s)\n    } catch (e) {\n        return s\n    }\n}\n"
+
+var PRELUDE_DRAWING = "// Сцена для блоків «Малювання».\nvar _s = null\nfunc _сцена(w, h) {\n    if (_s == null) { _s = surfaceOpen(\"Сцена\", toInt(w), toInt(h)) }\n}\nfunc _готово() {\n    if (_s == null) { _сцена(480, 360) }\n    if (!surfaceIsOpen(_s)) { exit(0) }\n}\nfunc _очистити(c) {\n    _готово()\n    surfaceClear(_s, c)\n}\nfunc _коло(x, y, r, c) {\n    _готово()\n    surfaceCircle(_s, toInt(x), toInt(y), toInt(r), c)\n}\nfunc _прямокутник(x, y, w, h, c) {\n    _готово()\n    surfaceRect(_s, toInt(x), toInt(y), toInt(w), toInt(h), c)\n}\nfunc _лінія(x1, y1, x2, y2, c) {\n    _готово()\n    surfaceLine(_s, toInt(x1), toInt(y1), toInt(x2), toInt(y2), c, 3)\n}\nfunc _текст(t, x, y, c) {\n    _готово()\n    surfaceText(_s, toString(t), toInt(x), toInt(y), 20, c)\n}\nfunc _показати() {\n    _готово()\n    surfacePresent(_s)\n    var e = surfaceNextEvent(_s, 0)\n    while (e != null) { e = surfaceNextEvent(_s, 0) }\n    if (!surfaceIsOpen(_s)) { exit(0) }\n}\nfunc _клавіша(k) {\n    _готово()\n    return surfaceKeyDown(_s, k)\n}\nfunc _мишаX() {\n    _готово()\n    return surfaceMouseX(_s)\n}\nfunc _мишаY() {\n    _готово()\n    return surfaceMouseY(_s)\n}\n"
+
+// Програма з блоків -> [текст коду, масив блок-на-рядок (null для службових рядків)].
+func generateCode(stacks, title) {
+    initSpecs()
+    _genLines = []
+    _genBlocks = []
+    _genVars = newMap()
+    _genId = 0
+    _usesDrawing = false
+
+    var body = []
+    var bodyBlocks = []
+    for s in stacks {
+        if (s.spec == "start") {
+            _genLines = []
+            _genBlocks = []
+            _genChain(s.next, 1)
+            for l in _genLines { append(body, l) }
+            for bb in _genBlocks { append(bodyBlocks, bb) }
+        }
+    }
+
+    var lines = ["// Програма з блоків «" + title + "» - код створено Nyx IDE.", ""]
+    var blocks = [null, null]
+    for l in split(PRELUDE_ANSWER, "\n") { append(lines, l)  append(blocks, null) }
+    if (_usesDrawing) {
+        for l in split(PRELUDE_DRAWING, "\n") { append(lines, l)  append(blocks, null) }
+    }
+    append(lines, "func main() {")
+    append(blocks, null)
+    for v in mapKeys(_genVars) {
+        append(lines, "    var " + v + " = 0")
+        append(blocks, null)
+    }
+    var k = 0
+    while (k < len(body)) {
+        append(lines, body[k])
+        append(blocks, bodyBlocks[k])
+        k = k + 1
+    }
+    if (_usesDrawing) {
+        // Сцена не закривається одразу після останнього блока.
+        append(lines, "    while (_s != null && surfaceIsOpen(_s)) { _показати()  sleep(30) }")
+        append(blocks, null)
+    }
+    append(lines, "}")
+    append(blocks, null)
+    return [join(lines, "\n") + "\n", blocks]
+}

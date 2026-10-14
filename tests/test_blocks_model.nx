@@ -1,0 +1,87 @@
+// Модель блоків: генерація коду, збереження/завантаження, запуск згенерованого.
+import "../src/blocks_model.nx"
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+func main() {
+    var start = newBlock("start")
+    var ask = newBlock("ask")
+    var say = newBlock("say")
+    var j = newBlock("join")
+    j.args[0] = "Привіт, "
+    var v = newBlock("var")
+    v.args[0] = "відповідь"
+    j.args[1] = v
+    say.args[0] = j
+    var rep = newBlock("repeat")
+    rep.args[0] = "3"
+    var s2 = newBlock("say")
+    var r = newBlock("random")
+    s2.args[0] = r
+    rep.body = s2
+    var cond = newBlock("ifelse")
+    var eq = newBlock("eq")
+    eq.args[0] = "1"
+    eq.args[1] = "1"
+    cond.args[0] = eq
+    var yes = newBlock("say")
+    var weird = "так $" + "{не інтерполяція} \"лапки\" $1"
+    yes.args[0] = weird
+    cond.body = yes
+    var no = newBlock("say")
+    no.args[0] = "ні"
+    cond.body2 = no
+    var setb = newBlock("set")
+    setb.args[0] = "мій рахунок"
+    setb.args[1] = "5"
+    var ch = newBlock("change")
+    ch.args[0] = "мій рахунок"
+    var s3 = newBlock("say")
+    var v2 = newBlock("var")
+    v2.args[0] = "мій рахунок"
+    s3.args[0] = v2
+    start.next = ask
+    ask.next = say
+    say.next = rep
+    rep.next = cond
+    cond.next = setb
+    setb.next = ch
+    ch.next = s3
+
+    var stray = newBlock("say")   // без шапки - не виконується
+    stray.args[0] = "мене не видно"
+
+    var g = generateCode([start, stray], "тест")
+    var code = g[0]
+    print(code)
+    check(len(g[1]) == len(split(code, "\n")) - 1 || len(g[1]) == len(split(code, "\n")), "карта рядок->блок відповідає коду")
+    check(!contains(code, "мене не видно"), "блоки без шапки не потрапляють у код")
+    check(contains(code, "var мій_рахунок = 0"), "змінна оголошена з безпечною назвою")
+
+    // запуск згенерованого коду
+    var dir = scriptArgs()[0]
+    writeFile(dir + "/gen.nx", code)
+    var o = newMap()
+    mapSet(o, "interactive", true)
+    var h = procStart(nxPath(), [dir + "/gen.nx"], o)
+    procWrite(h, "Сева\n")
+    procWait(h)
+    sleep(100)
+    var out = procOutput(h)
+    print(out)
+    check(procExitCode(h) == 0, "згенерована програма працює")
+    check(contains(out, "Привіт, Сева"), "запитати + з'єднати + змінна")
+    check(contains(out, weird), "текст учня не ламає код")
+    check(contains(out, "6"), "запам'ятати 5, збільшити на 1 = 6")
+
+    // збереження і завантаження
+    var json = stacksToJson([start, stray])
+    var back = stacksFromJson(json)
+    check(len(back) == 2, "збережено 2 стопки")
+    var g2 = generateCode(back, "тест")
+    check(g2[0] == code, "після завантаження той самий код")
+    print("МОДЕЛЬ БЛОКІВ: УСЕ ГАРАЗД")
+}

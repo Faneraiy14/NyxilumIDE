@@ -1,0 +1,1044 @@
+// Режим "Блоки": малювання, палітра, перетягування з прилипанням,
+// редагування значень у віконцях, меню, скасування.
+//
+// Блоки малюються з нуля щокадру (як і вся IDE). Під час малювання
+// збираються "області" - де який блок, віконце, точка прилипання - і по
+// них потім визначається, куди клацнули чи куди кинули блок.
+
+import "theme.nx"
+import "ui.nx"
+import "highlight.nx"
+import "blocks_model.nx"
+
+var BF = 16          // шрифт блоків
+var SLOT_H = 26
+var PADX = 10
+var GAP = 6
+var ARM_W = 18
+var ARM_BOTTOM = 22
+var STRIP_W = 84     // смуга категорій
+var PAL_W = 250      // палітра блоків
+var CODE_W = 360     // панель "Код" праворуч
+
+struct BlocksWs {
+    stacks: array
+    panX: i32
+    panY: i32
+    cat: string
+    drag: any
+    dragOffX: i32
+    dragOffY: i32
+    dragX: i32
+    dragY: i32
+    dragH: i32
+    pending: any
+    pendingSlot: i32
+    pendingSlotType: string
+    pendingPal: bool
+    pressX: i32
+    pressY: i32
+    panning: bool
+    edit: any
+    editIdx: i32
+    errBlock: any
+    undo: array
+    redo: array
+    dirty: bool
+    path: string
+    menu: array
+    menuX: i32
+    menuY: i32
+    menuBlock: any
+    menuIdx: i32
+    palScroll: i32
+    showCode: bool
+    snap: array
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+}
+
+func newBlocksWs(path, text) {
+    initSpecs()
+    var ws = BlocksWs { stacks: [], panX: 0, panY: 0, cat: "Події", drag: null, dragOffX: 0, dragOffY: 0,
+        dragX: 0, dragY: 0, dragH: 0, pending: null, pendingSlot: -1, pendingSlotType: "", pendingPal: false,
+        pressX: 0, pressY: 0, panning: false, edit: null, editIdx: -1, errBlock: null, undo: [], redo: [],
+        dirty: false, path: path, menu: [], menuX: 0, menuY: 0, menuBlock: null, menuIdx: -1, palScroll: 0,
+        showCode: false, snap: [], x: 0, y: 0, w: 0, h: 0 }
+    try {
+        ws.stacks = stacksFromJson(text)
+    } catch (e) {
+        ws.stacks = []
+    }
+    return ws
+}
+
+// Порожня нова програма з блоків: шапка і перший блок.
+func starterBlocksJson() {
+    var start = newBlock("start")
+    start.x = 40
+    start.y = 40
+    var say = newBlock("say")
+    start.next = say
+    return stacksToJson([start])
+}
+
+// ---------- області для кліків (збираються під час малювання) ----------
+
+var _bHits = []      // блок, x, y, w, h
+var _sHits = []      // блок, номер віконця, тип, x, y, w, h
+var _attach = []     // вид ("next"/"body"/"body2"), блок, x, y
+var _pHits = []      // id специфікації або назва змінної, x, y, w, h
+var _record = true   // перетягуваний блок НЕ записує областей
+
+func _hitB(b, x, y, w, h) {
+    if (!_record) { return }
+    append(_bHits, b) append(_bHits, x) append(_bHits, y) append(_bHits, w) append(_bHits, h)
+}
+
+// ---------- кольори ----------
+
+func _darken(c) {
+    var r = toInt(((c >> 16) & 255) * 0.75)
+    var g = toInt(((c >> 8) & 255) * 0.75)
+    var b = toInt((c & 255) * 0.75)
+    return (r << 16) | (g << 8) | b
+}
+
+func _textColor(cat) {
+    if (cat == "Події") { return 0x2a2000 }
+    return 0xffffff
+}
+
+// ---------- розміри ----------
+
+// Частини підпису: [вид, значення] - ["t", "текст"] або ["s", тип віконця].
+var _partsCache = null
+
+func labelParts(sp) {
+    if (_partsCache == null) { _partsCache = newMap() }
+    if (mapHas(_partsCache, sp.id)) { return mapGet(_partsCache, sp.id) }
+    var parts = []
+    var lab = sp.label
+    var cur = ""
+    var i = 0
+    while (i < len(lab)) {
+        if (lab[i] == "%" && i + 1 < len(lab)) {
+            if (len(trim(cur)) > 0) { append(parts, ["t", trim(cur)]) }
+            cur = ""
+            append(parts, ["s", lab[i + 1]])
+            i = i + 2
+        } else {
+            cur = cur + lab[i]
+            i = i + 1
+        }
+    }
+    if (len(trim(cur)) > 0) { append(parts, ["t", trim(cur)]) }
+    mapSet(_partsCache, sp.id, parts)
+    return parts
+}
+
+var KEY_NAMES = ["Right", "Left", "Up", "Down", "Space", "Enter", "a", "d", "w", "s"]
+var KEY_LABELS = ["→ вправо", "← вліво", "↑ вгору", "↓ вниз", "пробіл", "Enter", "A", "D", "W", "S"]
+
+func _slotText(a, t) {
+    var s = toString(a)
+    if (t == "k") {
+        var i = indexOf(KEY_NAMES, s)
+        if (i >= 0) { return KEY_LABELS[i] }
+    }
+    return s
+}
+
+func _measureArg(a, t) {
+    if (typeOf(a) == "struct") { return measureBlock(a) }
+    if (t == "b") { return [44, SLOT_H] }
+    var tw = textWidth(_slotText(a, t), BF)
+    if (t == "c") { return [tw + 40, SLOT_H] }
+    if (t == "v" || t == "k") { return [tw + 34, SLOT_H] }
+    return [max(tw + 16, 34), SLOT_H]
+}
+
+// Розмір "голови" блока (без тіл): [w, h]; також записує b.w, b.hh.
+func measureBlock(b) {
+    var sp = specOf(b.spec)
+    var parts = labelParts(sp)
+    var w = PADX
+    var h = 0
+    var k = 0
+    for p in parts {
+        if (p[0] == "t") { w = w + textWidth(p[1], BF) + GAP }
+        else {
+            var m = _measureArg(b.args[k], p[1])
+            w = w + m[0] + GAP
+            h = max(h, m[1])
+            k = k + 1
+        }
+    }
+    w = w - GAP + PADX
+    if (sp.kind == "bool") { w = w + 16 }
+    if (sp.kind == "rep") { w = w + 6 }
+    var minH = 40
+    if (sp.kind == "rep" || sp.kind == "bool") { minH = 30 }
+    if (sp.kind == "hat") { minH = 52 }
+    b.w = max(w, 40)
+    b.hh = max(minH, h + 12)
+    if (sp.kind == "c" || sp.kind == "c2") { b.w = max(b.w, 140) }
+    return [b.w, b.hh]
+}
+
+// ---------- малювання блоків ----------
+
+func _hexagon(x, y, w, h, color) {
+    var e = toInt(h / 2)
+    surfacePolygon(S, [x, y + e, x + e, y, x + w - e, y, x + w, y + e, x + w - e, y + h, x + e, y + h], color)
+}
+
+func _drawSlot(b, k, t, x, y, color, ws) {
+    var a = b.args[k]
+    if (typeOf(a) == "struct") {
+        var m = measureBlock(a)
+        var ry = y + toInt((b.hh - m[1]) / 2)
+        if (_record) {
+            append(_sHits, b) append(_sHits, k) append(_sHits, t) append(_sHits, x) append(_sHits, ry) append(_sHits, m[0]) append(_sHits, m[1])
+        }
+        drawBlock(a, x, ry, ws)
+        return m[0]
+    }
+    var m2 = _measureArg(a, t)
+    var sw = m2[0]
+    var sy = y + toInt((b.hh - SLOT_H) / 2)
+    var editing = ws != null && ws.edit == b && ws.editIdx == k && _record
+    if (t == "b") {
+        _hexagon(x, sy, sw, SLOT_H, _darken(color))
+    } else if (t == "v" || t == "k") {
+        surfaceRoundRect(S, x, sy, sw, SLOT_H, 5, _darken(color))
+        surfaceText(S, _slotText(a, t), x + 8, sy + 5, BF, 0xffffff)
+        var ax = x + sw - 16
+        surfacePolygon(S, [ax, sy + 11, ax + 9, sy + 11, ax + 4, sy + 16], 0xffffff)
+    } else {
+        var r = 5
+        if (t == "n") { r = toInt(SLOT_H / 2) }
+        var bg = 0xffffff
+        if (editing) { surfaceRoundRect(S, x - 2, sy - 2, sw + 4, SLOT_H + 4, r + 2, C_ACCENT) }
+        surfaceRoundRect(S, x, sy, sw, SLOT_H, r, bg)
+        var tx = x + 8
+        if (t == "c") {
+            var ci = indexOf(COLOR_NAMES, trim(toLower(toString(a))))
+            var col = 0xffffff
+            if (ci >= 0) { col = COLOR_VALUES[ci] }
+            surfaceCircle(S, x + 13, sy + 13, 8, 0x333344)
+            surfaceCircle(S, x + 13, sy + 13, 7, col)
+            tx = x + 26
+        }
+        var tw = surfaceText(S, toString(a), tx, sy + 5, BF, 0x2a2a35)
+        if (editing) { surfaceRect(S, tx + tw + 1, sy + 4, 2, 18, 0x2a2a35) }
+    }
+    if (_record) {
+        append(_sHits, b) append(_sHits, k) append(_sHits, t) append(_sHits, x) append(_sHits, sy) append(_sHits, sw) append(_sHits, SLOT_H)
+    }
+    return sw
+}
+
+// Голова блока з підписом і віконцями.
+func _drawHead(b, x, y, color, ws) {
+    var sp = specOf(b.spec)
+    var fg = _textColor(sp.cat)
+    var cx = x + PADX
+    if (sp.kind == "bool") { cx = cx + 8 }
+    if (sp.kind == "rep") { cx = cx + 3 }
+    var k = 0
+    var ty = y + toInt((b.hh - textHeight(BF)) / 2)
+    if (sp.kind == "hat") { ty = ty + 4 }
+    for p in labelParts(sp) {
+        if (p[0] == "t") {
+            surfaceText(S, p[1], cx, ty, BF, fg)
+            cx = cx + textWidth(p[1], BF) + GAP
+        } else {
+            var sy = y
+            if (sp.kind == "hat") { sy = y + 4 }
+            cx = cx + _drawSlot(b, k, p[1], cx, sy, color, ws) + GAP
+            k = k + 1
+        }
+    }
+}
+
+// Малює блок (з тілами) у (x, y); повертає повну висоту.
+func drawBlock(b, x, y, ws) {
+    var sp = specOf(b.spec)
+    var color = catColor(sp.cat)
+    measureBlock(b)
+    b.sx = x
+    b.sy = y
+    var w = b.w
+    var hh = b.hh
+    var total = hh
+    var err = ws != null && ws.errBlock == b
+
+    if (sp.kind == "rep") {
+        surfaceRoundRect(S, x, y, w, hh, toInt(hh / 2), color)
+        _hitB(b, x, y, w, hh)
+        _drawHead(b, x, y, color, ws)
+    } else if (sp.kind == "bool") {
+        _hexagon(x, y, w, hh, color)
+        _hitB(b, x, y, w, hh)
+        _drawHead(b, x, y, color, ws)
+    } else if (sp.kind == "hat") {
+        surfaceRoundRect(S, x, y, w, hh, 16, color)
+        surfaceRect(S, x, y + hh - 10, w, 10, color)
+        surfaceRoundRect(S, x + 18, y + hh - 2, 20, 7, 3, color)
+        _hitB(b, x, y, w, hh)
+        _drawHead(b, x, y, color, ws)
+        if (_record) { append(_attach, "next") append(_attach, b) append(_attach, x) append(_attach, y + hh) }
+    } else if (sp.kind == "cmd") {
+        surfaceRoundRect(S, x, y, w, hh, 6, color)
+        surfaceRoundRect(S, x + 18, y + hh - 2, 20, 7, 3, color)
+        surfaceRect(S, x + 18, y, 20, 3, _darken(color))
+        _hitB(b, x, y, w, hh)
+        _drawHead(b, x, y, color, ws)
+        if (_record) { append(_attach, "next") append(_attach, b) append(_attach, x) append(_attach, y + hh) }
+    } else {
+        // "обіймаючий" блок: голова, ліва стінка, тіло(а), низ
+        surfaceRoundRect(S, x, y, w, hh, 6, color)
+        surfaceRect(S, x + 18, y, 20, 3, _darken(color))
+        _hitB(b, x, y, w, hh)
+        _drawHead(b, x, y, color, ws)
+        var cy = y + hh
+        if (_record) { append(_attach, "body") append(_attach, b) append(_attach, x + ARM_W) append(_attach, cy) }
+        var bodyH = 26
+        if (b.body != null) { bodyH = max(26, drawChain(b.body, x + ARM_W, cy, ws)) }
+        surfaceRect(S, x, cy - 2, ARM_W, bodyH + 4, color)
+        _hitB(b, x, cy, ARM_W, bodyH)
+        cy = cy + bodyH
+        if (sp.kind == "c2") {
+            surfaceRoundRect(S, x, cy, w, 32, 6, color)
+            surfaceText(S, "інакше", x + PADX, cy + 8, BF, _textColor(sp.cat))
+            _hitB(b, x, cy, w, 32)
+            cy = cy + 32
+            if (_record) { append(_attach, "body2") append(_attach, b) append(_attach, x + ARM_W) append(_attach, cy) }
+            var body2H = 26
+            if (b.body2 != null) { body2H = max(26, drawChain(b.body2, x + ARM_W, cy, ws)) }
+            surfaceRect(S, x, cy - 2, ARM_W, body2H + 4, color)
+            _hitB(b, x, cy, ARM_W, body2H)
+            cy = cy + body2H
+        }
+        var bw = max(120, toInt(w * 0.6))
+        surfaceRoundRect(S, x, cy, bw, ARM_BOTTOM, 6, color)
+        surfaceRoundRect(S, x + 18, cy + ARM_BOTTOM - 2, 20, 7, 3, color)
+        _hitB(b, x, cy, bw, ARM_BOTTOM)
+        total = cy + ARM_BOTTOM - y
+        if (_record) { append(_attach, "next") append(_attach, b) append(_attach, x) append(_attach, y + total) }
+    }
+    if (err) { surfaceRectLine(S, x - 3, y - 3, w + 6, hh + 6, C_RED, 3) }
+    b.h = total
+    return total
+}
+
+func drawChain(b, x, y, ws) {
+    var total = 0
+    while (b != null) {
+        total = total + drawBlock(b, x, y + total, ws)
+        b = b.next
+    }
+    return total
+}
+
+// ---------- змінні ----------
+
+func _collectVars(b, names) {
+    while (b != null) {
+        var types = slotTypes(specOf(b.spec))
+        var k = 0
+        while (k < len(b.args)) {
+            var a = b.args[k]
+            if (typeOf(a) == "struct") { _collectVars(a, names) }
+            else if (k < len(types) && types[k] == "v") {
+                var n = trim(toString(a))
+                if (n != "" && indexOf(names, n) < 0) { append(names, n) }
+            }
+            k = k + 1
+        }
+        if (b.body != null) { _collectVars(b.body, names) }
+        if (b.body2 != null) { _collectVars(b.body2, names) }
+        b = b.next
+    }
+}
+
+func wsVarNames(ws) {
+    var names = []
+    for s in ws.stacks { _collectVars(s, names) }
+    if (len(names) == 0) { append(names, "рахунок") }
+    return names
+}
+
+// ---------- палітра ----------
+
+var _palBlocks = null
+
+func _palTemplate(id) {
+    if (_palBlocks == null) { _palBlocks = newMap() }
+    if (!mapHas(_palBlocks, id)) {
+        if (startsWith(id, "var:")) { mapSet(_palBlocks, id, newBlock("var")) }
+        else { mapSet(_palBlocks, id, newBlock(id)) }
+    }
+    return mapGet(_palBlocks, id)
+}
+
+func drawPalette(ws, x, y, h) {
+    // смуга категорій
+    surfaceRect(S, x, y, STRIP_W, h, C_PANEL2)
+    var cy = y + 10
+    var i = 0
+    while (i < len(CATEGORIES)) {
+        var cat = CATEGORIES[i]
+        var on = ws.cat == cat
+        if (on) { surfaceRect(S, x, cy - 4, STRIP_W, 58, C_SURFACE) }
+        else if (uiHover(x, cy - 4, STRIP_W, 58)) { surfaceRect(S, x, cy - 4, STRIP_W, 58, C_BG) }
+        surfaceCircle(S, x + toInt(STRIP_W / 2), cy + 14, 13, CAT_COLORS[i])
+        var tw = textWidth(cat, 12)
+        surfaceText(S, cat, x + toInt((STRIP_W - tw) / 2), cy + 32, 12, C_SUBTEXT)
+        uiRegion("bcat:" + cat, x, cy - 4, STRIP_W, 58)
+        cy = cy + 62
+        i = i + 1
+    }
+
+    // блоки категорії
+    var px = x + STRIP_W
+    surfaceRect(S, px, y, PAL_W, h, C_PANEL)
+    surfaceClip(S, px, y, PAL_W, h)
+    surfaceText(S, ws.cat, px + 14, y + 12, 16, C_TEXT, true)
+    var by = y + 44 - ws.palScroll
+    var ids = []
+    for sp in SPECS {
+        if (sp.cat == ws.cat && sp.id != "var") { append(ids, sp.id) }
+    }
+    _pHits = []
+    _record = false
+    if (ws.cat == "Змінні") {
+        for name in wsVarNames(ws) {
+            var vb = _palTemplate("var:" + name)
+            vb.args[0] = name
+            drawBlock(vb, px + 14, by, null)
+            append(_pHits, "var:" + name) append(_pHits, px + 14) append(_pHits, by) append(_pHits, vb.w) append(_pHits, vb.hh)
+            by = by + vb.hh + 10
+        }
+        uiButton("bnewvar", "+ Нова змінна", px + 14, by, 160, 30, "normal")
+        by = by + 44
+    }
+    for id in ids {
+        var tb = _palTemplate(id)
+        var th = drawBlock(tb, px + 14, by, null)
+        append(_pHits, id) append(_pHits, px + 14) append(_pHits, by) append(_pHits, tb.w) append(_pHits, tb.hh)
+        by = by + th + 12
+    }
+    _record = true
+    surfaceUnclip(S)
+    uiRegion("bpalette", px, y, PAL_W, h)
+}
+
+// ---------- панель згенерованого коду ----------
+
+func drawCodePanel(ws, x, y, w, h, title) {
+    surfaceRect(S, x, y, w, h, C_PANEL2)
+    surfaceRect(S, x, y, 1, h, C_BORDER)
+    surfaceText(S, "Так це виглядає кодом", x + 14, y + 12, 16, C_TEXT, true)
+    var bw = uiButtonW("Відкрити як код")
+    uiButton("bopencode", "Відкрити як код", x + w - bw - 10, y + 6, bw, 30, "normal")
+    var g = generateCode(ws.stacks, title)
+    var lines = split(g[0], "\n")
+    // службові допоміжні функції пропускаємо - лише main
+    var first = indexOf(lines, "func main() {")
+    if (first < 0) { first = 0 }
+    surfaceClip(S, x, y + 44, w, h - 44)
+    var ly = y + 50
+    var cw = textWidth("M", 14)
+    var i = first
+    var inC = false
+    while (i < len(lines) && ly < y + h) {
+        var r = hlLine(lines[i], inC)
+        inC = r[1]
+        var t = r[0]
+        var k = 0
+        while (k < len(t)) {
+            surfaceText(S, substring(lines[i], t[k], t[k + 1] - t[k]), x + 14 + t[k] * cw, ly, 14, HL_COLORS[t[k + 2]])
+            k = k + 3
+        }
+        ly = ly + 17
+        i = i + 1
+    }
+    surfaceUnclip(S)
+}
+
+// ---------- усе разом ----------
+
+func blocksDraw(ws, x, y, w, h, title) {
+    ws.x = x
+    ws.y = y
+    ws.w = w
+    ws.h = h
+    _bHits = []
+    _sHits = []
+    _attach = []
+    drawPalette(ws, x, y, h)
+
+    var wx = x + STRIP_W + PAL_W
+    var ww = w - STRIP_W - PAL_W
+    if (ws.showCode) { ww = ww - CODE_W }
+    surfaceRect(S, wx, y, ww, h, C_BG)
+    // сітка-крапки: орієнтир при прокручуванні
+    var gx = wx + ((ws.panX % 32) + 32) % 32
+    while (gx < wx + ww) {
+        var gy = y + ((ws.panY % 32) + 32) % 32
+        while (gy < y + h) {
+            surfaceRect(S, gx, gy, 2, 2, 0x2c2d40)
+            gy = gy + 32
+        }
+        gx = gx + 32
+    }
+    surfaceClip(S, wx, y, ww, h)
+    uiRegion("bworkspace", wx, y, ww, h)
+    for s in ws.stacks {
+        drawChain(s, wx + ws.panX + s.x, y + ws.panY + s.y, ws)
+    }
+
+    if (len(ws.stacks) == 0 && ws.drag == null) {
+        var t = "Перетягни сюди блок «коли натиснуто Запустити» з категорії Події"
+        surfaceText(S, t, wx + toInt((ww - textWidth(t, 16)) / 2), y + toInt(h / 2), 16, C_DIM)
+    }
+
+    // кнопка "Код" у кутку робочої області
+    var codeLabel = "Показати код"
+    if (ws.showCode) { codeLabel = "Сховати код" }
+    var cbw = uiButtonW(codeLabel)
+    uiButton("btogglecode", codeLabel, wx + ww - cbw - 12, y + 10, cbw, 30, "normal")
+    surfaceUnclip(S)
+
+    if (ws.showCode) { drawCodePanel(ws, wx + ww, y, CODE_W, h, title) }
+
+    // перетягуваний блок - поверх усього, з тінню прилипання
+    if (ws.drag != null) {
+        _record = false
+        var snap = findSnap(ws)
+        ws.snap = snap
+        if (len(snap) > 0) {
+            if (snap[0] == "slot") {
+                surfaceRoundRect(S, snap[4] - 3, snap[5] - 3, snap[6] + 6, snap[7] + 6, 8, 0xccffffff)
+            } else if (snap[0] == "attach") {
+                surfaceRoundRect(S, snap[3], snap[4] - 3, 120, 6, 3, 0xccffffff)
+            } else {
+                surfaceRoundRect(S, snap[2], snap[3] - 3, 120, 6, 3, 0xccffffff)
+            }
+        }
+        ws.dragH = drawChain(ws.drag, ws.dragX, ws.dragY, ws)
+        _record = true
+    }
+
+    if (len(ws.menu) > 0) { drawMenu(ws) }
+}
+
+// ---------- прилипання ----------
+
+// Куди впаде перетягуваний блок: [] - нікуди (вільно),
+// ["attach", вид, блок, x, y] або ["slot", блок, номер, тип, x, y, w, h]
+// або ["top", стопка].
+func findSnap(ws) {
+    var d = ws.drag
+    var sp = specOf(d.spec)
+    if (uiMouseX < ws.x + STRIP_W + PAL_W) { return [] }
+    if (sp.kind == "rep" || sp.kind == "bool") {
+        var px = ws.dragX + 6
+        var py = ws.dragY + toInt(max(d.hh, 20) / 2)
+        var k = len(_sHits) - 7
+        while (k >= 0) {
+            var t = _sHits[k + 2]
+            if (t != "v" && t != "k" && t != "c" && px >= _sHits[k + 3] - 8 && px <= _sHits[k + 3] + _sHits[k + 5] && py >= _sHits[k + 4] - 6 && py <= _sHits[k + 4] + _sHits[k + 6] + 6) {
+                return ["slot", _sHits[k], _sHits[k + 1], t, _sHits[k + 3], _sHits[k + 4], _sHits[k + 5], _sHits[k + 6]]
+            }
+            k = k - 7
+        }
+        return []
+    }
+    var best = []
+    var bestD = 30 * 30
+    if (sp.kind != "hat") {
+        var i = 0
+        while (i < len(_attach)) {
+            var dx = ws.dragX - _attach[i + 2]
+            var dy = ws.dragY - _attach[i + 3]
+            var dist = dx * dx + dy * dy
+            if (dist < bestD) {
+                bestD = dist
+                best = ["attach", _attach[i], _attach[i + 1], _attach[i + 2], _attach[i + 3]]
+            }
+            i = i + 4
+        }
+    }
+    // над верхом окремої стопки (крім шапки - над нею нічого не буває)
+    var last = lastOfChain(d)
+    if (specOf(last.spec).kind != "hat") {
+        for s in ws.stacks {
+            if (s.spec != "start") {
+                var dx2 = ws.dragX - s.sx
+                var dy2 = ws.dragY + ws.dragH - s.sy
+                var dist2 = dx2 * dx2 + dy2 * dy2
+                if (dist2 < bestD) {
+                    bestD = dist2
+                    best = ["top", s, s.sx, s.sy]
+                }
+            }
+        }
+    }
+    return best
+}
+
+// Вийняти блок зі свого місця (разом з усім, що під ним).
+func _detachIn(p, b) {
+    while (p != null) {
+        if (p.next == b) {
+            p.next = null
+            return true
+        }
+        if (p.body == b) {
+            p.body = null
+            return true
+        }
+        if (p.body2 == b) {
+            p.body2 = null
+            return true
+        }
+        var sp = specOf(p.spec)
+        var k = 0
+        while (k < len(p.args)) {
+            var a = p.args[k]
+            if (typeOf(a) == "struct") {
+                if (a == b) {
+                    p.args[k] = sp.defs[k]
+                    return true
+                }
+                if (_detachIn(a, b)) { return true }
+            }
+            k = k + 1
+        }
+        if (p.body != null && _detachIn(p.body, b)) { return true }
+        if (p.body2 != null && _detachIn(p.body2, b)) { return true }
+        p = p.next
+    }
+    return false
+}
+
+func detachBlock(ws, b) {
+    var i = indexOf(ws.stacks, b)
+    if (i >= 0) {
+        removeAt(ws.stacks, i)
+        return
+    }
+    for s in ws.stacks {
+        if (_detachIn(s, b)) { return }
+    }
+}
+
+func _toWs(ws, sx, sy) {
+    return [sx - (ws.x + STRIP_W + PAL_W) - ws.panX, sy - ws.y - ws.panY]
+}
+
+func dropDrag(ws) {
+    var d = ws.drag
+    ws.drag = null
+    if (uiMouseX < ws.x + STRIP_W + PAL_W) { return }   // кинули на палітру - видалено
+    var snap = ws.snap
+    if (len(snap) > 0 && snap[0] == "slot") {
+        var host = snap[1]
+        var old = host.args[snap[2]]
+        host.args[snap[2]] = d
+        if (typeOf(old) == "struct") {
+            var p = _toWs(ws, snap[4] + 20, snap[5] + 40)
+            old.x = p[0]
+            old.y = p[1]
+            append(ws.stacks, old)
+        }
+        return
+    }
+    if (len(snap) > 0 && snap[0] == "attach") {
+        var host2 = snap[2]
+        var last = lastOfChain(d)
+        if (snap[1] == "next") {
+            last.next = host2.next
+            host2.next = d
+        } else if (snap[1] == "body") {
+            last.next = host2.body
+            host2.body = d
+        } else {
+            last.next = host2.body2
+            host2.body2 = d
+        }
+        return
+    }
+    if (len(snap) > 0 && snap[0] == "top") {
+        var s = snap[1]
+        var i = indexOf(ws.stacks, s)
+        lastOfChain(d).next = s
+        var p2 = _toWs(ws, ws.dragX, ws.dragY)
+        d.x = p2[0]
+        d.y = s.y - ws.dragH
+        ws.stacks[i] = d
+        return
+    }
+    var p3 = _toWs(ws, ws.dragX, ws.dragY)
+    d.x = p3[0]
+    d.y = p3[1]
+    append(ws.stacks, d)
+}
+
+// ---------- скасування ----------
+
+func wsSnapshot(ws) {
+    append(ws.undo, stacksToJson(ws.stacks))
+    if (len(ws.undo) > 100) { removeAt(ws.undo, 0) }
+    ws.redo = []
+    ws.dirty = true
+    ws.errBlock = null
+}
+
+func wsUndo(ws) {
+    if (len(ws.undo) == 0) { return }
+    append(ws.redo, stacksToJson(ws.stacks))
+    ws.stacks = stacksFromJson(pop(ws.undo))
+    ws.dirty = true
+}
+
+func wsRedo(ws) {
+    if (len(ws.redo) == 0) { return }
+    append(ws.undo, stacksToJson(ws.stacks))
+    ws.stacks = stacksFromJson(pop(ws.redo))
+    ws.dirty = true
+}
+
+// ---------- меню ----------
+
+func openMenu(ws, items, x, y) {
+    ws.menu = items
+    ws.menuX = x
+    ws.menuY = y
+}
+
+func drawMenu(ws) {
+    var w = 40
+    for it in ws.menu { w = max(w, textWidth(it[0], 16) + 32) }
+    var h = len(ws.menu) * 30 + 8
+    var x = min(ws.menuX, surfaceWidth(S) - w - 4)
+    var y = min(ws.menuY, surfaceHeight(S) - h - 4)
+    surfaceRoundRect(S, x + 3, y + 3, w, h, 8, 0x66000000)
+    surfaceRoundRect(S, x, y, w, h, 8, C_SURFACE)
+    var iy = y + 4
+    for it in ws.menu {
+        if (uiHover(x, iy, w, 30)) { surfaceRoundRect(S, x + 4, iy, w - 8, 30, 6, C_SURFACE2) }
+        surfaceText(S, it[0], x + 16, iy + 7, 16, C_TEXT)
+        uiRegion("bmenu:" + it[1], x, iy, w, 30)
+        iy = iy + 30
+    }
+}
+
+func menuAction(ws, act) {
+    var b = ws.menuBlock
+    ws.menu = []
+    if (act == "dup" && b != null) {
+        wsSnapshot(ws)
+        var c = cloneBlock(b)
+        var p = _toWs(ws, b.sx + 30, b.sy + 30)
+        c.x = p[0]
+        c.y = p[1]
+        append(ws.stacks, c)
+    } else if (act == "del" && b != null) {
+        wsSnapshot(ws)
+        // видаляємо лише цей блок: те, що під ним, лишається на місці
+        var after = b.next
+        b.next = null
+        var p2 = _toWs(ws, b.sx, b.sy)
+        detachBlock(ws, b)
+        if (after != null) {
+            var stillAttached = false
+            for s in ws.stacks { if (s == after) { stillAttached = true } }
+            if (!stillAttached) {
+                after.x = p2[0]
+                after.y = p2[1]
+                append(ws.stacks, after)
+            }
+        }
+    } else if (startsWith(act, "set:") && b != null) {
+        wsSnapshot(ws)
+        b.args[ws.menuIdx] = substring(act, 4, len(act) - 4)
+    } else if (act == "newvar" && b != null) {
+        wsSnapshot(ws)
+        b.args[ws.menuIdx] = ""
+        ws.edit = b
+        ws.editIdx = ws.menuIdx
+    }
+}
+
+func _slotMenu(ws, b, k, t, x, y) {
+    var items = []
+    if (t == "v") {
+        for n in wsVarNames(ws) { append(items, [n, "set:" + n]) }
+        append(items, ["+ нова змінна…", "newvar"])
+    } else if (t == "c") {
+        for c in COLOR_NAMES { append(items, [c, "set:" + c]) }
+    } else if (t == "k") {
+        var i = 0
+        while (i < len(KEY_NAMES)) {
+            append(items, [KEY_LABELS[i], "set:" + KEY_NAMES[i]])
+            i = i + 1
+        }
+    }
+    ws.menuBlock = b
+    ws.menuIdx = k
+    openMenu(ws, items, x, y)
+}
+
+// ---------- миша й клавіатура ----------
+
+func _blockAt(x, y) {
+    var k = len(_bHits) - 5
+    while (k >= 0) {
+        if (x >= _bHits[k + 1] && y >= _bHits[k + 2] && x < _bHits[k + 1] + _bHits[k + 3] && y < _bHits[k + 2] + _bHits[k + 4]) {
+            return _bHits[k]
+        }
+        k = k - 5
+    }
+    return null
+}
+
+func _slotAt(x, y) {
+    var k = len(_sHits) - 7
+    while (k >= 0) {
+        if (typeOf(_sHits[k].args[_sHits[k + 1]]) != "struct" && x >= _sHits[k + 3] && y >= _sHits[k + 4] && x < _sHits[k + 3] + _sHits[k + 5] && y < _sHits[k + 4] + _sHits[k + 6]) {
+            return k
+        }
+        k = k - 7
+    }
+    return -1
+}
+
+func endEdit(ws) {
+    if (ws.edit != null) {
+        var types = slotTypes(specOf(ws.edit.spec))
+        if (types[ws.editIdx] == "v" && trim(toString(ws.edit.args[ws.editIdx])) == "") {
+            ws.edit.args[ws.editIdx] = "змінна"
+        }
+    }
+    ws.edit = null
+    ws.editIdx = -1
+}
+
+// Повертає true, якщо подію оброблено режимом блоків.
+func blocksMouseDown(ws, e, id) {
+    var x = e.x
+    var y = e.y
+    if (len(ws.menu) > 0) {
+        if (startsWith(id, "bmenu:")) { menuAction(ws, substring(id, 6, len(id) - 6)) }
+        else { ws.menu = [] }
+        return true
+    }
+    if (ws.edit != null) { endEdit(ws) }
+
+    if (startsWith(id, "bcat:")) {
+        ws.cat = substring(id, 5, len(id) - 5)
+        ws.palScroll = 0
+        return true
+    }
+    if (id == "bnewvar") {
+        // нова змінна: блок "запам'ятати" з порожньою назвою на робочу область
+        wsSnapshot(ws)
+        var nb = newBlock("set")
+        nb.args[0] = ""
+        var p = _toWs(ws, ws.x + STRIP_W + PAL_W + 40, ws.y + ws.h - 120)
+        nb.x = p[0]
+        nb.y = p[1]
+        append(ws.stacks, nb)
+        ws.edit = nb
+        ws.editIdx = 0
+        return true
+    }
+    if (id == "btogglecode" || id == "bopencode") { return false }
+
+    // палітра: шаблон блока
+    var k = len(_pHits) - 5
+    while (k >= 0) {
+        if (x >= _pHits[k + 1] && y >= _pHits[k + 2] && x < _pHits[k + 1] + _pHits[k + 3] && y < _pHits[k + 2] + _pHits[k + 4]) {
+            if (e.button == 1) {
+                ws.pending = _pHits[k]
+                ws.pendingPal = true
+                ws.pendingSlot = -1
+                ws.dragOffX = x - _pHits[k + 1]
+                ws.dragOffY = y - _pHits[k + 2]
+                ws.pressX = x
+                ws.pressY = y
+            }
+            return true
+        }
+        k = k - 5
+    }
+    if (id == "bpalette") { return true }
+    if (id != "bworkspace") { return false }
+
+    var si = _slotAt(x, y)
+    var b = _blockAt(x, y)
+    if (e.button == 3 && b != null) {
+        ws.menuBlock = b
+        openMenu(ws, [["Дублювати", "dup"], ["Видалити", "del"]], x, y)
+        return true
+    }
+    if (e.button != 1) { return true }
+    if (b != null) {
+        ws.pending = b
+        ws.pendingPal = false
+        ws.pendingSlot = -1
+        if (si >= 0 && _sHits[si] == b) {
+            ws.pendingSlot = _sHits[si + 1]
+            ws.pendingSlotType = _sHits[si + 2]
+        }
+        ws.dragOffX = x - b.sx
+        ws.dragOffY = y - b.sy
+        ws.pressX = x
+        ws.pressY = y
+        return true
+    }
+    ws.panning = true
+    ws.pressX = x
+    ws.pressY = y
+    return true
+}
+
+func blocksMouseMove(ws, e) {
+    var x = e.x
+    var y = e.y
+    if (ws.panning) {
+        ws.panX = ws.panX + x - ws.pressX
+        ws.panY = ws.panY + y - ws.pressY
+        ws.pressX = x
+        ws.pressY = y
+        return
+    }
+    if (ws.pending != null && ws.drag == null && abs(x - ws.pressX) + abs(y - ws.pressY) > 4) {
+        wsSnapshot(ws)
+        if (ws.pendingPal) {
+            var id = ws.pending
+            if (startsWith(id, "var:")) {
+                ws.drag = newBlock("var")
+                ws.drag.args[0] = substring(id, 4, len(id) - 4)
+            } else { ws.drag = newBlock(id) }
+        } else {
+            ws.drag = ws.pending
+            detachBlock(ws, ws.drag)
+        }
+        ws.pending = null
+    }
+    if (ws.drag != null) {
+        ws.dragX = x - ws.dragOffX
+        ws.dragY = y - ws.dragOffY
+    }
+}
+
+func blocksMouseUp(ws, e) {
+    if (ws.panning) {
+        ws.panning = false
+        return
+    }
+    if (ws.drag != null) {
+        ws.dragX = e.x - ws.dragOffX
+        ws.dragY = e.y - ws.dragOffY
+        dropDrag(ws)
+        return
+    }
+    if (ws.pending != null && !ws.pendingPal && ws.pendingSlot >= 0) {
+        var b = ws.pending
+        var t = ws.pendingSlotType
+        if (t == "v" || t == "c" || t == "k") {
+            _slotMenu(ws, b, ws.pendingSlot, t, e.x, e.y + 8)
+        } else if (t != "b") {
+            wsSnapshot(ws)
+            ws.edit = b
+            ws.editIdx = ws.pendingSlot
+        }
+    } else if (ws.pending != null && ws.pendingPal) {
+        // клік по шаблону без перетягування - блок з'являється на робочій області
+        wsSnapshot(ws)
+        var id = ws.pending
+        var nb = null
+        if (startsWith(id, "var:")) {
+            nb = newBlock("var")
+            nb.args[0] = substring(id, 4, len(id) - 4)
+        } else { nb = newBlock(id) }
+        var p = _toWs(ws, ws.x + STRIP_W + PAL_W + 60 + len(ws.stacks) % 5 * 20, ws.y + 60 + len(ws.stacks) % 5 * 20)
+        nb.x = p[0]
+        nb.y = p[1]
+        append(ws.stacks, nb)
+    }
+    ws.pending = null
+}
+
+func blocksWheel(ws, e) {
+    if (uiMouseX < ws.x + STRIP_W + PAL_W) {
+        ws.palScroll = max(0, ws.palScroll + e.dy * 40)
+    } else if (e.shift) {
+        ws.panX = ws.panX - e.dy * 40
+    } else {
+        ws.panY = ws.panY - e.dy * 40
+    }
+}
+
+func blocksKey(ws, e) {
+    if (len(ws.menu) > 0 && e.key == "Escape") {
+        ws.menu = []
+        return true
+    }
+    if (ws.edit != null) {
+        var b = ws.edit
+        var s = toString(b.args[ws.editIdx])
+        if (e.key == "Backspace") {
+            if (len(s) > 0) { b.args[ws.editIdx] = substring(s, 0, len(s) - 1) }
+            ws.dirty = true
+            return true
+        }
+        if (e.key == "Enter" || e.key == "Escape" || e.key == "Tab") {
+            endEdit(ws)
+            return true
+        }
+        if (e.ctrl && e.key == "v") {
+            b.args[ws.editIdx] = s + replace(clipboardGet(), "\n", " ")
+            return true
+        }
+        return true
+    }
+    if (e.ctrl && e.key == "z" && !e.shift) {
+        wsUndo(ws)
+        return true
+    }
+    if (e.ctrl && (e.key == "y" || (e.key == "z" && e.shift))) {
+        wsRedo(ws)
+        return true
+    }
+    return false
+}
+
+func blocksText(ws, t) {
+    if (ws.edit == null) { return false }
+    var b = ws.edit
+    var types = slotTypes(specOf(b.spec))
+    var type = types[ws.editIdx]
+    if (type == "n") {
+        var code = charCode(t)
+        if (!((code >= 48 && code <= 57) || t == "." || t == "-")) { return true }
+    }
+    b.args[ws.editIdx] = toString(b.args[ws.editIdx]) + t
+    ws.dirty = true
+    return true
+}
+
+// Блок, з якого вийшов рядок line (0-based) згенерованого коду.
+func blockForLine(ws, title, line) {
+    var g = generateCode(ws.stacks, title)
+    var lineMap = g[1]
+    if (line >= 0 && line < len(lineMap)) { return lineMap[line] }
+    return null
+}
