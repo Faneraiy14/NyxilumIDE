@@ -104,6 +104,11 @@ struct App {
     lintJobs: array
     extScroll: i32
     git: any
+    dragSrc: string
+    dragKind: string
+    dragX: i32
+    dragY: i32
+    dragActive: bool
 }
 
 var app = null
@@ -2495,6 +2500,7 @@ func draw() {
     if (app.askLevel) { drawLevelAsk(W, H) }
     if (app.tour >= 0) { drawTour(app.tour) }
     if (app.demo != null) { drawDemoCursor() }
+    drawDragGhost()
     drawConfetti()
     surfacePresent(S)
 }
@@ -2713,6 +2719,18 @@ func onMouseDown(e) {
         return
     }
     if (e.button != 1) { return }
+    // кандидат на перетягування: вкладка чи файл/тека Провідника
+    app.dragActive = false
+    app.dragSrc = ""
+    if (startsWith(id, "tab:")) {
+        app.dragSrc = substring(id, 4, len(id) - 4)
+        app.dragKind = "tab"
+    } else if (startsWith(id, "file:") || startsWith(id, "dir:")) {
+        app.dragSrc = substring(id, indexOf(id, ":") + 1, len(id) - indexOf(id, ":") - 1)
+        app.dragKind = "file"
+    }
+    app.dragX = e.x
+    app.dragY = e.y
     var ed = currentEditor()
     if (id == "editor2" && ed != null && app.split != "") {
         focusSplitPane()
@@ -2797,14 +2815,81 @@ func onMouseUp(e) {
     var bws = currentBlocks()
     if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseUp(bws, e) }
     var id = uiHit(e.x, e.y)
-    if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
+    if (app.dragActive && app.dragKind == "file") { dropFile(app.dragSrc, dropTarget(id)) }
+    else if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
     uiPressedId = ""
     app.drag = ""
+    app.dragSrc = ""
+    app.dragActive = false
+}
+
+// Тека, куди впаде файл, якщо відпустити над областю id ("" - нікуди).
+func dropTarget(id) {
+    if (startsWith(id, "dir:")) { return substring(id, 4, len(id) - 4) }
+    if (startsWith(id, "file:")) { return parentDir(substring(id, 5, len(id) - 5)) }
+    if (id == "ex.empty") { return app.dir }
+    return ""
+}
+
+// Перенести файл чи теку src у теку dir (як перетягування в VS Code).
+func dropFile(src, dir) {
+    if (dir == "" || src == "" || dir == parentDir(src) || dir == src || startsWith(dir, src + "/")) { return }
+    var to = joinPath(dir, fileName(src))
+    if (fileExists(to) || dirExists(to)) {
+        setStatus("У «" + fileName(dir) + "» вже є «" + fileName(src) + "»")
+        return
+    }
+    saveAll()
+    try { movePath(src, to) } catch (err) {
+        setStatus("Не вдалося перенести: " + toString(err))
+        return
+    }
+    _renameOpen(src, to)
+    if (dir != app.dir) { mapSet(app.expanded, dir, true) }
+    if (app.exSel == src) { app.exSel = to }
+    refreshFiles()
+    app.git.stale = true
+    setStatus("Перенесено «" + fileName(src) + "» у «" + fileName(dir) + "»")
+}
+
+// Поки тягнемо: назва біля курсора й підсвічена тека-ціль.
+func drawDragGhost() {
+    if (!app.dragActive) { return }
+    if (app.dragKind == "file") {
+        var t = dropTarget(uiHit(uiMouseX, uiMouseY))
+        if (t != "" && t != parentDir(app.dragSrc) && t != app.dragSrc && !startsWith(t, app.dragSrc + "/")) {
+            var r = uiFind("dir:" + t)
+            if (r == null) { r = uiFind("ex.empty") }
+            if (r != null) { surfaceRectLine(S, r[0] + 2, r[1], r[2] - 4, r[3], C_ACCENT, 2) }
+        }
+    }
+    var name = fileName(app.dragSrc)
+    var w = textWidth(name, 14) + 20
+    surfaceRoundRect(S, uiMouseX + 14, uiMouseY + 8, w, 26, 6, C_SURFACE2 + 0xdd000000)
+    surfaceText(S, name, uiMouseX + 24, uiMouseY + 13, 14, C_TEXT)
 }
 
 func onMouseMove(e) {
     uiMouseX = e.x
     uiMouseY = e.y
+    // перетягування вкладки / файла почалось (зсув > 6 пікселів)
+    if (app.dragSrc != "" && !app.dragActive && abs(e.x - app.dragX) + abs(e.y - app.dragY) > 6) {
+        app.dragActive = true
+        uiPressedId = ""
+    }
+    if (app.dragActive && app.dragKind == "tab") {
+        // вкладка під мишею - туди й переставляємо
+        var over = uiHit(e.x, e.y)
+        if (startsWith(over, "tab:") || startsWith(over, "tabclose:")) {
+            var tp = substring(over, indexOf(over, ":") + 1, len(over) - indexOf(over, ":") - 1)
+            var from = indexOf(app.tabs, app.dragSrc)
+            var to = indexOf(app.tabs, tp)
+            if (from >= 0 && to >= 0 && from != to) {
+                removeAt(app.tabs, from)
+                insert(app.tabs, to, app.dragSrc)
+            }
+        }
+    }
     if (app.stageOpen && app.con.running) { stageMouse("move", e) }
     var bws = currentBlocks()
     if (app.mode == "blocks" && bws != null && app.active != "") { blocksMouseMove(bws, e) }
@@ -3629,7 +3714,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo() }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
