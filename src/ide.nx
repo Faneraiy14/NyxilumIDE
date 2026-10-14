@@ -1229,7 +1229,8 @@ func ideInit(dir) {
     var progressPath = joinPath(joinPath(dir, ".nyx"), "уроки.json")
     if (fileExists(progressPath)) { app.done = loadProgress(progressPath) }
     else {
-        setMode("blocks")
+        // одразу в режим блоків з програмою уроку 1 (без зайвої "мої блоки")
+        app.mode = "blocks"
         openLesson(0)
         startTour(true)
         if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }

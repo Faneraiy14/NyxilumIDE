@@ -10,9 +10,19 @@
 
 ## Запуск
 
+Найпростіше - з релізу [NyxilumNode](https://github.com/Faneraiy14/NyxilumNode)
+(IDE вже лежить в архіві поруч з `nx`):
+
 ```bash
-nx src/ide.nx              # програми в ~/NyxПрограми
-nx src/ide.nx ~/МояТека    # або у вказаній теці
+nx ide                     # програми в ~/NyxПрограми
+nx ide ~/МояТека           # або у вказаній теці
+```
+
+З клону цього репо:
+
+```bash
+nx src/ide.nx
+NX_IDE_HOME=/шлях/до/NyxilumIDE nx ide
 ```
 
 Потрібен `nx` з полотном `surface*` (NyxilumLang після 14.10.2026).
