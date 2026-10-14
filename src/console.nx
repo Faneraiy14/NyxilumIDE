@@ -222,6 +222,7 @@ func conDraw(con, x, y, w, h) {
         if (item[1] == "info") { color = C_ACCENT }
         if (item[1] == "ok") { color = C_GREEN }
         if (item[1] == "in") { color = C_YELLOW }
+        if (item[1] == "hint") { color = C_YELLOW }
         var text = item[0]
         if (item[1] == "in") { text = "> " + text }
         surfaceText(S, text, x + 12, top + row * lh, 16, color)

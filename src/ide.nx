@@ -13,6 +13,7 @@ import "blocks_view.nx"
 import "guide.nx"
 import "history.nx"
 import "tour.nx"
+import "explain.nx"
 
 var TOP_H = 48
 var LEFT_W = 230          // панель "Мої програми" (36, коли згорнута)
@@ -37,6 +38,7 @@ struct App {
     cursorX: i32
     cursorY: i32
     filesCollapsed: bool
+    hintRun: i32
     tour: i32
     tourFirstRun: bool
     histOpen: bool
@@ -239,9 +241,42 @@ func blocksToCode() {
     setStatus("Код з блоків відкрито як " + name)
 }
 
+// Після невдалого запуску - підказка простими словами (один раз на запуск).
+func addErrorHints() {
+    var con = app.con
+    if (con.running || con.lastOk || con.runs == app.hintRun || con.runs == 0) { return }
+    app.hintRun = con.runs
+    var errText = ""
+    for l in con.lines {
+        if (l[1] == "err" || l[1] == "out") { errText = errText + l[0] + "\n" }
+    }
+    var code = ""
+    if (app.mode == "blocks") {
+        var ws = currentBlocks()
+        if (ws != null) { code = generateCode(ws.stacks, "")[0] }
+    } else {
+        var ed = currentEditor()
+        if (ed != null) { code = edText(ed) }
+    }
+    var hints = explainError(errText, code)
+    var first = true
+    var maxW = max(300, con.w - 40)
+    for h in hints {
+        var prefix = "          "
+        if (first) { prefix = "Підказка: " }
+        // перенос по ширині консолі (вона сама рядки не переносить)
+        for l in wrapLines(h, maxW - textWidth(prefix, 16), 16) {
+            conAdd(con, prefix + l, "hint")
+            prefix = "          "
+        }
+        first = false
+    }
+}
+
 // Після завершення з помилкою - підсвітити рядок у редакторі й перейти до нього.
 func afterPoll() {
     var con = app.con
+    addErrorHints()
     if (!con.running && con.errLine >= 0 && app.mode == "blocks") {
         var ws = currentBlocks()
         if (ws != null && con.errLine < len(app.genMap)) {
@@ -1173,7 +1208,7 @@ func drawDemoCursor() {
 func ideInit(dir) {
     if (!dirExists(dir)) { makeDir(dir) }
     app = App { mode: "code", dir: dir, files: [], editors: newMap(), current: "", blocks: newMap(), currentB: "", genMap: [], guideOpen: false, guideTab: "lessons", guideLesson: -1, done: [], demo: null,
-        cursorX: 0, cursorY: 0, filesCollapsed: false, tour: -1, tourFirstRun: false, histOpen: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
+        cursorX: 0, cursorY: 0, filesCollapsed: false, hintRun: 0, tour: -1, tourFirstRun: false, histOpen: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(),
         focus: "editor", drag: "", consoleH: 220, lastClickTime: 0, lastClickX: 0, lastClickY: 0,
         clickCount: 0, dialog: null, status: "", statusTime: 0 }

@@ -1,0 +1,27 @@
+// Підказки до помилок: правильний вид підказки і "може, ти мав на увазі".
+import "../src/explain.nx"
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+func main() {
+    var code = "func main() {\n    var рахунок = 0\n    print(рахунк)\n}\n"
+    var h = explainError("Runtime Error: рядок 3: Змінна 'рахунк' не оголошена", code)
+    print(h)
+    check(contains(toString(h), "«рахунок»"), "схожа назва змінної")
+    h = explainError("рядок 2: Функція 'pirnt' не оголошена", "func main() {\n    pirnt(1)\n}")
+    print(h)
+    check(contains(toString(h), "«print»"), "схожа вбудована функція")
+    h = explainError("Індекс 5 поза межами масиву (довжина 2).", "")
+    check(contains(toString(h), "нумеруються з 0"), "індекс поза масивом")
+    h = explainError("The input string 'abc' was not in a correct format.", "")
+    check(contains(toString(h), "число"), "текст -> число")
+    h = explainError("Невідомий вираз на рядку 14, стовпець 1", "")
+    check(len(h) > 0, "невідомий вираз")
+    h = explainError("щось зовсім інше", "")
+    check(len(h) == 0, "незнайома помилка - без підказки")
+    check(editDistance("kitten", "sitting") == 3, "відстань Левенштейна")
+    print("ПІДКАЗКИ: УСЕ ГАРАЗД")
+}

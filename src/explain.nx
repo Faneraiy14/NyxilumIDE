@@ -1,0 +1,160 @@
+// Підказки до помилок для новачків: повідомлення мови -> пояснення
+// простими словами (і "може, ти мав на увазі ...?" для схожих назв).
+//
+// explainError(текстПомилки, кодПрограми) -> масив рядків підказки
+// (порожній, якщо помилка незнайома).
+
+import "highlight.nx"
+import "builtins.nx"
+
+// Текст між першими одинарними лапками після початку "from": 'назва'.
+func _quoted(text, from) {
+    var a = indexOf(substring(text, from, len(text) - from), "'")
+    if (a < 0) { return "" }
+    a = a + from + 1
+    var rest = substring(text, a, len(text) - a)
+    var b = indexOf(rest, "'")
+    if (b < 0) { return "" }
+    return substring(rest, 0, b)
+}
+
+// Відстань Левенштейна (скільки букв замінити/додати/прибрати).
+func editDistance(a, b) {
+    var n = len(a)
+    var m = len(b)
+    if (abs(n - m) > 3) { return 99 }
+    var prev = []
+    var j = 0
+    while (j <= m) {
+        append(prev, j)
+        j = j + 1
+    }
+    var i = 1
+    while (i <= n) {
+        var cur = [i]
+        j = 1
+        while (j <= m) {
+            var cost = 1
+            if (a[i - 1] == b[j - 1]) { cost = 0 }
+            append(cur, min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost))
+            j = j + 1
+        }
+        prev = cur
+        i = i + 1
+    }
+    return prev[m]
+}
+
+// Слова-назви з коду програми.
+func _codeNames(code) {
+    var names = []
+    var inC = false
+    for line in split(code, "\n") {
+        var r = hlLine(line, inC)
+        inC = r[1]
+        var t = r[0]
+        var k = 0
+        while (k < len(t)) {
+            var kind = t[k + 2]
+            if (kind == 0 || kind == 6 || kind == 7) {
+                var w = substring(line, t[k], t[k + 1] - t[k])
+                if (indexOf(names, w) < 0) { append(names, w) }
+            }
+            k = k + 3
+        }
+    }
+    return names
+}
+
+// Найсхожа назва (не та сама, відстань <= 2) або "".
+func _similar(name, candidates) {
+    var best = ""
+    var bestD = 3
+    if (len(name) <= 3) { bestD = 2 }
+    for c in candidates {
+        if (c != name) {
+            var d = editDistance(toLower(name), toLower(c))
+            if (d < bestD) {
+                bestD = d
+                best = c
+            }
+        }
+    }
+    return best
+}
+
+func explainError(err, code) {
+    var hints = []
+    if (contains(err, "не оголошена") && contains(err, "Змінна")) {
+        var name = _quoted(err, indexOf(err, "Змінна"))
+        append(hints, "Ти використовуєш «" + name + "», але такої змінної ще немає.")
+        var sim = _similar(name, _codeNames(code))
+        if (sim != "") { append(hints, "Може, ти мав(ла) на увазі «" + sim + "»? Велика й мала літера теж важать.") }
+        else { append(hints, "Створи її вище в програмі: var " + name + " = 0 - або перевір, чи правильно написана назва.") }
+        append(hints, "Змінна, створена всередині { }, видна лише всередині цих дужок.")
+        return hints
+    }
+    if (contains(err, "Функція") && contains(err, "не оголошена")) {
+        var fname = _quoted(err, indexOf(err, "Функція"))
+        append(hints, "Мова не знає функції «" + fname + "».")
+        var cands = _codeNames(code)
+        for b in BUILTIN_NAMES { append(cands, b) }
+        var fsim = _similar(fname, cands)
+        if (fsim != "") { append(hints, "Може, ти мав(ла) на увазі «" + fsim + "»?") }
+        else { append(hints, "Якщо це твоя функція - оголоси її: func " + fname + "() { ... }") }
+        return hints
+    }
+    if (contains(err, "Очікується ')'") || contains(err, "Очікується '('")) {
+        append(hints, "Десь не вистачає дужки ( або ). Порахуй дужки в цьому рядку: скільки відкрито, стільки має бути й закрито.")
+        return hints
+    }
+    if (contains(err, "Очікується '}'") || contains(err, "Очікується '{'")) {
+        append(hints, "Не вистачає фігурної дужки { або }. Кожна { (після func, if, while, for) має свою }.")
+        return hints
+    }
+    if (contains(err, "Невідомий вираз")) {
+        append(hints, "Мова не зрозуміла цей рядок. Часто це зайва дужка } або )")
+        append(hints, "чи оператор без значення з одного боку (наприклад «x = » без числа).")
+        return hints
+    }
+    if (contains(err, "Невідомий символ")) {
+        var ch = _quoted(err, indexOf(err, "символ"))
+        append(hints, "Символ «" + ch + "» мова не знає. Може, це «ялинкові» лапки «» замість звичайних \" \" або зайвий знак?")
+        return hints
+    }
+    if (contains(err, "поза межами масиву") || contains(err, "поза межами рядка")) {
+        append(hints, "Номер елемента більший за довжину. Елементи нумеруються з 0: у масиві з 3 елементів є [0], [1], [2], а [3] - вже нема.")
+        return hints
+    }
+    if (contains(err, "значення зліва - null")) {
+        append(hints, "Змінна перед крапкою чи [ ] порожня (null) - їй ще не дали значення, або функція нічого не повернула.")
+        return hints
+    }
+    if (contains(err, "глибину викликів")) {
+        append(hints, "Функція викликає сама себе без кінця. Додай умову виходу: if (...) { return ... } на початку функції.")
+        return hints
+    }
+    if (contains(err, "was not in a correct format") || contains(err, "not in a correct format")) {
+        append(hints, "Текст не вдалося перетворити на число: toInt/toDouble отримали щось, крім цифр.")
+        append(hints, "Якщо це відповідь з readLine - перевір, що вводиш саме число.")
+        return hints
+    }
+    if (contains(err, "Unable to cast") || contains(err, "IConvertible")) {
+        append(hints, "Значення не того виду: наприклад, текст чи масив там, де потрібне число.")
+        return hints
+    }
+    if (contains(err, "Незакрита інтерполяція")) {
+        // (тут теж не можна писати знак долара з { підряд - стане інтерполяцією)
+        append(hints, "У тексті є $" + "{ без закриваючої }. Щоб надрукувати сам знак $, розбий текст на два: \"$\" + \"{...\".")
+        return hints
+    }
+    if (contains(err, "можна використовувати лише всередині циклу")) {
+        append(hints, "break і continue працюють лише всередині for або while.")
+        return hints
+    }
+    if (contains(err, "Ввід закінчився")) {
+        append(hints, "Програма чекала на відповідь (readInt/readDouble), але ввід закінчився.")
+        return hints
+    }
+    return hints
+}

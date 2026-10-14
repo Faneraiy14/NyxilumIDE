@@ -112,6 +112,7 @@ func main() {
     print(edText(ed))
     print(app.con.lines)
     check(ed.errLine >= 0, "рядок з помилкою підсвічено: " + toString(ed.errLine + 1))
+    check(contains(toString(app.con.lines), "Підказка:"), "у консолі є підказка до помилки")
     shot("04_error")
 
     // Історія версій: зберегти, змінити, подивитись diff, повернути
