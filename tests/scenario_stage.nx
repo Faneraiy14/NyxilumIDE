@@ -47,9 +47,13 @@ func main() {
         ideStep(16)
         i = i + 1
     }
+    // під навантаженням (усі тести поспіль) програмі треба більше часу
     t0 = timeMs()
-    while (timeMs() - t0 < 500) { ideStep(16) }
     var after = stageSum()
+    while (timeMs() - t0 < 4000 && after == before) {
+        ideStep(16)
+        after = stageSum()
+    }
     check(after != before, "стрілка вгору зрушила ракету (кадр змінився)")
     shot("st02_moved")
     key("Escape", false, false)

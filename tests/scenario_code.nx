@@ -281,8 +281,30 @@ func main() {
     check(other.lines[0] == "func підказка(r) {", "і в іншому файлі")
     key("z", true, false)
     step()
-    check(se.lines[9] == "    print(допомога(результат))", "Ctrl+Z повертає перейменування")
+    check(se.lines[9] == "    print(допомога(результат))" && other.lines[0] == "func допомога(r) {", "Ctrl+Z повертає перейменування в обох файлах")
     saveAll()
+
+    // розділений редактор: Ctrl+\ - той самий файл у двох панелях
+    openPath(dir + "/символи.nx")
+    key("\\", true, false)
+    step()
+    draw()
+    check(app.split == app.current && uiFind("editor2") != null, "Ctrl+\\ розділив редактор")
+    // клік по правій панелі - вона активна; відкриваємо в ній інший файл
+    clickId("editor2")
+    check(app.splitSide == 1 && app.split == dir + "/символи.nx", "клік по другій панелі робить її активною")
+    openPath(dir + "/помічник.nx")
+    draw()
+    check(app.current == dir + "/помічник.nx" && app.split == dir + "/символи.nx", "у панелях різні файли")
+    shot("c11_split")
+    var r2 = uiFind("editor2")
+    check(r2[0] < 700, "символи.nx - ліворуч, помічник.nx - праворуч")
+    // клік по лівій - активна знову символи.nx, курсор там, де клацнули
+    clickId("editor2")
+    check(app.current == dir + "/символи.nx" && app.split == dir + "/помічник.nx", "файли помінялись фокусом")
+    clickId("split.close")
+    draw()
+    check(app.split == "" && uiFind("editor2") == null, "× прибирає розділення")
 
     // код -> блоки: проста програма відкривається блоками й працює так само
     writeFile(dir + "/рахунок.nx", "func main() {\n    var n = 0\n    for i in 0..3 {\n        n = n + 2\n    }\n    print(\"Вийшло \" + toString(n))\n}\n")

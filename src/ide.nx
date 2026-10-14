@@ -91,6 +91,11 @@ struct App {
     askLevel: bool
     offer: any
     exFocus: bool
+    split: string
+    splitSide: i32
+    splitTop: i32
+    splitRect: array
+    renameGroup: any
 }
 
 var app = null
@@ -236,6 +241,7 @@ func closeTab(path) {
     var i = indexOf(app.tabs, path)
     if (i < 0) { return }
     removeAt(app.tabs, i)
+    if (app.split == path) { app.split = "" }
     if (app.current == path) { app.current = "" }
     if (app.currentB == path) { app.currentB = "" }
     if (app.active == path) {
@@ -435,6 +441,91 @@ func syncDebugView() {
     }
 }
 
+// ---------- розділений редактор (Ctrl+\) ----------
+//
+// Дві панелі поруч. Активна (в якій курсор) - завжди поточний файл
+// (app.current), тож уся решта IDE працює як без розділення; друга
+// показує app.split - інший файл або той самий зі своєю прокруткою
+// (app.splitTop). Клік по другій панелі робить її активною.
+
+func toggleSplit() {
+    if (app.split != "") {
+        app.split = ""
+        setStatus("Редактор знову один")
+        return
+    }
+    if (app.mode != "code" || currentEditor() == null) {
+        setStatus("Розділити можна редактор коду")
+        return
+    }
+    app.split = app.current
+    app.splitSide = 0
+    app.splitTop = currentEditor().top
+    setStatus("Редактор розділено. Клацни по панелі й відкрий у ній інший файл; Ctrl+\\ - прибрати")
+}
+
+func drawSplit(ed, x, y, w, h, focused) {
+    var half = toInt((w - 2) / 2)
+    var fx = x
+    var ox = x + half + 2
+    if (app.splitSide == 1) {
+        ox = x
+        fx = x + half + 2
+    }
+    var hdr = 24
+    // друга панель: заголовок з назвою файла і "×"
+    var other = mapGet(app.editors, app.split)
+    surfaceRect(S, ox, y, half, hdr, C_PANEL)
+    surfaceText(S, uiFit(fileName(app.split), half - 50, 14), ox + 10, y + 4, 14, C_DIM)
+    uiButton("split.close", "×", ox + half - 28, y + 1, 24, 22, "flat")
+    if (other == ed) {
+        // той самий файл - своя прокрутка
+        var keepTop = ed.top
+        ed.top = clamp(app.splitTop, 0, max(0, len(ed.lines) - 1))
+        edDraw(ed, ox, y + hdr, half, h - hdr, false)
+        app.splitTop = ed.top
+        ed.top = keepTop
+    } else {
+        edDraw(other, ox, y + hdr, half, h - hdr, false)
+    }
+    app.splitRect = [ox, y + hdr, half, h - hdr]
+    // поверх областей "editor" другої панелі
+    uiRegion("editor2", ox, y + hdr, half, h - hdr)
+    surfaceRect(S, x + half, y, 2, h, C_BORDER)
+    // активна панель - малюється останньою, її "editor" і "gutter" дійсні
+    surfaceRect(S, fx, y, half, hdr, C_PANEL)
+    surfaceText(S, uiFit(fileName(app.current), half - 20, 14), fx + 10, y + 4, 14, C_TEXT)
+    surfaceRect(S, fx, y + hdr - 2, half, 2, C_ACCENT)
+    edDraw(ed, fx, y + hdr, half, h - hdr, focused)
+}
+
+// Клік по другій панелі: вона стає активною (файли міняються місцями).
+func focusSplitPane() {
+    var cur = app.current
+    var curEd = currentEditor()
+    var target = app.split
+    var curTop = curEd.top
+    app.split = cur
+    app.splitSide = 1 - app.splitSide
+    if (target == cur) {
+        // той самий файл: міняємо прокрутки
+        var t = app.splitTop
+        app.splitTop = curTop
+        curEd.top = t
+    } else {
+        app.splitTop = 0
+        openPath(target)
+    }
+    var ed = currentEditor()
+    if (ed != null && len(app.splitRect) == 4) {
+        // координати панелі, щоб клік одразу поставив курсор
+        ed.x = app.splitRect[0]
+        ed.y = app.splitRect[1]
+        ed.w = app.splitRect[2]
+        ed.h = app.splitRect[3]
+    }
+}
+
 // ---------- перейти до визначення (F12) і перейменувати всюди (F2) ----------
 
 // Файли коду проєкту (для імен, визначених в іншому файлі).
@@ -487,6 +578,27 @@ func goToDefinition() {
     else { setStatus("Не знайшов, де визначено «" + word + "»") }
 }
 
+// Ctrl+Z: якщо остання зміна цього файла - перейменування в кількох
+// файлах (і там після нього нічого не міняли), скасувати його в усіх.
+func undoRenameGroup(ed) {
+    var g = app.renameGroup
+    if (g == null) { return false }
+    var mine = false
+    for it in g {
+        if (!mapHas(app.editors, it[0]) || len(mapGet(app.editors, it[0]).undo) != it[1]) {
+            app.renameGroup = null
+            return false
+        }
+        if (it[0] == ed.path) { mine = true }
+    }
+    if (!mine) { return false }
+    for it2 in g { edUndo(mapGet(app.editors, it2[0])) }
+    app.renameGroup = null
+    saveAll()
+    setStatus("Перейменування скасовано в " + toString(len(g)) + " файлах")
+    return true
+}
+
 func askRenameSymbol() {
     var ed = currentEditor()
     if (ed == null) { return }
@@ -523,6 +635,7 @@ func renameSymbol(word, nw) {
     }
     var total = 0
     var files = 0
+    var group = []
     var paths = _projectCode()
     if (indexOf(paths, ed.path) < 0) { append(paths, ed.path) }
     for p in paths {
@@ -536,11 +649,17 @@ func renameSymbol(word, nw) {
         }
         if (len(occ2) == 0) { continue }
         var nl = symReplace(lines, occ2, word, nw)
-        if (mapHas(app.editors, p)) { edReplaceLines(mapGet(app.editors, p), nl) }
-        else { writeFile(p, join(nl, "\n")) }
+        // кожен файл - у редакторі (навіть без вкладки), щоб Ctrl+Z
+        // повернув перейменування в усіх разом; збереже saveAll
+        if (!mapHas(app.editors, p)) { mapSet(app.editors, p, newEditor(readFile(p), p)) }
+        var ped = mapGet(app.editors, p)
+        edReplaceLines(ped, nl)
+        append(group, [p, len(ped.undo)])
         total = total + len(occ2)
         files = files + 1
     }
+    app.renameGroup = null
+    if (len(group) > 1) { app.renameGroup = group }
     setStatus("Перейменовано «" + word + "» → «" + nw + "»: " + toString(total) + " місць у " + toString(files) + " файл(ах)")
 }
 
@@ -810,6 +929,7 @@ func commandList() {
         ["act:settings", "Налаштування", ""],
         ["find", "Знайти у файлі", "Ctrl+F"],
         ["gotodef", "Перейти до визначення", "F12"],
+        ["split.toggle", "Розділити редактор / прибрати розділення", "Ctrl+\\"],
         ["renamesym", "Перейменувати всюди", "F2"],
         ["zoomin", "Збільшити шрифт", "Ctrl+="],
         ["zoomout", "Зменшити шрифт", "Ctrl+-"],
@@ -1465,6 +1585,7 @@ func _renameOpen(from, to) {
             }
             if (app.active == t) { app.active = nt }
             if (app.current == t) { app.current = nt }
+            if (app.split == t) { app.split = nt }
             if (app.currentB == t) { app.currentB = nt }
         }
         i = i + 1
@@ -1968,7 +2089,10 @@ func draw() {
             if (ws != null) { blocksDraw(ws, ex, edY, ew, edH, blocksTitle(ws)) }
         } else {
             var ed = currentEditor()
-            if (ed != null) { edDraw(ed, ex, edY, ew, edH, app.focus == "editor" && app.dialog == null && app.palette == null) }
+            var edFocus = app.focus == "editor" && app.dialog == null && app.palette == null
+            if (ed != null && app.split != "" && mapHas(app.editors, app.split) && ew >= 500) {
+                drawSplit(ed, ex, edY, ew, edH, edFocus)
+            } else if (ed != null) { edDraw(ed, ex, edY, ew, edH, edFocus) }
         }
     }
     if (app.stageOpen) { drawStage(ex + ew, bodyY, stageW, bodyH - panelH) }
@@ -2023,6 +2147,8 @@ func doAction(id) {
     }
     else if (id == "bopencode") { if (app.mode == "blocks") { blocksToCode() } }
     else if (id == "codetoblocks") { codeToBlocksFile(app.current) }
+    else if (id == "split.close") { app.split = "" }
+    else if (id == "split.toggle") { toggleSplit() }
     else if (id == "gotodef") { if (app.mode == "code") { goToDefinition() } }
     else if (id == "renamesym") { if (app.mode == "code") { askRenameSymbol() } }
     else if (id == "bnewblock") { if (currentBlocks() != null) { openDialog("Новий блок", "", "newblock") } }
@@ -2187,6 +2313,11 @@ func onMouseDown(e) {
     }
     if (e.button != 1) { return }
     var ed = currentEditor()
+    if (id == "editor2" && ed != null && app.split != "") {
+        focusSplitPane()
+        ed = currentEditor()
+        id = "editor"
+    }
     if (id == "editor" && ed != null) {
         app.focus = "editor"
         ed.acOpen = false
@@ -2303,6 +2434,12 @@ func onWheel(e) {
         return
     }
     var ed = currentEditor()
+    if (id == "editor2" && app.split != "" && mapHas(app.editors, app.split)) {
+        var oe = mapGet(app.editors, app.split)
+        if (oe == ed) { app.splitTop = clamp(app.splitTop + e.dy * 3, 0, max(0, len(ed.lines) - 3)) }
+        else { edScroll(oe, e.dy * 3) }
+        return
+    }
     if (id == "editor" && ed != null) {
         if (e.ctrl) { edZoom(ed, -e.dy) } else { edScroll(ed, e.dy * 3) }
     } else if (id == "console") {
@@ -2394,6 +2531,11 @@ func onKey(e) {
         doAction("closetab")
         return
     }
+    // Ctrl+\ (на українській розкладці ця клавіша - «ґ»)
+    if (e.ctrl && (k == "\\" || k == "ґ")) {
+        toggleSplit()
+        return
+    }
     if (e.ctrl && k == "Tab" && len(app.tabs) > 1) {
         var i = indexOf(app.tabs, app.active)
         var step = 1
@@ -2454,6 +2596,8 @@ func onKey(e) {
         return
     }
     var ed = currentEditor()
+    // Ctrl+Z одразу після перейменування в кількох файлах - назад усюди
+    if (ed != null && app.mode == "code" && e.ctrl && k == "z" && !e.shift && undoRenameGroup(ed)) { return }
     if (ed != null && app.mode == "code") { edKey(ed, e) }
 }
 
@@ -3000,7 +3144,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
