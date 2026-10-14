@@ -6,6 +6,7 @@ import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, currentBlocks, doAction, draw, filesOfKind, offerOnce }
 import "../src/guide.nx" { LESSONS, lessonDone, loadProgress }
 import "../src/theme.nx"
+import "../src/ui.nx" { uiAnimating }
 import "../src/blocks_model.nx" { generateCode, newBlock, customId }
 
 func typeConsole(t) {
@@ -70,6 +71,12 @@ func main() {
     playDemo("", 20000)
     check(contains(app.con.lastOutput, "Привіт, світе!"), "показ уроку 1 зібрав і запустив програму")
     check(indexOf(app.done, LESSONS[0].title) >= 0, "урок 1 зараховано")
+    // свято: конфеті й плашка (анімація кадрами, поки летить)
+    draw()
+    check(uiAnimating, "конфеті летить - IDE малює кадри")
+    var tc = timeMs()
+    while (timeMs() - tc < 400) { ideStep(16) }
+    shot("g02b_confetti")
     shot("g02_lesson1_done")
 
     doAction("g.next")

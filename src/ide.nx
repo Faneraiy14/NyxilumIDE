@@ -1419,11 +1419,12 @@ func drawLevelAsk(W, H) {
 func _toggle(id, label, on, x, y, w) {
     if (uiHover(x, y, w, 30)) { surfaceRoundRect(S, x, y, w, 30, 6, C_BG) }
     var tx = x + w - 52
-    var bg = C_SURFACE2
-    if (on) { bg = C_GREEN }
-    surfaceRoundRect(S, tx, y + 6, 40, 18, 9, bg)
-    var knob = tx + 3
-    if (on) { knob = tx + 25 }
+    // повзунок їде плавно
+    var target = 0
+    if (on) { target = 1 }
+    var t = uiAnim("tg:" + id, target, 150)
+    surfaceRoundRect(S, tx, y + 6, 40, 18, 9, uiMix(C_SURFACE2, C_GREEN, t))
+    var knob = tx + 3 + toInt(22 * t)
     surfaceCircle(S, knob + 6, y + 15, 7, 0xffffff)
     surfaceText(S, label, x + 10, y + 7, 16, C_TEXT)
     uiRegion(id, x, y, w, 30)
@@ -2494,6 +2495,7 @@ func draw() {
     if (app.askLevel) { drawLevelAsk(W, H) }
     if (app.tour >= 0) { drawTour(app.tour) }
     if (app.demo != null) { drawDemoCursor() }
+    drawConfetti()
     surfacePresent(S)
 }
 
@@ -3240,7 +3242,64 @@ func checkLessons() {
         append(app.done, les.title)
         saveProgress(joinPath(joinPath(app.dir, ".nyx"), "уроки.json"), app.done)
         setStatus("Урок пройдено: " + les.title + "!")
+        startConfetti(les.title)
     }
+}
+
+// ---------- свято: конфеті, коли урок пройдено ----------
+
+var _confetti = []       // [x, y, vx, vy, колір, розмір]
+var _confettiStart = 0
+var _confettiTitle = ""
+
+func startConfetti(title) {
+    _confetti = []
+    _confettiStart = timeMs()
+    _confettiTitle = title
+    var W = surfaceWidth(S)
+    var cols = [0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xcba6f7, 0xfab387, 0x94e2d5]
+    var i = 0
+    while (i < 90) {
+        // два «фонтани» з нижніх кутів - угору й до середини
+        var left = i % 2 == 0
+        var x = 40
+        var vx = randomInt(120, 420)
+        if (!left) {
+            x = W - 40
+            vx = -vx
+        }
+        append(_confetti, [x, surfaceHeight(S) - 30, vx, -randomInt(520, 900), cols[i % len(cols)], randomInt(4, 9)])
+        i = i + 1
+    }
+}
+
+// Малює й рухає конфеті (1.8 с); поки летить - анімація триває.
+func drawConfetti() {
+    if (len(_confetti) == 0) { return }
+    var t = (timeMs() - _confettiStart) / 1000
+    if (t > 1.8) {
+        _confetti = []
+        return
+    }
+    uiAnimating = true
+    for p in _confetti {
+        var x = p[0] + p[2] * t
+        var y = p[1] + p[3] * t + 700 * t * t
+        var sz = p[5]
+        // мерехтіння: "папірці" обертаються - то ширші, то вужчі
+        var ww = max(2, toInt(sz * abs(sin(t * 9 + p[5]))))
+        surfaceRect(S, toInt(x), toInt(y), ww, sz, p[4])
+    }
+    // плашка зверху: з'являється і тане
+    var a = 1
+    if (t < 0.2) { a = t / 0.2 }
+    if (t > 1.4) { a = (1.8 - t) / 0.4 }
+    var label = "Урок пройдено!"
+    var W = surfaceWidth(S)
+    var bw = textWidth(label, 24, true) + 48
+    var bx = toInt((W - bw) / 2)
+    surfaceRoundRect(S, bx, 70, bw, 52, 12, 0x40a060 + toInt(a * 230) * 16777216)
+    surfaceText(S, label, bx + 24, 84, 24, 0xffffff + toInt(a * 255) * 16777216, true)
 }
 
 func firstCodeLesson() {
@@ -3614,6 +3673,8 @@ func ideStep(wait) {
     if ((app.con.running || app.term.running || len(app.lintJobs) > 0) && (wait < 0 || wait > 40)) { wait = 40 }
     if (app.con.running && app.stageOpen && (wait < 0 || wait > 16)) { wait = 16 }
     if (app.demo != null && (wait < 0 || wait > 16)) { wait = 16 }
+    // анімація (наведення, конфеті...) - наступний кадр через ~16 мс
+    if (uiAnimating && (wait < 0 || wait > 16)) { wait = 16 }
     var e = surfaceNextEvent(S, wait)
     var dirty = false
     while (e != null) {
@@ -3651,6 +3712,7 @@ func ideStep(wait) {
         app.lastAutosave = timeMs()
         saveAll()
     }
+    if (uiAnimating) { dirty = true }
     if (dirty) { draw() }
     return surfaceIsOpen(S)
 }

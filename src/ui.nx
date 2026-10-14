@@ -21,7 +21,43 @@ func uiInit(surface) {
     CHAR_W = textWidth("M", FONT)
 }
 
-func uiBegin() { _regions = [] }
+func uiBegin() {
+    _regions = []
+    uiAnimating = false
+}
+
+// ---------- анімації ----------
+//
+// uiAnim(id, ціль, мс) - значення, що плавно (за мс) іде до цілі; поки
+// хоч одне не дійшло, uiAnimating = true і IDE малює наступний кадр
+// (інакше кадри малюються лише на події - IDE не їсть процесор).
+var _anims = newMap()
+var uiAnimating = false
+
+func uiAnim(id, target, ms) {
+    var now = timeMs()
+    if (!mapHas(_anims, id)) {
+        mapSet(_anims, id, [target, now])
+        return target
+    }
+    var a = mapGet(_anims, id)
+    var step = (now - a[1]) / max(1, ms)
+    a[1] = now
+    if (a[0] < target) { a[0] = min(target, a[0] + step) }
+    else if (a[0] > target) { a[0] = max(target, a[0] - step) }
+    if (a[0] != target) { uiAnimating = true }
+    return a[0]
+}
+
+// Колір між c1 і c2 (t від 0 до 1).
+func uiMix(c1, c2, t) {
+    if (t <= 0) { return c1 }
+    if (t >= 1) { return c2 }
+    var r = toInt(((c1 >> 16) % 256) * (1 - t) + ((c2 >> 16) % 256) * t)
+    var g = toInt(((c1 >> 8) % 256) * (1 - t) + ((c2 >> 8) % 256) * t)
+    var b = toInt((c1 % 256) * (1 - t) + (c2 % 256) * t)
+    return r * 65536 + g * 256 + b
+}
 
 func uiRegion(id, x, y, w, h) {
     append(_regions, x) append(_regions, y) append(_regions, w) append(_regions, h) append(_regions, id)
@@ -59,16 +95,38 @@ func uiButton(id, label, x, y, w, h, kind) {
     var hover = uiHover(x, y, w, h)
     var bg = C_SURFACE
     var fg = C_TEXT
-    if (kind == "primary") { bg = 0x40a060  fg = 0xffffff }
-    if (kind == "danger") { bg = 0xc0506a  fg = 0xffffff }
-    if (kind == "tab") { bg = C_PANEL2  fg = C_SUBTEXT }
-    if (kind == "tabOn") { bg = C_BG  fg = C_TEXT }
-    if (kind == "flat") { bg = -1  fg = C_SUBTEXT }
-    if (hover) {
-        if (kind == "primary") { bg = 0x4cb870 }
-        else if (kind == "danger") { bg = 0xd8607c }
-        else if (kind == "tabOn") { bg = C_BG }
-        else { bg = C_SURFACE2  fg = C_TEXT }
+    var hbg = C_SURFACE2
+    if (kind == "primary") {
+        bg = 0x40a060
+        hbg = 0x4cb870
+        fg = 0xffffff
+    }
+    if (kind == "danger") {
+        bg = 0xc0506a
+        hbg = 0xd8607c
+        fg = 0xffffff
+    }
+    if (kind == "tab") {
+        bg = C_PANEL2
+        fg = C_SUBTEXT
+    }
+    if (kind == "tabOn") {
+        bg = C_BG
+        hbg = C_BG
+        fg = C_TEXT
+    }
+    // наведення - плавно (120 мс), а не стрибком
+    var ht = 0
+    if (hover) { ht = 1 }
+    ht = uiAnim("b:" + id, ht, 120)
+    if (kind == "flat") {
+        // без фону: підсвітка проступає прозорістю поверх того, що під кнопкою
+        bg = -1
+        fg = uiMix(C_SUBTEXT, C_TEXT, ht)
+        if (ht > 0) { surfaceRoundRect(S, x, y, w, h, 6, C_SURFACE2 + toInt(ht * 255) * 16777216) }
+    } else {
+        bg = uiMix(bg, hbg, ht)
+        if (kind == "normal" || kind == "tab") { fg = uiMix(fg, C_TEXT, ht) }
     }
     if (uiPressedId == id && hover) { bg = C_DIM }
     if (bg >= 0) {
