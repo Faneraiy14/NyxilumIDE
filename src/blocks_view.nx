@@ -17,7 +17,9 @@ var GAP = 6
 var ARM_W = 18
 var ARM_BOTTOM = 22
 var STRIP_W = 84     // смуга категорій
-var PAL_W = 250      // палітра блоків
+var PAL_MIN = 250    // палітра блоків: ширина підлаштовується під
+var PAL_MAX = 440    // найширший блок категорії, решта - прокруткою
+var _palW = 250
 var CODE_W = 360     // панель "Код" праворуч
 
 struct BlocksWs {
@@ -51,6 +53,8 @@ struct BlocksWs {
     menuBlock: any
     menuIdx: i32
     palScroll: i32
+    palScrollX: i32
+    palPanning: bool
     showCode: bool
     snap: array
     x: i32
@@ -64,7 +68,7 @@ func newBlocksWs(path, text) {
     var ws = BlocksWs { stacks: [], panX: 0, panY: 0, cat: "Події", drag: null, dragOffX: 0, dragOffY: 0,
         dragX: 0, dragY: 0, dragH: 0, pending: null, pendingSlot: -1, pendingSlotType: "", pendingPal: false,
         pressX: 0, pressY: 0, panning: false, edit: null, editIdx: -1, errBlock: null, undo: [], redo: [],
-        dirty: false, path: path, menu: [], menuX: 0, menuY: 0, menuBlock: null, menuIdx: -1, palScroll: 0,
+        dirty: false, path: path, menu: [], menuX: 0, menuY: 0, menuBlock: null, menuIdx: -1, palScroll: 0, palScrollX: 0, palPanning: false,
         showCode: false, snap: [], x: 0, y: 0, w: 0, h: 0 }
     try {
         ws.stacks = stacksFromJson(text)
@@ -404,37 +408,71 @@ func drawPalette(ws, x, y, h) {
     }
 
     // блоки категорії
-    var px = x + STRIP_W
-    surfaceRect(S, px, y, PAL_W, h, C_PANEL)
-    surfaceClip(S, px, y, PAL_W, h)
-    surfaceText(S, ws.cat, px + 14, y + 12, 16, C_TEXT, true)
-    var by = y + 44 - ws.palScroll
     var ids = []
     for sp in SPECS {
         if (sp.cat == ws.cat && sp.id != "var") { append(ids, sp.id) }
     }
+    var varNames = []
+    if (ws.cat == "Змінні") { varNames = wsVarNames(ws) }
+
+    // ширина палітри - під найширший блок (у межах PAL_MIN..PAL_MAX)
+    var contentW = 0
+    for id in ids { contentW = max(contentW, measureBlock(_palTemplate(id))[0]) }
+    for name in varNames {
+        var tv = _palTemplate("var:" + name)
+        tv.args[0] = name
+        contentW = max(contentW, measureBlock(tv)[0])
+    }
+    contentW = contentW + 28
+    _palW = clamp(contentW, PAL_MIN, PAL_MAX)
+
+    var px = x + STRIP_W
+    surfaceRect(S, px, y, _palW, h, C_PANEL)
+    surfaceClip(S, px, y, _palW, h)
+    surfaceText(S, ws.cat, px + 14, y + 12, 16, C_TEXT, true)
+    ws.palScrollX = clamp(ws.palScrollX, 0, max(0, contentW - _palW))
+    var bx = px + 14 - ws.palScrollX
+    var top = y + 44
+    var by = top - ws.palScroll
     _pHits = []
     _record = false
+    surfaceClip(S, px, top, _palW, h - (top - y))
+    for name in varNames {
+        var vb = _palTemplate("var:" + name)
+        vb.args[0] = name
+        drawBlock(vb, bx, by, null)
+        append(_pHits, "var:" + name) append(_pHits, bx) append(_pHits, by) append(_pHits, vb.w) append(_pHits, vb.hh)
+        by = by + vb.hh + 10
+    }
     if (ws.cat == "Змінні") {
-        for name in wsVarNames(ws) {
-            var vb = _palTemplate("var:" + name)
-            vb.args[0] = name
-            drawBlock(vb, px + 14, by, null)
-            append(_pHits, "var:" + name) append(_pHits, px + 14) append(_pHits, by) append(_pHits, vb.w) append(_pHits, vb.hh)
-            by = by + vb.hh + 10
-        }
-        uiButton("bnewvar", "+ Нова змінна", px + 14, by, 160, 30, "normal")
+        uiButton("bnewvar", "+ Нова змінна", bx, by, 160, 30, "normal")
         by = by + 44
     }
     for id in ids {
         var tb = _palTemplate(id)
-        var th = drawBlock(tb, px + 14, by, null)
-        append(_pHits, id) append(_pHits, px + 14) append(_pHits, by) append(_pHits, tb.w) append(_pHits, tb.hh)
+        var th = drawBlock(tb, bx, by, null)
+        append(_pHits, id) append(_pHits, bx) append(_pHits, by) append(_pHits, tb.w) append(_pHits, tb.hh)
         by = by + th + 12
     }
     _record = true
     surfaceUnclip(S)
-    uiRegion("bpalette", px, y, PAL_W, h)
+
+    // смуги прокрутки палітри
+    var contentH = by + ws.palScroll - top
+    var viewH = h - (top - y)
+    if (contentH > viewH) {
+        ws.palScroll = clamp(ws.palScroll, 0, contentH - viewH + 20)
+        var barH = max(30, toInt(viewH * viewH / contentH))
+        var barY = top + toInt((viewH - barH) * ws.palScroll / max(1, contentH - viewH + 20))
+        surfaceRoundRect(S, px + _palW - 8, barY, 6, barH, 3, C_SURFACE2)
+    } else { ws.palScroll = 0 }
+    if (contentW > _palW) {
+        var barW = max(30, toInt(_palW * _palW / contentW))
+        var barX = px + toInt((_palW - barW) * ws.palScrollX / max(1, contentW - _palW))
+        surfaceRoundRect(S, barX, y + h - 8, barW, 6, 3, C_SURFACE2)
+    }
+    surfaceUnclip(S)
+    uiRegion("bpalette", px, y, _palW, h)
 }
 
 // ---------- панель згенерованого коду ----------
@@ -482,8 +520,8 @@ func blocksDraw(ws, x, y, w, h, title) {
     _attach = []
     drawPalette(ws, x, y, h)
 
-    var wx = x + STRIP_W + PAL_W
-    var ww = w - STRIP_W - PAL_W
+    var wx = x + STRIP_W + _palW
+    var ww = w - STRIP_W - _palW
     if (ws.showCode) { ww = ww - CODE_W }
     surfaceRect(S, wx, y, ww, h, C_BG)
     // сітка-крапки: орієнтир при прокручуванні
@@ -501,6 +539,8 @@ func blocksDraw(ws, x, y, w, h, title) {
     for s in ws.stacks {
         drawChain(s, wx + ws.panX + s.x, y + ws.panY + s.y, ws)
     }
+
+    _drawWsScrollbars(ws, wx, y, ww, h)
 
     if (len(ws.stacks) == 0 && ws.drag == null) {
         var t = "Перетягни сюди блок «коли натиснуто Запустити» з категорії Події"
@@ -537,6 +577,35 @@ func blocksDraw(ws, x, y, w, h, title) {
     if (len(ws.menu) > 0) { drawMenu(ws) }
 }
 
+// Смуги прокрутки робочої області: показують, де ти відносно всіх блоків.
+func _drawWsScrollbars(ws, wx, y, ww, h) {
+    if (len(_bHits) == 0) { return }
+    var minX = wx
+    var minY = y
+    var maxX = wx + ww
+    var maxY = y + h
+    var k = 0
+    while (k < len(_bHits)) {
+        minX = min(minX, _bHits[k + 1])
+        minY = min(minY, _bHits[k + 2])
+        maxX = max(maxX, _bHits[k + 1] + _bHits[k + 3])
+        maxY = max(maxY, _bHits[k + 2] + _bHits[k + 4])
+        k = k + 5
+    }
+    var totalW = maxX - minX
+    var totalH = maxY - minY
+    if (totalW > ww + 4) {
+        var bw = max(30, toInt(ww * ww / totalW))
+        var bx = wx + toInt((ww - bw) * (wx - minX) / max(1, totalW - ww))
+        surfaceRoundRect(S, bx, y + h - 8, bw, 6, 3, C_SURFACE2)
+    }
+    if (totalH > h + 4) {
+        var bh = max(30, toInt(h * h / totalH))
+        var by = y + toInt((h - bh) * (y - minY) / max(1, totalH - h))
+        surfaceRoundRect(S, wx + ww - 8, by, 6, bh, 3, C_SURFACE2)
+    }
+}
+
 // ---------- прилипання ----------
 
 // Куди впаде перетягуваний блок: [] - нікуди (вільно),
@@ -545,7 +614,7 @@ func blocksDraw(ws, x, y, w, h, title) {
 func findSnap(ws) {
     var d = ws.drag
     var sp = specOf(d.spec)
-    if (uiMouseX < ws.x + STRIP_W + PAL_W) { return [] }
+    if (uiMouseX < ws.x + STRIP_W + _palW) { return [] }
     if (sp.kind == "rep" || sp.kind == "bool") {
         var px = ws.dragX + 6
         var py = ws.dragY + toInt(max(d.hh, 20) / 2)
@@ -639,13 +708,13 @@ func detachBlock(ws, b) {
 }
 
 func _toWs(ws, sx, sy) {
-    return [sx - (ws.x + STRIP_W + PAL_W) - ws.panX, sy - ws.y - ws.panY]
+    return [sx - (ws.x + STRIP_W + _palW) - ws.panX, sy - ws.y - ws.panY]
 }
 
 func dropDrag(ws) {
     var d = ws.drag
     ws.drag = null
-    if (uiMouseX < ws.x + STRIP_W + PAL_W) { return }   // кинули на палітру - видалено
+    if (uiMouseX < ws.x + STRIP_W + _palW) { return }   // кинули на палітру - видалено
     var snap = ws.snap
     if (len(snap) > 0 && snap[0] == "slot") {
         var host = snap[1]
@@ -851,7 +920,7 @@ func blocksMouseDown(ws, e, id) {
         wsSnapshot(ws)
         var nb = newBlock("set")
         nb.args[0] = ""
-        var p = _toWs(ws, ws.x + STRIP_W + PAL_W + 40, ws.y + ws.h - 120)
+        var p = _toWs(ws, ws.x + STRIP_W + _palW + 40, ws.y + ws.h - 120)
         nb.x = p[0]
         nb.y = p[1]
         append(ws.stacks, nb)
@@ -878,7 +947,13 @@ func blocksMouseDown(ws, e, id) {
         }
         k = k - 5
     }
-    if (id == "bpalette") { return true }
+    if (id == "bpalette") {
+        // порожнє місце палітри - тягнемо її саму (прокрутка в обидва боки)
+        ws.palPanning = true
+        ws.pressX = x
+        ws.pressY = y
+        return true
+    }
     if (id != "bworkspace") { return false }
 
     var si = _slotAt(x, y)
@@ -912,6 +987,13 @@ func blocksMouseDown(ws, e, id) {
 func blocksMouseMove(ws, e) {
     var x = e.x
     var y = e.y
+    if (ws.palPanning) {
+        ws.palScrollX = max(0, ws.palScrollX - (x - ws.pressX))
+        ws.palScroll = max(0, ws.palScroll - (y - ws.pressY))
+        ws.pressX = x
+        ws.pressY = y
+        return
+    }
     if (ws.panning) {
         ws.panX = ws.panX + x - ws.pressX
         ws.panY = ws.panY + y - ws.pressY
@@ -940,8 +1022,9 @@ func blocksMouseMove(ws, e) {
 }
 
 func blocksMouseUp(ws, e) {
-    if (ws.panning) {
+    if (ws.panning || ws.palPanning) {
         ws.panning = false
+        ws.palPanning = false
         return
     }
     if (ws.drag != null) {
@@ -969,7 +1052,7 @@ func blocksMouseUp(ws, e) {
             nb = newBlock("var")
             nb.args[0] = substring(id, 4, len(id) - 4)
         } else { nb = newBlock(id) }
-        var p = _toWs(ws, ws.x + STRIP_W + PAL_W + 60 + len(ws.stacks) % 5 * 20, ws.y + 60 + len(ws.stacks) % 5 * 20)
+        var p = _toWs(ws, ws.x + STRIP_W + _palW + 60 + len(ws.stacks) % 5 * 20, ws.y + 60 + len(ws.stacks) % 5 * 20)
         nb.x = p[0]
         nb.y = p[1]
         append(ws.stacks, nb)
@@ -977,13 +1060,22 @@ func blocksMouseUp(ws, e) {
     ws.pending = null
 }
 
+// Колесо: вгору-вниз; Shift+колесо або горизонтальна прокрутка тачпада -
+// вліво-вправо. Над палітрою прокручується палітра, інакше - робоча область.
 func blocksWheel(ws, e) {
-    if (uiMouseX < ws.x + STRIP_W + PAL_W) {
-        ws.palScroll = max(0, ws.palScroll + e.dy * 40)
-    } else if (e.shift) {
-        ws.panX = ws.panX - e.dy * 40
+    var dx = 0
+    var dy = e.dy
+    if (e.dx != null) { dx = e.dx }
+    if (e.shift) {
+        dx = dy
+        dy = 0
+    }
+    if (uiMouseX < ws.x + STRIP_W + _palW) {
+        ws.palScroll = max(0, ws.palScroll + dy * 40)
+        ws.palScrollX = max(0, ws.palScrollX + dx * 40)
     } else {
-        ws.panY = ws.panY - e.dy * 40
+        ws.panY = ws.panY - dy * 40
+        ws.panX = ws.panX - dx * 40
     }
 }
 
