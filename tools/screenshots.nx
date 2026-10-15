@@ -1,0 +1,109 @@
+// Скриншоти для README: IDE сама доходить до потрібних станів (без вікна)
+// і зберігає кадри в assets/screenshots/. Запуск з кореня репо:
+//   NYX_IDE_NO_SHELL=1 NYX_IDE_CONFIG=/tmp/nxss/s.json NX_HEADLESS=1 nx tools/screenshots.nx /tmp/nxss/proj
+// (термінал знімається з NYX_IDE_NO_SHELL=0 - там справжні команди).
+import "../tests/helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, saveAll }
+import "../src/git.nx" { gitRun }
+
+func waitMs(ms) {
+    var t0 = timeMs()
+    while (timeMs() - t0 < ms) { ideStep(16) }
+}
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptDir() + "/../assets/screenshots"
+    presetConfig("middle", false, true, true)
+    if (!dirExists(dir)) { makeDir(dir) }
+    ideInit(dir)
+    app.offer = null
+
+    // 1. Блоки: приклад «Упіймай зірку» працює на сцені
+    doAction("g.ex:Упіймай зірку.nxb")
+    app.side = "files"
+    doAction("run")
+    var t0 = timeMs()
+    while (timeMs() - t0 < 8000 && !app.stageOpen) { ideStep(16) }
+    waitMs(1500)
+    app.offer = null
+    shot("blocks")
+    key("F5", false, true)
+    waitMs(500)
+    // сцену - закрити (далі вона порожня й лише займає місце)
+    app.stageOpen = false
+    if (app.sideBeforeStage != "-") { app.sideBeforeStage = "-" }
+
+    // 2. Код: програма з відповіддю в консолі
+    openPath(dir + "/привіт.nx")
+    app.side = "files"
+    key("F5", false, false)
+    waitMs(2500)
+    typeText("Сева")
+    key("Enter", false, false)
+    waitMs(2500)
+    app.offer = null
+    var ed = currentEditor()
+    ed.cy = 8
+    ed.cx = 12
+    shot("code")
+
+    // 3. Уроки: урок 1, «Покажи мені» склав і запустив програму
+    if (app.side != "learn") { doAction("act:learn") }
+    doAction("g.open:0")
+    // після doAction кадр сам не малюється (у житті це робить клік) -
+    // інакше показ узяв би координати кнопок зі старого кадру
+    draw()
+    doAction("g.demo")
+    t0 = timeMs()
+    while (timeMs() - t0 < 30000 && app.demo != null) { ideStep(16) }
+    waitMs(2200)
+    app.offer = null
+    shot("lessons")
+
+    // 4. Git: репозиторій, коміт, зміна
+    gitRun(dir, ["init", "-q"])
+    gitRun(dir, ["config", "user.email", "seva@example.com"])
+    gitRun(dir, ["config", "user.name", "Сева"])
+    gitRun(dir, ["add", "-A"])
+    gitRun(dir, ["commit", "-q", "-m", "Мої перші програми"])
+    openPath(dir + "/привіт.nx")
+    ed = currentEditor()
+    ed.lines[4] = "    print(\"Привіт, Nx IDE!\")"
+    ed.hlOk = 0
+    ed.dirty = true
+    saveAll()
+    app.side = "git"
+    app.git.stale = true
+    waitMs(1200)
+    doAction("git.file:" + dir + "/привіт.nx")
+    app.offer = null
+    shot("git")
+
+    // 5. Термінал і світла тема
+    app.cfg.theme = "light"
+    doAction("set.theme:light")
+    app.side = "files"
+    doAction("terminal")
+    var cmds = ["git log --oneline", "nx привіт.nx"]
+    for c in cmds {
+        typeText(c)
+        key("Enter", false, false)
+        t0 = timeMs()
+        ideStep(10)
+        while (timeMs() - t0 < 8000 && app.term.running) {
+            if (contains(c, "привіт.nx") && timeMs() - t0 > 1500) {
+                typeText("Сева")
+                key("Enter", false, false)
+                waitMs(800)
+            }
+            ideStep(20)
+        }
+    }
+    waitMs(500)
+    app.offer = null
+    shot("terminal")
+    doAction("set.theme:dark")
+    ideShutdown()
+    print("СКРИНШОТИ: " + outDir)
+}
