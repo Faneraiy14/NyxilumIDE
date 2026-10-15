@@ -1,5 +1,7 @@
 # Nx IDE
 
+*[English](README.en.md)*
+
 Середовище програмування для [NyxilumLang](https://github.com/Faneraiy14/NyxilumLang), написане
 **на самій NyxilumLang**. Для всіх, хто починає програмувати, і для тих, хто вже вміє.
 
@@ -9,7 +11,7 @@
 - **Інструменти** - термінал, git, історія версій, розширення (Anylint; свої - на NyxilumLang).
 - **Вигляд** - теми, згладжені шрифти, масштаб; оновлення - кнопкою в самій IDE.
 
-Детально - [ПОСІБНИК.md](ПОСІБНИК.md).
+Детально - [ПОСІБНИК.md](ПОСІБНИК.md) ([English guide](GUIDE.md)).
 
 ## Завантажити
 
@@ -52,6 +54,8 @@ NX_IDE_HOME=/шлях/до/NyxilumIDE nx ide
 
 ## Тести
 
+Усі тести без вікна (сценарії, «мавпа» з випадковими діями):
+
 ```bash
-NX_HEADLESS=1 nx tests/scenario_code.nx /tmp/nyx-ide-test /tmp/nyx-ide-shots
+bash tests/run_all.sh
 ```

@@ -92,7 +92,7 @@ jobs:
           mkdir -p app/ide
           cp -r NyxilumIDE/src NyxilumIDE/examples NyxilumIDE/extensions NyxilumIDE/assets app/ide/
           rm -rf app/ide/examples/.gen
-          cp NyxilumIDE/README.md NyxilumIDE/ПОСІБНИК.md NyxilumIDE/LICENSE app/ide/
+          cp NyxilumIDE/README.md NyxilumIDE/README.en.md NyxilumIDE/ПОСІБНИК.md NyxilumIDE/GUIDE.md NyxilumIDE/LICENSE app/ide/
           cp NyxilumIDE/LICENSE app/
           sed -i 's/^var IDE_VERSION = .*/var IDE_VERSION = "${{ steps.version.outputs.number }}"/' app/ide/src/version.nx
           printf '{"app": "nx-ide", "version": "%s", "repo": "Faneraiy14/NyxilumIDE"}\n' "${{ steps.version.outputs.number }}" > app/nx-ide.json
