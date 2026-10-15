@@ -114,6 +114,7 @@ struct App {
     updInfo: any
     updRunning: bool
     updDone: bool
+    updManual: bool
 }
 
 var app = null
@@ -688,28 +689,41 @@ func renameSymbol(word, nw) {
 // ---------- оновлення ----------
 
 // Раз на день (і не під час тестів) - nx update-self --check у фоні.
-func startUpdateCheck() {
-    if (!app.cfg.updCheck || osEnv("NX_HEADLESS") == "1") { return }
-    if (timestamp() - app.cfg.lastUpd < 86400) { return }
+// now - кнопка «Перевірити зараз» у Налаштуваннях.
+func startUpdateCheck() { _startUpdateCheck(false) }
+
+func _startUpdateCheck(now) {
+    if (!now && (!app.cfg.updCheck || osEnv("NX_HEADLESS") == "1")) { return }
+    if (!now && timestamp() - app.cfg.lastUpd < 86400) { return }
+    // з клону репозиторію (версія "dev") окрема програма не оновлюється
+    if (isStandalone(nxPath()) && IDE_VERSION == "dev") { return }
+    app.updManual = now
     app.cfg.lastUpd = timestamp()
     saveSettings()
     var o = newMap()
     var env = newMap()
     mapSet(env, "NX_EXIT_WITH_PARENT", "1")
     mapSet(o, "env", env)
-    try { app.updJob = procStart(nxPath(), ["update-self", "--check"], o) } catch (e) { app.updJob = null }
+    try { app.updJob = procStart(nxPath(), updateArgs(nxPath(), true), o) } catch (e) { app.updJob = null }
 }
 
 // true - щось змінилось (плашка / кінець оновлення).
 func pollUpdate() {
     var changed = false
     if (app.updJob != null && !procIsRunning(app.updJob)) {
-        var info = parseUpdateCheck(procOutput(app.updJob))
+        var out = procOutput(app.updJob)
+        var info = parseUpdateCheck(out)
         app.updJob = null
         if (info != null) {
             app.updInfo = info
             changed = true
+        } else if (app.updManual) {
+            // натиснули «Перевірити зараз» - відповісти й тоді, коли оновлень нема
+            if (contains(out, "найновіша") || contains(out, "нема релізів")) { setStatus("Оновлень нема - у тебе найновіша версія") }
+            else { setStatus("Не вдалося перевірити оновлення (нема інтернету?)") }
+            changed = true
         }
+        app.updManual = false
     }
     // оновлення в терміналі завершилось
     if (app.updRunning && !app.term.running) {
@@ -769,11 +783,17 @@ func updateAction(id) {
         app.panelOpen = true
         app.panelTab = "terminal"
         if (app.term.running) { termStop(app.term) }
-        termExec(app.term, "nx update-self")
+        termExec(app.term, "nx " + join(updateArgs(nxPath(), false), " "))
         app.updRunning = app.term.running
         if (!app.updRunning) { setStatus("Не вдалося запустити оновлення - деталі в терміналі") }
     }
-    else if (id == "upd.page") { openUrl(RELEASES_URL) }
+    else if (id == "upd.page") {
+        if (isStandalone(nxPath())) { openUrl(IDE_RELEASES_URL) } else { openUrl(RELEASES_URL) }
+    }
+    else if (id == "upd.check") {
+        _startUpdateCheck(true)
+        setStatus("Перевіряю оновлення...")
+    }
     else if (id == "upd.restart") { restartIde() }
 }
 
@@ -1603,6 +1623,10 @@ func drawSettingsView(x, y, w, h) {
     _toggle("set.pixelfont", "Піксельний шрифт", c.pixelFont, x + 6, cy, w - 12)
     cy = cy + 34
     _toggle("set.updcheck", "Перевіряти оновлення", c.updCheck, x + 6, cy, w - 12)
+    cy = cy + 34
+    var vlabel = "Nx IDE " + IDE_VERSION
+    var vw = surfaceText(S, vlabel, x + 16, cy + 7, 14, C_DIM)
+    uiButton("upd.check", "Перевірити зараз", x + w - 170, cy, 156, 28, "flat")
     cy = cy + 40
     surfaceText(S, "Тема", x + 14, cy, 14, C_SUBTEXT, true)
     cy = cy + 22
@@ -3878,7 +3902,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false, updManual: false }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)

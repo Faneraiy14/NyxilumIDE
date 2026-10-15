@@ -5,7 +5,33 @@
 // IDE, потім перезапуск. Встановлено пакетом (.deb у /opt, .pkg у /usr/local)
 // - писати туди нема прав, тож плашка веде на сторінку релізу.
 
+import "version.nx"
+
 var RELEASES_URL = "https://github.com/Faneraiy14/NyxilumNode/releases/latest"
+var IDE_RELEASES_URL = "https://github.com/Faneraiy14/NyxilumIDE/releases/latest"
+
+// Окрема програма Nx IDE (свій вбудований nx): поруч з nx лежить nx-ide.json.
+// Тоді оновлення - з релізів NyxilumIDE, версія - IDE_VERSION.
+func isStandalone(nxp) {
+    var d = replace(nxp, "\\", "/")
+    var cut = 0
+    var i = 0
+    while (i < len(d)) {
+        if (d[i] == "/") { cut = i }
+        i = i + 1
+    }
+    return fileExists(substring(d, 0, cut) + "/nx-ide.json")
+}
+
+// Аргументи nx update-self для цієї установки (+ "--check" для перевірки).
+func updateArgs(nxp, check) {
+    var a = ["update-self"]
+    if (check) { append(a, "--check") }
+    if (isStandalone(nxp)) {
+        for x in ["--repo", "Faneraiy14/NyxilumIDE", "--prefix", "NxIDE", "--current", IDE_VERSION] { append(a, x) }
+    }
+    return a
+}
 
 // Вивід update-self --check -> [поточна, остання] або null (нема оновлення,
 // нема мережі, старий nx без update-self).

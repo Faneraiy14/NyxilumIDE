@@ -3,7 +3,7 @@
 // NYX_IDE_NO_SHELL=1 NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_update.nx <тека> <тека-для-png>
 import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, draw }
-import "../src/update.nx" { parseUpdateCheck, installedByPackage }
+import "../src/update.nx" { parseUpdateCheck, installedByPackage, isStandalone, updateArgs }
 
 func main() {
     var dir = scriptArgs()[0]
@@ -14,6 +14,16 @@ func main() {
     check(parseUpdateCheck("Error: Cannot find file 'update-self'") == null, "старий nx без update-self - тиша")
     check(parseUpdateCheck("Не вдалося зв'язатися з GitHub") == null, "без мережі - тиша")
     check(installedByPackage("/opt/nyx/Nx") && !installedByPackage("/home/u/.nyx/Nx"), "пакет (/opt) розпізнається")
+
+    // окрема програма: nx-ide.json поруч з nx -> оновлення з релізів NyxilumIDE
+    if (!dirExists(dir)) { makeDir(dir) }
+    makeDir(dir + "/app")
+    writeFile(dir + "/app/nx-ide.json", "{}")
+    check(isStandalone(dir + "/app/Nx") && !isStandalone(dir + "/Nx"), "окрема програма розпізнається за nx-ide.json")
+    var ua = join(updateArgs(dir + "/app/Nx", true), " ")
+    check(contains(ua, "--check --repo Faneraiy14/NyxilumIDE --prefix NxIDE --current"), "оновлення окремої програми - з NyxilumIDE")
+    check(join(updateArgs(dir + "/Nx", false), " ") == "update-self", "nx з NyxilumNode - звичайний update-self")
+    deleteDir(dir + "/app")
 
     presetConfig("advanced", false, false, false)
     ideInit(dir)
@@ -26,6 +36,10 @@ func main() {
     check(app.panelTab == "terminal" && !app.updRunning, "«Оновити» - у терміналі (тут оболонка вимкнена)")
     clickId("upd.later")
     check(app.updInfo == null, "«Пізніше» ховає плашку")
+    app.side = "settings"
+    draw()
+    check(uiFind("upd.check") != null, "у Налаштуваннях - версія й «Перевірити зараз»")
+    shot("u03_settings")
     app.updDone = true
     draw()
     check(uiFind("upd.restart") != null, "після оновлення - «Перезапустити»")

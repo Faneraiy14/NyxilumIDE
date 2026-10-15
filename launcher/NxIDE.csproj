@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Запускач Nx IDE для Windows: "Nx IDE.exe" без вікна консолі.
+       Запускає Nx.exe ide (поруч) прихованим - тож чорного вікна нема.
+       Збирається NativeAOT (~1-2 МБ, без .NET на комп'ютері):
+         dotnet publish launcher -c Release -r win-x64 -p:PublishAot=true -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Nx IDE</AssemblyName>
+    <ApplicationIcon>../assets/icon.ico</ApplicationIcon>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+  </PropertyGroup>
+</Project>
