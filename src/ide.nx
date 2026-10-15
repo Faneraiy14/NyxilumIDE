@@ -23,6 +23,7 @@ import "symbols.nx"
 import "term.nx"
 import "extensions.nx"
 import "git.nx"
+import "update.nx"
 
 var TITLE_H = 36
 var TOP_H = 36            // = TITLE_H (стара назва - для уроків/показу)
@@ -109,6 +110,10 @@ struct App {
     dragX: i32
     dragY: i32
     dragActive: bool
+    updJob: any
+    updInfo: any
+    updRunning: bool
+    updDone: bool
 }
 
 var app = null
@@ -680,6 +685,126 @@ func renameSymbol(word, nw) {
     setStatus("Перейменовано «" + word + "» → «" + nw + "»: " + toString(total) + " місць у " + toString(files) + " файл(ах)")
 }
 
+// ---------- оновлення ----------
+
+// Раз на день (і не під час тестів) - nx update-self --check у фоні.
+func startUpdateCheck() {
+    if (!app.cfg.updCheck || osEnv("NX_HEADLESS") == "1") { return }
+    if (timestamp() - app.cfg.lastUpd < 86400) { return }
+    app.cfg.lastUpd = timestamp()
+    saveSettings()
+    var o = newMap()
+    var env = newMap()
+    mapSet(env, "NX_EXIT_WITH_PARENT", "1")
+    mapSet(o, "env", env)
+    try { app.updJob = procStart(nxPath(), ["update-self", "--check"], o) } catch (e) { app.updJob = null }
+}
+
+// true - щось змінилось (плашка / кінець оновлення).
+func pollUpdate() {
+    var changed = false
+    if (app.updJob != null && !procIsRunning(app.updJob)) {
+        var info = parseUpdateCheck(procOutput(app.updJob))
+        app.updJob = null
+        if (info != null) {
+            app.updInfo = info
+            changed = true
+        }
+    }
+    // оновлення в терміналі завершилось
+    if (app.updRunning && !app.term.running) {
+        app.updRunning = false
+        var ok = false
+        for l in app.term.lines { if (contains(l[0], "Готово: nx оновлено")) { ok = true } }
+        if (ok) {
+            app.updInfo = null
+            app.updDone = true
+        } else { setStatus("Оновлення не вдалося - деталі в терміналі") }
+        changed = true
+    }
+    return changed
+}
+
+func drawUpdateBanner(W, H) {
+    var w = 380
+    var text = ""
+    if (app.updDone) { text = "Nx IDE оновлено! Перезапусти, щоб працювати в новій версії." }
+    else if (installedByPackage(nxPath())) { text = "Вийшла Nx IDE " + app.updInfo[1] + " (у тебе " + app.updInfo[0] + "). Встановлено пакетом - скачай новий зі сторінки релізу." }
+    else { text = "Вийшла нова версія Nx IDE " + app.updInfo[1] + " (у тебе " + app.updInfo[0] + ")." }
+    var lines = wrapLines(text, w - 32, 16)
+    var h = 74 + len(lines) * 20
+    var x = W - w - 16
+    var y = H - STATUS_H - h - 12
+    surfaceRoundRect(S, x + 3, y + 3, w, h, 10, 0x88000000)
+    surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
+    surfaceRoundRect(S, x, y, 4, h, 2, C_GREEN)
+    var ly = y + 14
+    for l in lines {
+        surfaceText(S, l, x + 16, ly, 16, C_TEXT)
+        ly = ly + 20
+    }
+    var by = y + h - 44
+    if (app.updDone) {
+        uiButton("upd.restart", "Перезапустити", x + 16, by, 160, 32, "primary")
+        uiButton("upd.later", "Пізніше", x + 184, by, 110, 32, "normal")
+    } else if (app.updRunning) {
+        surfaceText(S, "Оновлюю... (дивись термінал)", x + 16, by + 7, 16, C_SUBTEXT)
+    } else if (installedByPackage(nxPath())) {
+        uiButton("upd.page", "Сторінка релізу", x + 16, by, 170, 32, "primary")
+        uiButton("upd.later", "Пізніше", x + 194, by, 110, 32, "normal")
+    } else {
+        uiButton("upd.go", "Оновити", x + 16, by, 120, 32, "primary")
+        uiButton("upd.later", "Пізніше", x + 144, by, 110, 32, "normal")
+    }
+}
+
+func updateAction(id) {
+    if (id == "upd.later") {
+        app.updInfo = null
+        app.updDone = false
+    }
+    else if (id == "upd.go") {
+        saveAll()
+        saveSession()
+        app.panelOpen = true
+        app.panelTab = "terminal"
+        if (app.term.running) { termStop(app.term) }
+        termExec(app.term, "nx update-self")
+        app.updRunning = app.term.running
+        if (!app.updRunning) { setStatus("Не вдалося запустити оновлення - деталі в терміналі") }
+    }
+    else if (id == "upd.page") { openUrl(RELEASES_URL) }
+    else if (id == "upd.restart") { restartIde() }
+}
+
+// Відкрити посилання в браузері системи.
+func openUrl(url) {
+    try {
+        if (termIsWindows()) { procStart("cmd.exe", ["/c", "start", "", url]) }
+        else if (contains(toLower(osPlatform()), "mac") || contains(toLower(osPlatform()), "darwin")) { procStart("open", [url]) }
+        else { procStart("xdg-open", [url]) }
+    } catch (e) { setStatus("Відкрий у браузері: " + url) }
+}
+
+var _quitRequested = false
+
+// Новий процес IDE (окремо від цього - без NX_EXIT_WITH_PARENT і без труб
+// вводу-виводу), а цей - зберегти й закритись.
+func restartIde() {
+    saveAll()
+    saveSession()
+    try {
+        if (termIsWindows()) {
+            var o = newMap()
+            mapSet(o, "rawArgs", "/d /c start \"\" /min \"" + nxPath() + "\" ide \"" + app.dir + "\"")
+            procStart("cmd.exe", [], o)
+        } else {
+            procStart("/bin/sh", ["-c", "nohup \"$0\" ide \"$1\" >/dev/null 2>&1 &", nxPath(), app.dir])
+        }
+        _quitRequested = true
+    } catch (e) { setStatus("Не вдалося перезапустити - відкрий IDE ще раз сам(а)") }
+}
+
 // ---------- git ----------
 
 func gitAction(id) {
@@ -1198,6 +1323,8 @@ struct Settings {
     pixelFont: bool
     uiScale: i32
     theme: string
+    updCheck: bool
+    lastUpd: i32
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1206,6 +1333,11 @@ func configPath() {
     var p = osEnv("NYX_IDE_CONFIG")
     if (p != null && p != "") { return p }
     return joinPath(joinPath(homeDir(), ".nyx-ide"), "налаштування.json")
+}
+
+func _numOf(m, k) {
+    if (!mapHas(m, k)) { return 0 }
+    return toInt(mapGet(m, k))
 }
 
 func _themeOf(m) {
@@ -1229,7 +1361,7 @@ func loadSettings() {
         if (mapHas(m, "extOff")) { for x2 in mapGet(m, "extOff") { append(extOff, toString(x2)) } }
         return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
             lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
-            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m), theme: _themeOf(m) }
+            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m), theme: _themeOf(m), updCheck: mapGet(m, "updCheck") != false, lastUpd: _numOf(m, "lastUpd") }
     } catch (e) { return null }
 }
 
@@ -1246,6 +1378,8 @@ func saveSettings() {
     mapSet(m, "pixelFont", c.pixelFont)
     mapSet(m, "uiScale", c.uiScale)
     mapSet(m, "theme", c.theme)
+    mapSet(m, "updCheck", c.updCheck)
+    mapSet(m, "lastUpd", c.lastUpd)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1255,7 +1389,7 @@ func saveSettings() {
 
 func defaultSettings(level) {
     var adv = level == "advanced"
-    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100, theme: "dark" }
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100, theme: "dark", updCheck: true, lastUpd: 0 }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1269,8 +1403,12 @@ func applyLevel(level, firstRun) {
     var pixelFont = false
     var uiScale = 100
     var theme = "dark"
+    var updCheck = true
+    var lastUpd = 0
     if (app.cfg != null) {
         theme = app.cfg.theme
+        updCheck = app.cfg.updCheck
+        lastUpd = app.cfg.lastUpd
         seen = app.cfg.seen
         extOff = app.cfg.extOff
         pixelFont = app.cfg.pixelFont
@@ -1282,6 +1420,8 @@ func applyLevel(level, firstRun) {
     app.cfg.pixelFont = pixelFont
     app.cfg.uiScale = uiScale
     app.cfg.theme = theme
+    app.cfg.updCheck = updCheck
+    app.cfg.lastUpd = lastUpd
     app.askLevel = false
     saveSettings()
     if (!firstRun) { return }
@@ -1461,6 +1601,8 @@ func drawSettingsView(x, y, w, h) {
     _toggle("set.offers", "Пропонувати гайд", c.offers, x + 6, cy, w - 12)
     cy = cy + 34
     _toggle("set.pixelfont", "Піксельний шрифт", c.pixelFont, x + 6, cy, w - 12)
+    cy = cy + 34
+    _toggle("set.updcheck", "Перевіряти оновлення", c.updCheck, x + 6, cy, w - 12)
     cy = cy + 40
     surfaceText(S, "Тема", x + 14, cy, 14, C_SUBTEXT, true)
     cy = cy + 22
@@ -1510,6 +1652,10 @@ func settingsAction(id) {
     if (id == "set.hints") { c.hints = !c.hints }
     if (id == "set.offers") { c.offers = !c.offers }
     if (id == "set.pixelfont") { c.pixelFont = !c.pixelFont }
+    if (id == "set.updcheck") {
+        c.updCheck = !c.updCheck
+        if (!c.updCheck) { app.updInfo = null }
+    }
     if (startsWith(id, "set.theme:")) {
         c.theme = substring(id, 10, len(id) - 10)
         applyTheme(c.theme)
@@ -2510,6 +2656,7 @@ func draw() {
     drawStatus(W, H)
     if (app.tooltip != "" && app.palette == null && app.dialog == null) { uiTooltip(app.tooltip) }
     if (app.offer != null && app.tour < 0 && app.palette == null && app.dialog == null) { drawOffer(W, H) }
+    else if ((app.updInfo != null || app.updDone) && app.tour < 0 && app.palette == null && app.dialog == null && !app.askLevel) { drawUpdateBanner(W, H) }
     if (app.ctx != null) { drawCtx() }
     if (app.palette != null) { drawCmdPalette() }
     if (app.dialog != null) { drawDialog() }
@@ -2559,6 +2706,7 @@ func doAction(id) {
     else if (id == "split.close") { app.split = "" }
     else if (startsWith(id, "ext.") || startsWith(id, "extcmd:")) { extAction(id) }
     else if (startsWith(id, "git.")) { gitAction(id) }
+    else if (startsWith(id, "upd.")) { updateAction(id) }
     else if (id == "terminal") {
         app.panelOpen = true
         app.panelTab = "terminal"
@@ -3730,7 +3878,7 @@ func ideInit(dir) {
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false }
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
@@ -3760,6 +3908,7 @@ func ideInit(dir) {
     }
     // без питання про рівень - як було минулого разу (вкладки, курсори),
     // а вперше - перша програма коду
+    startUpdateCheck()
     if (!app.askLevel && !restoreSession()) {
         var codes = filesOfKind("code")
         if (len(codes) > 0) { openPath(codes[0]) }
@@ -3902,6 +4051,7 @@ func ideStep(wait) {
         if (!app.term.running) { app.git.stale = true }
     }
     if (len(app.lintJobs) > 0 && pollLint()) { dirty = true }
+    if (pollUpdate()) { dirty = true }
     // git: після збереження/команди - перечитати стан (не частіше ніж раз на 0.7 с)
     if (app.git.stale && app.git.available && timeMs() - app.git.last > 700) {
         gitRefresh(app.git, app.dir)
@@ -3924,6 +4074,7 @@ func ideStep(wait) {
     }
     if (uiAnimating) { dirty = true }
     if (dirty) { draw() }
+    if (_quitRequested) { return false }
     return surfaceIsOpen(S)
 }
 

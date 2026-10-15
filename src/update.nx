@@ -1,0 +1,29 @@
+// Перевірка оновлень Nx IDE: раз на день у фоні запускається
+//   nx update-self --check
+// (уся логіка версій і завантаження - у самій мові, NyxilumLang/SelfUpdate.cs).
+// Є нова версія - плашка «Оновити»; оновлення - nx update-self у терміналі
+// IDE, потім перезапуск. Встановлено пакетом (.deb у /opt, .pkg у /usr/local)
+// - писати туди нема прав, тож плашка веде на сторінку релізу.
+
+var RELEASES_URL = "https://github.com/Faneraiy14/NyxilumNode/releases/latest"
+
+// Вивід update-self --check -> [поточна, остання] або null (нема оновлення,
+// нема мережі, старий nx без update-self).
+func parseUpdateCheck(out) {
+    if (!contains(out, "Є оновлення")) { return null }
+    for l in split(replace(out, "\r", ""), "\n") {
+        var a = indexOf(l, "Встановлено: v")
+        var b = indexOf(l, "останній: v")
+        if (a >= 0 && b > a) {
+            var cur = trim(substring(l, a + 14, b - a - 14))
+            var last = trim(substring(l, b + 11, len(l) - b - 11))
+            return [cur, last]
+        }
+    }
+    return null
+}
+
+// nx стоїть пакетом (оновлюється новим пакетом, а не update-self).
+func installedByPackage(nxp) {
+    return startsWith(nxp, "/opt/") || startsWith(nxp, "/usr/")
+}
