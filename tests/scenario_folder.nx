@@ -1,0 +1,69 @@
+// Відкрити теку (як у VS Code): вікно вибору теки (Ctrl+O, клік по назві
+// теки в Провіднику), перехід між теками, недавні теки, чужий проєкт не
+// засмічується прикладами, наступний запуск - остання тека.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_folder.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, openFolder }
+
+func main() {
+    var base = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    makeDir(base)
+    var a = base + "/програми"
+    var proj = base + "/сайт"
+    makeDir(a)
+    makeDir(proj)
+    makeDir(proj + "/src")
+    writeFile(a + "/гра.nx", "func main() {\n    print(1)\n}\n")
+    writeFile(proj + "/index.php", "<?php echo 1;\n")
+    writeFile(proj + "/src/app.js", "console.log(1)\n")
+    ideInit(a)
+    check(app.dir == a, "відкрито теку з аргументу")
+    key("o", true, false)
+    step()
+    check(app.fpick != null && app.fpick.path == base, "Ctrl+O - вибір теки (починає з батьківської)")
+    check(indexOf(app.fpick.items, "сайт") >= 0 && indexOf(app.fpick.items, "програми") >= 0, "видно вкладені теки")
+    draw()
+    shot("f01_picker")
+    // вибрати «сайт» стрілками й зайти Enter
+    app.fpick.sel = indexOf(app.fpick.items, "сайт")
+    key("Enter", false, false)
+    step()
+    check(app.fpick.path == proj && indexOf(app.fpick.items, "src") >= 0, "Enter - зайти в теку")
+    key("Backspace", false, false)
+    step()
+    check(app.fpick.path == base, "Backspace - вище")
+    app.fpick.sel = indexOf(app.fpick.items, "сайт")
+    key("Enter", false, false)
+    step()
+    clickId("fp.open")
+    check(app.fpick == null && app.dir == proj, "«Відкрити цю теку»")
+    var names = []
+    for f in app.files { append(names, f[1]) }
+    check(indexOf(names, "index.php") >= 0 && indexOf(names, "src") >= 0, "Провідник - файли нової теки")
+    check(!fileExists(proj + "/привіт.nx") && !dirExists(proj + "/.nyx"), "чужий проєкт не засмічено (нема привіт.nx і .nyx)")
+    check(app.cfg.recent[0] == proj && app.cfg.recent[1] == a, "недавні теки")
+    check(app.term.root == proj, "термінал - у новій теці")
+    openPath(proj + "/index.php")
+    // клік по назві теки в Провіднику - теж вибір теки
+    app.side = "files"
+    draw()
+    clickId("ex.openfolder")
+    check(app.fpick != null, "клік по назві теки - вибір теки")
+    key("Escape", false, false)
+    step()
+    check(app.fpick == null && app.dir == proj, "Escape - нічого не змінилось")
+    // недавня - з палітри команд
+    doAction("folder:" + a)
+    check(app.dir == a && currentEditor() != null && contains(currentEditor().path, "гра.nx"), "недавня тека - назад, файли на місці")
+    openFolder(proj)
+    check(app.active == proj + "/index.php", "повернулись - вкладки минулого разу відновлено")
+    ideShutdown()
+    // наступний запуск без теки - остання
+    ideInit("")
+    check(app.dir == proj, "запуск без теки - остання відкрита")
+    check(!dirExists(proj + "/.nyx"), "сесія чужого проєкту - не в ньому")
+    ideShutdown()
+    print("ТЕКИ: УСЕ ГАРАЗД")
+}

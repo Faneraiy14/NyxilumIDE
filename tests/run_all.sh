@@ -37,6 +37,7 @@ run scenario_terminal.nx "$TMP/p8" "$TMP/shots"
 run scenario_ext.nx "$TMP/p9" "$TMP/shots"
 run scenario_git.nx "$TMP/p10" "$TMP/shots"
 run scenario_session.nx "$TMP/p11" "$TMP/shots"
+run scenario_folder.nx "$TMP/p12" "$TMP/shots"
 # «мавпа»: 800 випадкових дій (команди системи вимкнено)
 export NYX_IDE_NO_SHELL=1
 run scenario_update.nx "$TMP/p13" "$TMP/shots"

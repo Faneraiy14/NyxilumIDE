@@ -115,6 +115,17 @@ struct App {
     updRunning: bool
     updDone: bool
     updManual: bool
+    fpick: any
+    sideAnimW: i32
+    sideShown: bool
+}
+
+struct FolderPick {
+    path: string
+    items: array
+    sel: i32
+    scroll: i32
+    msg: string
 }
 
 var app = null
@@ -1327,8 +1338,12 @@ func commandList() {
         ["con.clear", "Очистити консоль", ""],
         ["terminal", "Термінал", "Ctrl+`"],
         ["stage.toggle", "Показати/сховати сцену", ""],
-        ["quickopen", "Відкрити файл…", "Ctrl+P"]
+        ["quickopen", "Відкрити файл…", "Ctrl+P"],
+        ["openfolder", "Відкрити теку…", "Ctrl+O"]
     ]
+    for r in app.cfg.recent {
+        if (r != app.dir) { append(list, ["folder:" + r, "Недавня тека: " + fileName(r) + "  (" + r + ")", ""]) }
+    }
     for e in app.exts {
         if (!e.enabled) { continue }
         for c in e.commands { append(list, ["extcmd:" + e.id + ":" + c[0], e.name + ": " + c[1], ""]) }
@@ -1473,6 +1488,14 @@ struct Settings {
     theme: string
     updCheck: bool
     lastUpd: i32
+    recent: array
+    sideW: i32
+    sideOverlay: bool
+    anim: bool
+    edFont: i32
+    tabSize: i32
+    autoClose: bool
+    termFont: i32
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1498,18 +1521,48 @@ func _scaleOf(m) {
     return clamp(toInt(mapGet(m, "uiScale")), 50, 300)
 }
 
+func _strList(m, k) {
+    var out = []
+    if (mapHas(m, k)) { for x in mapGet(m, k) { append(out, toString(x)) } }
+    return out
+}
+
+func _boolOf(m, k, def) {
+    if (!mapHas(m, k)) { return def }
+    return mapGet(m, k) == true
+}
+
+func _intOf(m, k, def, lo, hi) {
+    if (!mapHas(m, k)) { return def }
+    return clamp(toInt(mapGet(m, k)), lo, hi)
+}
+
 func loadSettings() {
     var path = configPath()
     if (!fileExists(path)) { return null }
     try {
         var m = fromJson(readFile(path))
-        var seen = []
-        if (mapHas(m, "seen")) { for x in mapGet(m, "seen") { append(seen, toString(x)) } }
-        var extOff = []
-        if (mapHas(m, "extOff")) { for x2 in mapGet(m, "extOff") { append(extOff, toString(x2)) } }
-        return Settings { level: toString(mapGet(m, "level")), blocks: mapGet(m, "blocks") == true,
-            lessons: mapGet(m, "lessons") == true, hints: mapGet(m, "hints") == true,
-            offers: mapGet(m, "offers") == true, seen: seen, extOff: extOff, pixelFont: mapGet(m, "pixelFont") == true, uiScale: _scaleOf(m), theme: _themeOf(m), updCheck: mapGet(m, "updCheck") != false, lastUpd: _numOf(m, "lastUpd") }
+        var c = defaultSettings(toString(mapGet(m, "level")))
+        c.blocks = _boolOf(m, "blocks", c.blocks)
+        c.lessons = _boolOf(m, "lessons", c.lessons)
+        c.hints = _boolOf(m, "hints", c.hints)
+        c.offers = _boolOf(m, "offers", c.offers)
+        c.seen = _strList(m, "seen")
+        c.extOff = _strList(m, "extOff")
+        c.pixelFont = _boolOf(m, "pixelFont", false)
+        c.uiScale = _scaleOf(m)
+        c.theme = _themeOf(m)
+        c.updCheck = _boolOf(m, "updCheck", true)
+        c.lastUpd = _numOf(m, "lastUpd")
+        c.recent = _strList(m, "recent")
+        c.sideW = _intOf(m, "sideW", 270, 160, 900)
+        c.sideOverlay = _boolOf(m, "sideOverlay", false)
+        c.anim = _boolOf(m, "anim", true)
+        c.edFont = _intOf(m, "edFont", 16, 10, 40)
+        c.tabSize = _intOf(m, "tabSize", 4, 2, 8)
+        c.autoClose = _boolOf(m, "autoClose", true)
+        c.termFont = _intOf(m, "termFont", 15, 10, 30)
+        return c
     } catch (e) { return null }
 }
 
@@ -1528,6 +1581,14 @@ func saveSettings() {
     mapSet(m, "theme", c.theme)
     mapSet(m, "updCheck", c.updCheck)
     mapSet(m, "lastUpd", c.lastUpd)
+    mapSet(m, "recent", c.recent)
+    mapSet(m, "sideW", c.sideW)
+    mapSet(m, "sideOverlay", c.sideOverlay)
+    mapSet(m, "anim", c.anim)
+    mapSet(m, "edFont", c.edFont)
+    mapSet(m, "tabSize", c.tabSize)
+    mapSet(m, "autoClose", c.autoClose)
+    mapSet(m, "termFont", c.termFont)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1536,8 +1597,11 @@ func saveSettings() {
 }
 
 func defaultSettings(level) {
+    if (level != "beginner" && level != "middle" && level != "advanced") { level = "beginner" }
     var adv = level == "advanced"
-    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false, uiScale: 100, theme: "dark", updCheck: true, lastUpd: 0 }
+    return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false,
+        uiScale: 100, theme: "dark", updCheck: true, lastUpd: 0, recent: [], sideW: 270, sideOverlay: false, anim: true,
+        edFont: 16, tabSize: 4, autoClose: true, termFont: 15 }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1546,30 +1610,13 @@ var LEVELS = [["beginner", "Новачок", "Ніколи не програму
 
 // Вибір рівня (перший запуск або в Налаштуваннях): виставляє налаштування.
 func applyLevel(level, firstRun) {
-    var seen = []
-    var extOff = []
-    var pixelFont = false
-    var uiScale = 100
-    var theme = "dark"
-    var updCheck = true
-    var lastUpd = 0
-    if (app.cfg != null) {
-        theme = app.cfg.theme
-        updCheck = app.cfg.updCheck
-        lastUpd = app.cfg.lastUpd
-        seen = app.cfg.seen
-        extOff = app.cfg.extOff
-        pixelFont = app.cfg.pixelFont
-        uiScale = app.cfg.uiScale
-    }
-    app.cfg = defaultSettings(level)
-    app.cfg.seen = seen
-    app.cfg.extOff = extOff
-    app.cfg.pixelFont = pixelFont
-    app.cfg.uiScale = uiScale
-    app.cfg.theme = theme
-    app.cfg.updCheck = updCheck
-    app.cfg.lastUpd = lastUpd
+    // рівень міняє лише те, що від нього залежить (решта налаштувань - як були)
+    var d = defaultSettings(level)
+    if (app.cfg == null) { app.cfg = d }
+    app.cfg.level = d.level
+    app.cfg.blocks = d.blocks
+    app.cfg.lessons = d.lessons
+    app.cfg.hints = d.hints
     app.askLevel = false
     saveSettings()
     if (!firstRun) { return }
@@ -2212,7 +2259,14 @@ func _exIcon(id, x, y, tip) {
 func drawExplorer(x, y, w, h) {
     // заголовок: назва теки + іконки (новий файл, нова тека, оновити, згорнути все)
     var title = toUpper(fileName(app.dir))
-    surfaceText(S, uiFit(title, w - 120, 13), x + 14, y + 4, 13, C_SUBTEXT, true)
+    var ttw = textWidth(uiFit(title, w - 130, 13), 13, true)
+    if (uiHover(x + 8, y, ttw + 30, 24)) {
+        surfaceRoundRect(S, x + 8, y, ttw + 30, 24, 4, C_SURFACE)
+        app.tooltip = "Відкрити іншу теку (Ctrl+O)"
+    }
+    surfaceText(S, uiFit(title, w - 130, 13), x + 14, y + 4, 13, C_SUBTEXT, true)
+    iconChevron(x + 16 + ttw, y + 2, 18, true, C_DIM)
+    uiRegion("ex.openfolder", x + 8, y, ttw + 30, 24)
     var ix = x + w - 26
     _exIcon("ex.collapse", ix, y, "Згорнути всі теки")
     _exIcon("ex.refresh", ix - 24, y, "Оновити")
@@ -2813,6 +2867,7 @@ func draw() {
     if (app.ctx != null) { drawCtx() }
     if (app.palette != null) { drawCmdPalette() }
     if (app.dialog != null) { drawDialog() }
+    if (app.fpick != null) { drawFolderPick() }
     if (app.askLevel) { drawLevelAsk(W, H) }
     if (app.tour >= 0) { drawTour(app.tour) }
     if (app.demo != null) { drawDemoCursor() }
@@ -2914,6 +2969,10 @@ func doAction(id) {
     }
     else if (id == "cmd.open") { openPalette("commands") }
     else if (id == "quickopen") { openPalette("files") }
+    else if (id == "openfolder") { openFolderPicker() }
+    else if (startsWith(id, "folder:")) { openFolder(substring(id, 7, len(id) - 7)) }
+    else if (startsWith(id, "fp.")) { fpickAction(id) }
+    else if (id == "ex.openfolder") { openFolderPicker() }
     else if (startsWith(id, "pal:")) {
         var it = app.palette.items[toInt(substring(id, 4, len(id) - 4))]
         app.palette = null
@@ -2985,6 +3044,20 @@ func onMouseDown(e) {
         return
     }
     if (app.dialog != null && !startsWith(id, "dialog.")) { return }
+    if (app.fpick != null) {
+        if (startsWith(id, "fp.") && id != "fp.bg" && id != "fp.box" && id != "fp.list") {
+            // клік по теці - вибрати; другий клік по вибраній - зайти
+            if (startsWith(id, "fp.item:")) {
+                var fi = toInt(substring(id, 8, len(id) - 8))
+                if (fi != app.fpick.sel) {
+                    app.fpick.sel = fi
+                    return
+                }
+            }
+            uiPressedId = id
+        } else if (id == "fp.bg") { fpickAction("fp.cancel") }
+        return
+    }
     if (app.palette != null) {
         if (startsWith(id, "pal:")) { uiPressedId = id }
         else if (id != "pal.box") { app.palette = null }
@@ -3281,6 +3354,14 @@ func onKey(e) {
         dialogKey(e)
         return
     }
+    if (app.fpick != null) {
+        fpickKey(e)
+        return
+    }
+    if (e.ctrl && k == "o" && !e.shift) {
+        openFolderPicker()
+        return
+    }
     if (app.palette != null) {
         paletteKey(e)
         return
@@ -3436,6 +3517,7 @@ func onKey(e) {
 }
 
 func onText(e) {
+    if (app.fpick != null) { return }
     if (app.dialog != null) {
         if (dialogIsConfirm(app.dialog)) { return }
         var newKind = app.dialog.action == "newcode" || app.dialog.action == "newblocks"
@@ -4030,20 +4112,36 @@ func drawDemoCursor() {
 
 // ---------- старт і цикл ----------
 
-func ideInit(dir) {
-    if (!dirExists(dir)) { makeDir(dir) }
-    app = App { mode: "code", dir: dir, files: [], expanded: newMap(), editors: newMap(), current: "",
+func newApp(dir) {
+    return App { mode: "code", dir: dir, files: [], expanded: newMap(), editors: newMap(), current: "",
         blocks: newMap(), currentB: "", tabs: [], active: "", side: "files", sideW: 270, sideScroll: 0,
         panelOpen: true, panelTab: "console", problems: [], palette: null, searchText: "", searchResults: [],
         genMap: [], guideTab: "lessons", guideLesson: -1, done: [], demo: null, cursorX: 0, cursorY: 0,
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
-        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false, updManual: false }
+        statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false, updManual: false,
+        fpick: null, sideAnimW: 0, sideShown: true }
+}
+
+// Тека за замовчуванням: остання відкрита, інакше ~/NyxПрограми.
+func defaultProgramsDir() { return joinPath(homeDir(), "NyxПрограми") }
+
+func startDir(cfg) {
+    if (cfg != null && len(cfg.recent) > 0 && dirExists(cfg.recent[0])) { return cfg.recent[0] }
+    return defaultProgramsDir()
+}
+
+// dir "" - остання тека, з якою працювали.
+func ideInit(dir) {
+    var cfg = loadSettings()
+    if (dir == "") { dir = startDir(cfg) }
+    if (!dirExists(dir)) { makeDir(dir) }
+    app = newApp(dir)
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
     uiInit(s)
-    app.cfg = loadSettings()
+    app.cfg = cfg
     if (app.cfg == null) {
         // перший запуск узагалі: спершу питання "хто ти в програмуванні"
         app.cfg = defaultSettings("beginner")
@@ -4052,9 +4150,21 @@ func ideInit(dir) {
     reloadExtensions()
     surfaceScale(app.cfg.uiScale / 100)
     applyTheme(app.cfg.theme)
+    _loadFolder()
+    startUpdateCheck()
+    draw()
+    return s
+}
+
+// Тека щойно стала поточною: файли, прогрес уроків, вкладки минулого разу.
+func _loadFolder() {
+    var dir = app.dir
+    app.sideW = app.cfg.sideW
+    app.term.root = dir
     refreshFiles()
-    // порожня тека - приклад першої програми
-    if (len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {
+    // порожня тека програм (не чужий проєкт) - приклад першої програми
+    var own = dir == defaultProgramsDir() || fileExists(joinPath(joinPath(dir, ".nyx"), "уроки.json")) || len(listDir(dir)) == 0
+    if (own && len(filesOfKind("code")) == 0 && len(filesOfKind("blocks")) == 0) {
         var example = joinPath(ideHome(), "examples/привіт.nx")
         var text = "func main() {\n    print(\"Привіт, світе!\")\n}\n"
         if (fileExists(example)) { text = readFile(example) }
@@ -4063,24 +4173,274 @@ func ideInit(dir) {
     }
     var progressPath = joinPath(joinPath(dir, ".nyx"), "уроки.json")
     if (fileExists(progressPath)) { app.done = loadProgress(progressPath) }
-    else {
+    else if (own) {
         if (!dirExists(joinPath(dir, ".nyx"))) { makeDir(joinPath(dir, ".nyx")) }
         saveProgress(progressPath, [])
     }
+    rememberRecent(dir)
+    surfaceTitle(S, "Nyx IDE — " + fileName(dir))
     // без питання про рівень - як було минулого разу (вкладки, курсори),
     // а вперше - перша програма коду
-    startUpdateCheck()
     if (!app.askLevel && !restoreSession()) {
         var codes = filesOfKind("code")
         if (len(codes) > 0) { openPath(codes[0]) }
     }
-    draw()
-    return s
+}
+
+// Недавні теки (перша - поточна), до 10.
+func rememberRecent(dir) {
+    if (app.cfg == null || app.askLevel) { return }
+    var list = [dir]
+    for r in app.cfg.recent {
+        if (r != dir && len(list) < 10) { append(list, r) }
+    }
+    app.cfg.recent = list
+    saveSettings()
+}
+
+// Перейти в іншу теку (як File > Open Folder у VS Code): усе збережено,
+// програма й термінал зупинені, потім усе - для нової теки.
+func openFolder(dir) {
+    dir = replace(dir, "\\", "/")
+    while (len(dir) > 1 && endsWith(dir, "/") && !endsWith(dir, ":/")) { dir = substring(dir, 0, len(dir) - 1) }
+    if (!dirExists(dir)) {
+        setStatus("Нема такої теки: " + dir)
+        return
+    }
+    if (dir == app.dir) {
+        app.fpick = null
+        return
+    }
+    saveAll()
+    saveSession()
+    if (app.con.running) { conStop(app.con) }
+    termClose(app.term)
+    var old = app
+    app = newApp(dir)
+    app.cfg = old.cfg
+    app.exts = old.exts
+    app.updInfo = old.updInfo
+    app.updDone = old.updDone
+    app.side = old.side
+    if (app.side == "") { app.side = "files" }
+    _mtimes = newMap()
+    _loadFolder()
+    app.git.stale = true
+    setStatus("Відкрито теку " + dir)
+}
+
+// ---------- вибір теки ----------
+
+func openFolderPicker() {
+    var start = app.dir
+    var parts = split(start, "/")
+    if (len(parts) > 1) { start = substring(app.dir, 0, len(app.dir) - len(parts[len(parts) - 1]) - 1) }
+    if (start == "") { start = "/" }
+    app.fpick = FolderPick { path: start, items: [], sel: 0, scroll: 0, msg: "" }
+    _fpList()
+    app.focus = "fpick"
+}
+
+func _fpList() {
+    var fp = app.fpick
+    var items = []
+    try {
+        for n in listDir(fp.path) {
+            // приховані (.git, .cache) - не показуємо
+            if (startsWith(n, ".")) { continue }
+            if (dirExists(joinPath(fp.path, n))) { append(items, n) }
+        }
+        fp.msg = ""
+    } catch (e) { fp.msg = "Немає доступу до цієї теки" }
+    fp.items = sort(items)
+    fp.sel = 0
+    fp.scroll = 0
+}
+
+func _fpUp() {
+    var fp = app.fpick
+    var p = fp.path
+    if (p == "/" || (len(p) <= 3 && contains(p, ":"))) { return }
+    var parts = split(p, "/")
+    var up = substring(p, 0, len(p) - len(parts[len(parts) - 1]) - 1)
+    if (up == "") { up = "/" }
+    if (len(up) == 2 && up[1] == ":") { up = up + "/" }
+    fp.path = up
+    _fpList()
+}
+
+func _fpEnter(name) {
+    var fp = app.fpick
+    fp.path = joinPath(fp.path, name)
+    _fpList()
+}
+
+func fpickAction(id) {
+    var fp = app.fpick
+    if (id == "fp.cancel") {
+        app.fpick = null
+        app.focus = "editor"
+    } else if (id == "fp.up") { _fpUp() }
+    else if (id == "fp.home") {
+        fp.path = replace(homeDir(), "\\", "/")
+        _fpList()
+    } else if (id == "fp.open") {
+        var p = fp.path
+        app.fpick = null
+        app.focus = "editor"
+        openFolder(p)
+    } else if (id == "fp.system") { _fpSystemDialog() }
+    else if (startsWith(id, "fp.item:")) {
+        var i = toInt(substring(id, 8, len(id) - 8))
+        if (i >= 0 && i < len(fp.items)) { _fpEnter(fp.items[i]) }
+    } else if (startsWith(id, "fp.recent:")) {
+        var r = substring(id, 10, len(id) - 10)
+        app.fpick = null
+        app.focus = "editor"
+        openFolder(r)
+    }
+}
+
+// Системне вікно вибору теки (zenity / kdialog / Windows), якщо є.
+func _fpSystemDialog() {
+    var fp = app.fpick
+    var r = null
+    try {
+        if (termIsWindows()) {
+            var ps = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.SelectedPath = '" + replace(fp.path, "/", "\\") + "'; if ($d.ShowDialog() -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; $d.SelectedPath }"
+            r = procRun("powershell", ["-NoProfile", "-STA", "-Command", ps])
+        } else if (_have("zenity")) {
+            r = procRun("zenity", ["--file-selection", "--directory", "--title=Відкрити теку", "--filename=" + fp.path + "/"])
+        } else if (_have("kdialog")) {
+            r = procRun("kdialog", ["--getexistingdirectory", fp.path])
+        } else {
+            fp.msg = "Системного вікна нема (zenity/kdialog) - вибери теку тут"
+            return
+        }
+    } catch (e) {
+        fp.msg = "Системне вікно не відкрилось - вибери теку тут"
+        return
+    }
+    var chosen = trim(r.stdout)
+    if (toInt(r.exitCode) == 0 && chosen != "" && dirExists(chosen)) {
+        app.fpick = null
+        app.focus = "editor"
+        openFolder(chosen)
+    }
+}
+
+func _have(cmd) {
+    try {
+        var r = procRun("/bin/sh", ["-c", "command -v " + cmd])
+        return toInt(r.exitCode) == 0
+    } catch (e) { return false }
+}
+
+func fpickKey(e) {
+    var fp = app.fpick
+    var k = e.key
+    if (k == "Escape") { fpickAction("fp.cancel") }
+    else if (k == "Up") { fp.sel = max(0, fp.sel - 1) }
+    else if (k == "Down") { fp.sel = min(max(0, len(fp.items) - 1), fp.sel + 1) }
+    else if (k == "Backspace" || k == "Left") { _fpUp() }
+    else if (k == "Enter" && e.ctrl) { fpickAction("fp.open") }
+    else if ((k == "Enter" || k == "Right") && len(fp.items) > 0) { _fpEnter(fp.items[fp.sel]) }
+    else if (k == "Enter") { fpickAction("fp.open") }
+}
+
+func drawFolderPick() {
+    var fp = app.fpick
+    var W = surfaceWidth(S)
+    var H = surfaceHeight(S)
+    surfaceRect(S, 0, 0, W, H, 0x99000000)
+    uiRegion("fp.bg", 0, 0, W, H)
+    var w = min(640, W - 40)
+    var h = min(560, H - 40)
+    var x = toInt((W - w) / 2)
+    var y = toInt((H - h) / 2)
+    surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
+    uiRegion("fp.box", x, y, w, h)
+    surfaceText(S, "Відкрити теку", x + 20, y + 16, 20, C_TEXT, true)
+    // шлях
+    var cy = y + 52
+    uiButton("fp.up", "← Вище", x + 20, cy, 90, 30, "normal")
+    uiButton("fp.home", "Домівка", x + 116, cy, 90, 30, "normal")
+    surfaceRoundRect(S, x + 214, cy, w - 234, 30, 6, C_BG)
+    surfaceText(S, uiFit(fp.path, w - 254, 14), x + 224, cy + 7, 14, C_TEXT)
+    cy = cy + 40
+    // недавні
+    var recent = []
+    for r in app.cfg.recent { if (r != app.dir && dirExists(r) && len(recent) < 4) { append(recent, r) } }
+    var listH = h - (cy - y) - 70
+    if (len(recent) > 0) {
+        surfaceText(S, "Недавні:", x + 20, cy + 4, 13, C_DIM)
+        var rx = x + 84
+        for r in recent {
+            var lbl = fileName(r)
+            var bw = min(textWidth(lbl, 14) + 20, 150)
+            if (rx + bw > x + w - 20) { break }
+            uiButton("fp.recent:" + r, uiFit(lbl, bw - 16, 14), rx, cy, bw, 26, "flat")
+            rx = rx + bw + 6
+        }
+        cy = cy + 34
+        listH = listH - 34
+    }
+    // теки
+    surfaceRoundRect(S, x + 20, cy, w - 40, listH, 6, C_BG)
+    uiRegion("fp.list", x + 20, cy, w - 40, listH)
+    surfaceClip(S, x + 20, cy, w - 40, listH)
+    var rowH = 26
+    var vis = max(1, toInt(listH / rowH))
+    if (fp.sel < fp.scroll) { fp.scroll = fp.sel }
+    if (fp.sel >= fp.scroll + vis) { fp.scroll = fp.sel - vis + 1 }
+    fp.scroll = clamp(fp.scroll, 0, max(0, len(fp.items) - vis))
+    var i = fp.scroll
+    var ry = cy
+    while (i < len(fp.items) && ry < cy + listH) {
+        if (i == fp.sel) { surfaceRect(S, x + 20, ry, w - 40, rowH, C_SURFACE) }
+        else if (uiHover(x + 20, ry, w - 40, rowH)) { surfaceRect(S, x + 20, ry, w - 40, rowH, C_PANEL2) }
+        iconFileKind("dir", x + 30, ry + 4, 18, C_SUBTEXT)
+        surfaceText(S, uiFit(fp.items[i], w - 100, 15), x + 56, ry + 4, 15, C_TEXT)
+        uiRegion("fp.item:" + toString(i), x + 20, ry, w - 40, rowH)
+        ry = ry + rowH
+        i = i + 1
+    }
+    if (len(fp.items) == 0) {
+        var note = "Тут нема вкладених тек"
+        if (fp.msg != "") { note = fp.msg }
+        surfaceText(S, note, x + 36, cy + 12, 14, C_DIM)
+    }
+    surfaceUnclip(S)
+    // кнопки
+    var by = y + h - 50
+    if (fp.msg != "" && len(fp.items) > 0) { surfaceText(S, uiFit(fp.msg, w - 40, 13), x + 20, by - 18, 13, C_YELLOW) }
+    uiButton("fp.system", "Системне вікно…", x + 20, by, 160, 34, "flat")
+    uiButton("fp.cancel", "Скасувати", x + w - 310, by, 110, 34, "normal")
+    uiButton("fp.open", "Відкрити цю теку", x + w - 190, by, 170, 34, "primary")
 }
 
 // ---------- сесія: що було відкрито (<тека>/.nyx/сесія.json) ----------
 
-func sessionPath() { return joinPath(joinPath(app.dir, ".nyx"), "сесія.json") }
+// Своя тека програм (є .nyx) - сесія там; чужий проєкт не засмічуємо:
+// ~/.nyx-ide/сесії/<назва>-<хеш шляху>.json.
+func sessionPath() {
+    var own = joinPath(app.dir, ".nyx")
+    if (dirExists(own)) { return joinPath(own, "сесія.json") }
+    var cfgDir = configPath()
+    var parts = split(replace(cfgDir, "\\", "/"), "/")
+    cfgDir = substring(cfgDir, 0, len(cfgDir) - len(parts[len(parts) - 1]) - 1)
+    return joinPath(joinPath(cfgDir, "сесії"), fileName(app.dir) + "-" + _pathHash(app.dir) + ".json")
+}
+
+func _pathHash(s) {
+    var h = 5381
+    var i = 0
+    while (i < len(s)) {
+        h = (h * 33 + charCode(s[i])) % 2147483647
+        i = i + 1
+    }
+    return toString(h)
+}
 
 func _rel(p) {
     if (startsWith(p, app.dir + "/")) { return substring(p, len(app.dir) + 1, len(p) - len(app.dir) - 1) }
@@ -4116,8 +4476,11 @@ func saveSession() {
     }
     mapSet(m, "cursors", pos)
     try {
-        if (!dirExists(joinPath(app.dir, ".nyx"))) { makeDir(joinPath(app.dir, ".nyx")) }
-        writeFile(sessionPath(), toJson(m))
+        var sp = sessionPath()
+        var sparts = split(sp, "/")
+        var sdir = substring(sp, 0, len(sp) - len(sparts[len(sparts) - 1]) - 1)
+        if (!dirExists(sdir)) { makeDir(sdir) }
+        writeFile(sp, toJson(m))
     } catch (e) { }
 }
 
@@ -4164,7 +4527,6 @@ func _restoreSession() {
         }
         if (mapHas(m, "side")) { app.side = toString(mapGet(m, "side")) }
         if (app.side == "learn" && !app.cfg.lessons) { app.side = "files" }
-        if (mapHas(m, "sideW")) { app.sideW = toInt(mapGet(m, "sideW")) }
         if (mapHas(m, "panelOpen")) { app.panelOpen = mapGet(m, "panelOpen") == true }
         if (mapHas(m, "panelTab")) { app.panelTab = toString(mapGet(m, "panelTab")) }
         if (mapHas(m, "consoleH")) { app.consoleH = toInt(mapGet(m, "consoleH")) }
@@ -4305,8 +4667,14 @@ func ideShutdown() {
 
 func main() {
     var args = scriptArgs()
-    var dir = joinPath(homeDir(), "NyxПрограми")
+    // без теки - та, з якою працювали минулого разу
+    var dir = ""
     if (len(args) > 0) { dir = args[0] }
+    // відносна тека (nx-ide . у терміналі) - від поточної
+    if (dir != "" && !startsWith(dir, "/") && !(len(dir) > 1 && dir[1] == ":")) {
+        dir = replace(joinPath(replace(osCwd(), "\\", "/"), dir), "/./", "/")
+        if (endsWith(dir, "/.")) { dir = substring(dir, 0, len(dir) - 2) }
+    }
     ideInit(dir)
     var running = true
     while (running) {
