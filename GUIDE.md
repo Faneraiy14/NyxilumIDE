@@ -37,8 +37,11 @@ extensions), a card appears at the bottom right: **"Show how this works?"** with
 
 - **Left bar** - Explorer, Search in files, Version history, Git, Learning,
   Extensions; at the bottom - **Settings** (gear). Clicking an icon opens the
-  side panel, clicking again (or the ‹ arrow, or Ctrl+B) collapses it.
-- **Explorer** - folders and files (folders expand). Header icons: new file,
+  side drawer (it slides in), clicking again (or the ‹ arrow, or Ctrl+B) hides it.
+  Drag its right edge to change the width - it is remembered. "Drawer over the
+  code" in Settings makes it float over the code and hide on a click outside.
+- **Explorer** - folders and files (folders expand). At the top - the folder name
+  (click - **open another folder**, like in VS Code; or Ctrl+O) and icons: new file,
   new folder, refresh, collapse all. A new file's name is typed right in the tree:
   no extension - an `.nx` program, `.nxb` - a block program, anything else (`.md`,
   `.txt`...) - plain text. Right click a file or folder - New file, New folder,
@@ -57,20 +60,33 @@ extensions), a card appears at the bottom right: **"Show how this works?"** with
 It can be turned off in Settings ("Check for updates"). If installed from a `.deb`
 package, the card leads to the release page.
 
+**Any folder:** Ctrl+O (or a click on the folder name in the Explorer, or the command
+palette) - a folder picker: arrows, Enter - go in, Backspace - up, recent folders,
+"System dialog". The IDE switches folders without a restart. Without an argument the
+IDE opens the folder you worked in last time; `nx-ide .` - the terminal's current
+folder. The IDE adds nothing to someone else's project (examples and `.nyx` - only in
+its own or an empty folder).
+
 The IDE remembers what was open in each folder: tabs, cursor positions, the split
-editor, the side panel (`.nyx/сесія.json`) - everything is back after a restart.
+editor, the side panel (`.nyx/сесія.json`, for other projects - `~/.nyx-ide/сесії/`) -
+everything is back after a restart.
 
 ## Settings
 
-The gear at the bottom of the left bar: level (beginner / intermediate / advanced),
-switches **Blocks mode**, **Lessons and learning**, **Error hints**, **Offer the guide**,
-a "Show offers again" button and the tour. Settings are shared by all folders
-(`~/.nyx-ide/налаштування.json`).
+The gear at the bottom of the left bar opens the settings page (like VS Code, but
+short): sections on the left, at the top - **search across all of them** (just start
+typing; Esc - clear, again - close). Every setting has an explanation in plain words.
+Settings are shared by all folders (`~/.nyx-ide/налаштування.json`).
 
-Also there: **Theme** (dark, light, high contrast), **Pixel font** (by default -
-antialiased Noto Sans for the interface and Noto Sans Mono for code), **UI scale**
-100-200% (for large screens; the code font separately - Ctrl+= / Ctrl+-), **Check for
-updates**, the IDE version and **Check now**.
+| Section | What's there |
+|---|---|
+| Main (Основне) | level (beginner / intermediate / advanced), blocks mode, programs folder |
+| Look (Вигляд) | theme (dark, light, high contrast), UI scale 100-200%, pixel font, animations |
+| Editor (Редактор) | code font size, Tab indent (2/4/8), auto-close brackets and quotes |
+| Terminal (Термінал) | terminal font size |
+| Drawer (Шторка) | drawer over the code, width |
+| Learning (Навчання) | lessons, error hints, guide offers, the tour |
+| Updates (Оновлення) | check for updates, version, "Check now" |
 
 ## Learning
 
@@ -188,8 +204,12 @@ The **Version history** icon (a clock) in the left bar - a little "git" inside t
 | Ctrl+= / Ctrl+- / Ctrl+wheel | bigger / smaller font |
 | Ctrl+N | new program |
 | Ctrl+F | find in file (Enter - next, Shift+Enter - previous, Esc - close) |
+| Ctrl+H | replace in file: Tab - between "Find" and "Replace with", Enter - replace one and go to the next, Ctrl+Enter or "Усі" - replace all (Ctrl+Z - undo) |
 | Ctrl+Shift+P / Ctrl+P | command palette / open a file |
-| Ctrl+Shift+F | search in all files |
+| Ctrl+Shift+F / Ctrl+Shift+H | search / replace in all files (asks first, then "Undo replace" is available) |
+| Alt+↑ / Alt+↓ | move the line (or the selected ones) up / down; with Shift - copy |
+| Ctrl+Shift+[ / Ctrl+Shift+] | fold / unfold a `{ }` block; or the arrow next to the line number (shown on hover); the palette has "Fold all" / "Unfold all" |
+| Ctrl+O | open another folder |
 | Ctrl+B / Ctrl+J | side / bottom panel |
 | Ctrl+W / Ctrl+Tab | close tab / next tab |
 | Drag a tab | reorder tabs |
@@ -200,16 +220,19 @@ The **Version history** icon (a clock) in the left bar - a little "git" inside t
 | F2 | rename everywhere (a local variable - in its function, a function - in all files; Ctrl+Z - undo) |
 
 With the cursor on a name, its other occurrences in the code are highlighted (not in
-"..." strings or comments).
+"..." strings or comments). With the cursor next to a bracket, its pair is highlighted.
+Typing `(`, `[`, `{` or `"` with a selection wraps the selection.
 
 While you type a name, **suggestions** appear: functions, variables, language words.
 ↑/↓ - choose, Enter or Tab - insert (a built-in function - with parentheses right
 away), Esc - hide.
 
-**Terminal** (Ctrl+` or the "Terminal" tab) - system commands in the project folder:
-`nx program.nx`, `git status`, `ls`/`dir`... `cd` and `clear` work as usual, ↑/↓ -
-previous commands, Ctrl+C - stop, Escape - back to the editor. While a command runs,
-what you type goes to it (like in the console).
+**Terminal** (Ctrl+` or the "Terminal" tab) - a real terminal, like in VS Code: bash
+(Windows - cmd) in the project folder. Everything works: colors, `vim`, `nano`, `top`,
+`less`, bash's own Tab and ↑/↓, Ctrl+C - stop. Selecting with the mouse copies; the
+wheel scrolls back. `nx program.nx` runs a program. Escape at the prompt - back to the
+editor (in a full-screen program Escape goes to it). Files changed from the terminal
+(git, anylint --fix...) are reloaded in the editor automatically.
 
 If a program asks for input (`readLine`), type the answer at the bottom, in the console
 field, and press Enter. If a program fails, the line with the error is highlighted in
@@ -220,10 +243,13 @@ red and the cursor jumps to it. Under the error in the console there is a yellow
 
 The **Git** icon (a branch) in the left bar - real git, like in VS Code: the current
 branch (and `↑/↓` - how many commits are not pushed / not pulled yet), **Commit**
-(the description - in a dialog; all changes are committed), **Pull**/**Push** (in the
-terminal - you see the server's answer there), the list of changed files (U - new,
+(the description - in a dialog), **Pull**/**Push** (in the terminal - you see the
+server's answer there and can type a password), the list of changed files (U - new,
 M - modified, D - deleted; the same letters and colors are in the Explorer). Click a
-file - what changed since the last commit. Branches: click the branch name - the
+file - what changed since the last commit. Next to a file: **+** - stage it (then only
+staged files are committed; nothing staged - everything), **−** - unstage, **↶** -
+discard the file's changes (with confirmation). The **History** («Історія») tab -
+commits: click a commit - its files, click a file - what changed in it. Branches: click the branch name - the
 list, switch, "+ New branch". The branch is also shown at the left of the status bar.
 Not a repository yet - the "Create repository" button. The service folder `.nyx/`
 never goes into git.

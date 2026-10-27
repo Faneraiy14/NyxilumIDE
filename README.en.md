@@ -6,10 +6,10 @@ A programming environment for [NyxilumLang](https://github.com/Faneraiy14/Nyxilu
 **in NyxilumLang itself**. For anyone starting to program, and for those who already can.
 
 - **Blocks** - like Scratch: a hero on the stage, drawing, lists, your own blocks; code ↔ blocks.
-- **Code** - like VS Code: completion, F12/F2, split editor, debugger, a stage for games.
+- **Code** - like VS Code: any folder (Ctrl+O), completion, F12/F2, replace, code folding, split editor, debugger, a stage for games.
 - **Learning** - lessons with auto-checks and "Show me", examples, error hints in plain language.
-- **Tools** - terminal, git, version history, extensions (Anylint; your own are written in NyxilumLang).
-- **Look** - themes, antialiased fonts, UI scale; updates with a button inside the IDE.
+- **Tools** - a real terminal (bash/cmd, colors, vim), git (pick files to commit, history), version history, extensions (Anylint; your own are written in NyxilumLang).
+- **Look** - themes, antialiased fonts, UI scale, a side drawer; settings with sections and search; updates with a button inside the IDE.
 
 The interface and lessons are in Ukrainian. Details - [GUIDE.md](GUIDE.md).
 
@@ -76,8 +76,9 @@ If you write in the terminal - the language on its own, like Node.js: [NyxilumNo
 
 - **macOS** - not yet: the IDE window uses X11, which a Mac doesn't have without XQuartz.
 - **"Open as blocks"** handles only simple programs: `struct`, `return`, `try/catch`, arrays with `[0]`, `for x in list`, a loop counter used in the body can't be built from blocks (the IDE explains what and on which line).
-- **The terminal** isn't a full one: every command is a separate process. Full-screen interactive programs (`vim`, `top`) and colored output don't work.
-- **Git** - the basics (changes, commit everything, branches, push/pull). No picking files to commit, conflict resolution or commit history; a password for push can't be typed in the terminal (a saved login is needed - an SSH key or a token).
+- **The terminal** on Windows (cmd via ConPTY) is less tested than on Linux.
+- **Git** - changes, picking files to commit, discarding a file's changes, commit history, branches, push/pull. Resolving conflicts - in the terminal or another tool for now.
+- **The editor** - a single cursor (no multi-cursor), no minimap.
 - **The interface and lessons** are Ukrainian only.
 - **The Windows version** hasn't been tested much on real computers yet.
 
@@ -87,7 +88,8 @@ If you write in the terminal - the language on its own, like Node.js: [NyxilumNo
 - English interface and lessons
 - more lessons and examples (games, animations, sound)
 - shared projects: share a program with a link
-- a full terminal and picking files to commit in Git
+- resolving Git conflicts inside the IDE
+- multiple cursors in the editor
 - extensions with their own panels and hints
 - a better "code → blocks" converter
 
@@ -117,6 +119,14 @@ NX_IDE_HOME=/path/to/NyxilumIDE nx ide
 | Tab / Shift+Tab | indent / unindent |
 | Ctrl+= / Ctrl+- / Ctrl+wheel | bigger / smaller font |
 | Ctrl+N | new program |
+| Ctrl+O | open another folder |
+| Ctrl+P / Ctrl+Shift+P | quick-open a file / all commands |
+| Ctrl+F / Ctrl+H | find / replace in the file (Tab - between fields, Ctrl+Enter - replace all) |
+| Ctrl+Shift+F / Ctrl+Shift+H | find / replace in all files |
+| Alt+↑ / Alt+↓ | move the line up / down (with Shift - copy) |
+| Ctrl+Shift+[ / Ctrl+Shift+] | fold / unfold a `{ }` block (or the arrow next to the line number) |
+| Ctrl+B / Ctrl+J / Ctrl+` | side drawer / bottom panel / terminal |
+| F12 / F2 | go to definition / rename everywhere |
 
 The full list - in [GUIDE.md](GUIDE.md).
 
