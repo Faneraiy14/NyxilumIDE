@@ -116,8 +116,7 @@ struct App {
     updDone: bool
     updManual: bool
     fpick: any
-    sideAnimW: i32
-    sideShown: bool
+    sideLast: string
 }
 
 struct FolderPick {
@@ -2792,6 +2791,37 @@ func uiFontSans() {
     if (app.cfg != null && app.cfg.pixelFont) { surfaceFont("pixel") } else { surfaceFont("sans") }
 }
 
+var SIDE_CUR = 0
+var HEADLESS = osEnv("NX_HEADLESS") == "1"
+var SIDE_FULL = 0
+
+// Шторка шириною SIDE_CUR (поки виїжджає - видно її праву частину).
+func _drawSideSlide(bodyY, bodyH) {
+    if (SIDE_CUR <= 0 || app.sideLast == "") { return }
+    var view = app.side
+    if (view == "") { view = app.sideLast }
+    var saved = app.side
+    app.side = view
+    surfaceClip(S, ACT_W, bodyY, SIDE_CUR, bodyH)
+    drawSidebar(ACT_W - (SIDE_FULL - SIDE_CUR), bodyY, SIDE_FULL, bodyH)
+    surfaceUnclip(S)
+    app.side = saved
+    if (app.cfg.sideOverlay) {
+        // тінь праворуч від шторки над кодом
+        var k = 0
+        while (k < 8) {
+            surfaceRect(S, ACT_W + SIDE_CUR + k, bodyY, 1, bodyH, (0x30 - k * 6) * 16777216)
+            k = k + 1
+        }
+    }
+    if (app.side != "") {
+        uiRegion("sash.side", ACT_W + SIDE_CUR - 3, bodyY, 7, bodyH)
+        if (uiHover(ACT_W + SIDE_CUR - 3, bodyY, 7, bodyH) || app.drag == "side") {
+            surfaceRect(S, ACT_W + SIDE_CUR - 1, bodyY, 2, bodyH, C_ACCENT)
+        }
+    }
+}
+
 func draw() {
     var W = surfaceWidth(S)
     var H = surfaceHeight(S)
@@ -2805,11 +2835,23 @@ func draw() {
     var bodyH = H - TITLE_H - STATUS_H
     drawActivityBar(bodyY, bodyH)
 
+    // шторка: плавно виїжджає/ховається (t 0..1); "поверх коду" - не
+    // стискає редактор, малюється в кінці над ним
+    if (app.side != "") { app.sideLast = app.side }
+    var fullW = clamp(app.sideW, 160, max(160, W - ACT_W - 300))
+    var open = 0
+    if (app.side != "") { open = 1 }
+    var t = open
+    // без вікна (тести) - без анімації: клік одразу туди, де шторка буде
+    if (app.cfg.anim && !HEADLESS) { t = uiAnim("sidebar", open, 170) }
+    // повільніше на початку й у кінці (як висувна шухляда)
+    var ease = t * t * (3 - 2 * t)
+    SIDE_CUR = toInt(fullW * ease)
+    SIDE_FULL = fullW
     var sideW = 0
-    if (app.side != "") {
-        sideW = clamp(app.sideW, 200, max(200, W - ACT_W - 400))
-        drawSidebar(ACT_W, bodyY, sideW, bodyH)
-        uiRegion("sash.side", ACT_W + sideW - 3, bodyY, 7, bodyH)
+    if (!app.cfg.sideOverlay) {
+        sideW = SIDE_CUR
+        _drawSideSlide(bodyY, bodyH)
     }
     var ex = ACT_W + sideW
     var ew = W - ex
@@ -2861,6 +2903,7 @@ func draw() {
         uiRegion("split", ex, bodyY + bodyH - panelH - 3, ew + stageW, 7)
     }
     drawStatus(W, H)
+    if (app.cfg.sideOverlay) { _drawSideSlide(bodyY, bodyH) }
     if (app.tooltip != "" && app.palette == null && app.dialog == null) { uiTooltip(app.tooltip) }
     if (app.offer != null && app.tour < 0 && app.palette == null && app.dialog == null) { drawOffer(W, H) }
     else if ((app.updInfo != null || app.updDone) && app.tour < 0 && app.palette == null && app.dialog == null && !app.askLevel) { drawUpdateBanner(W, H) }
@@ -3058,6 +3101,8 @@ func onMouseDown(e) {
         } else if (id == "fp.bg") { fpickAction("fp.cancel") }
         return
     }
+    // шторка поверх коду: клік повз неї - сховати (і клік іде далі, як завжди)
+    if (app.cfg.sideOverlay && app.side != "" && e.x > ACT_W + SIDE_CUR + 3 && app.palette == null) { app.side = "" }
     if (app.palette != null) {
         if (startsWith(id, "pal:")) { uiPressedId = id }
         else if (id != "pal.box") { app.palette = null }
@@ -3211,6 +3256,11 @@ func onMouseUp(e) {
     else if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
     uiPressedId = ""
     if (app.drag == "term") { termMouseUp(app.term) }
+    // ширину шторки - запам'ятати для всіх тек
+    if (app.drag == "side" && app.cfg.sideW != app.sideW) {
+        app.cfg.sideW = app.sideW
+        saveSettings()
+    }
     app.drag = ""
     app.dragSrc = ""
     app.dragActive = false
@@ -3299,7 +3349,7 @@ func onMouseMove(e) {
         app.consoleH = surfaceHeight(S) - STATUS_H - e.y
     }
     if (app.drag == "side") {
-        app.sideW = clamp(e.x - ACT_W, 200, max(200, surfaceWidth(S) - ACT_W - 400))
+        app.sideW = clamp(e.x - ACT_W, 160, max(160, surfaceWidth(S) - ACT_W - 300))
     }
 }
 
@@ -4121,7 +4171,7 @@ func newApp(dir) {
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
         statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false, updManual: false,
-        fpick: null, sideAnimW: 0, sideShown: true }
+        fpick: null, sideLast: "" }
 }
 
 // Тека за замовчуванням: остання відкрита, інакше ~/NyxПрограми.
@@ -4132,11 +4182,14 @@ func startDir(cfg) {
     return defaultProgramsDir()
 }
 
+var FIRST_DIR = ""
+
 // dir "" - остання тека, з якою працювали.
 func ideInit(dir) {
     var cfg = loadSettings()
     if (dir == "") { dir = startDir(cfg) }
     if (!dirExists(dir)) { makeDir(dir) }
+    FIRST_DIR = dir
     app = newApp(dir)
 
     var s = surfaceOpen("Nyx IDE", 1280, 800)
@@ -4209,6 +4262,11 @@ func openFolder(dir) {
     }
     if (dir == app.dir) {
         app.fpick = null
+        return
+    }
+    // випадкові тести (NYX_IDE_NO_SHELL) - лише в межах своєї тимчасової теки
+    if (osEnv("NYX_IDE_NO_SHELL") == "1" && !startsWith(dir, FIRST_DIR)) {
+        setStatus("(інші теки вимкнено: NYX_IDE_NO_SHELL)")
         return
     }
     saveAll()
@@ -4304,6 +4362,10 @@ func fpickAction(id) {
 // Системне вікно вибору теки (zenity / kdialog / Windows), якщо є.
 func _fpSystemDialog() {
     var fp = app.fpick
+    if (HEADLESS || osEnv("NYX_IDE_NO_SHELL") == "1") {
+        fp.msg = "Системне вікно тут недоступне"
+        return
+    }
     var r = null
     try {
         if (termIsWindows()) {
