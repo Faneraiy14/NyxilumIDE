@@ -528,6 +528,7 @@ func syncDebugView() {
         app.lastPauses = con.pauses
         if (app.active == app.dbgPath && app.mode == "code") {
             var e2 = currentEditor()
+            edReveal(e2, con.pauseLine)
             var rows = max(1, toInt(e2.h / e2.lineH))
             if (con.pauseLine < e2.top || con.pauseLine >= e2.top + rows - 1) { e2.top = max(0, con.pauseLine - toInt(rows / 3)) }
         }
@@ -1333,6 +1334,10 @@ func commandList() {
         ["act:settings", "Налаштування", ""],
         ["find", "Знайти у файлі", "Ctrl+F"],
         ["replace", "Замінити у файлі", "Ctrl+H"],
+        ["fold", "Згорнути блок", "Ctrl+Shift+["],
+        ["unfold", "Розгорнути блок", "Ctrl+Shift+]"],
+        ["foldall", "Згорнути все", ""],
+        ["unfoldall", "Розгорнути все", ""],
         ["gotodef", "Перейти до визначення", "F12"],
         ["split.toggle", "Розділити редактор / прибрати розділення", "Ctrl+\\"],
         ["renamesym", "Перейменувати всюди", "F2"],
@@ -3247,6 +3252,16 @@ func doAction(id) {
         var ed3 = currentEditor()
         if (ed3 != null && app.mode == "code") { ed3.findOpen = true }
     }
+    else if (id == "fold" || id == "unfold" || id == "foldall" || id == "unfoldall") {
+        var edz = currentEditor()
+        if (edz != null && app.mode == "code") {
+            if (id == "fold") { edFoldAtCursor(edz) }
+            else if (id == "unfold") { edUnfoldAtCursor(edz) }
+            else if (id == "foldall") { edFoldAll(edz) }
+            else { edUnfoldAll(edz) }
+            edEnsureVisible(edz)
+        }
+    }
     else if (id == "replace") {
         var edr = currentEditor()
         if (edr != null && app.mode == "code") {
@@ -3431,6 +3446,11 @@ func onMouseDown(e) {
             }
             app.drag = "editor"
         }
+        return
+    }
+    if (startsWith(id, "fold:") && ed != null) {
+        app.focus = "editor"
+        edToggleFold(ed, toInt(substring(id, 5, len(id) - 5)))
         return
     }
     if (id == "gutter" && ed != null) {

@@ -9,6 +9,7 @@ import "ui.nx"
 import "highlight.nx"
 import "builtins.nx"
 import "symbols.nx"
+import "icons.nx"
 
 struct Editor {
     lines: array
@@ -53,6 +54,12 @@ struct Editor {
     replOpen: bool
     replText: string
     findField: i32
+    folds: array
+    foldR: array
+    foldKey: string
+    foldN: i32
+    editLine: i32
+    editSeq: i32
 }
 
 func newEditor(text, path) {
@@ -60,7 +67,8 @@ func newEditor(text, path) {
         path: path, dirty: false, undo: [], redo: [], lastKind: "", lastTime: 0,
         hlSrc: [], hlIn: [], hlTok: [], hlOut: [], errLine: -1, fontSize: 16,
         x: 0, y: 0, w: 100, h: 100, charW: 8, lineH: 20, gutterW: 40,
-        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1, marks: [], hlOk: 0, acNames: null, acTime: 0, replOpen: false, replText: "", findField: 0 }
+        acOpen: false, acItems: [], acSel: 0, findOpen: false, findText: "", plain: false, breaks: [], dbgLine: -1, marks: [], hlOk: 0, acNames: null, acTime: 0, replOpen: false, replText: "", findField: 0,
+        folds: [], foldR: [], foldKey: "", foldN: 0, editLine: 0, editSeq: 0 }
     edSetText(ed, text)
     return ed
 }
@@ -102,6 +110,7 @@ func edSetText(ed, text) {
     ed.ay = -1
     ed.top = 0
     ed.left = 0
+    ed.folds = []
 }
 
 func edText(ed) { return join(ed.lines, "\n") }
@@ -180,8 +189,11 @@ func edSnapshot(ed) { return [slice(ed.lines, 0), ed.cx, ed.cy] }
 // Перед кожною зміною. Підряд набрані символи одного виду (kind) за
 // секунду - одна дія скасування, як у звичайних редакторах.
 func edBeginEdit(ed, kind) {
+    _foldSync(ed)
     var first = ed.cy
     if (ed.ay >= 0) { first = min(first, ed.ay) }
+    ed.editLine = first
+    ed.editSeq = ed.editSeq + 1
     // Backspace на початку рядка міняє й попередній
     _hlFrom(ed, first - 1)
     var now = timeMs()
@@ -198,6 +210,7 @@ func edBeginEdit(ed, kind) {
 
 func _restore(ed, snap) {
     ed.hlOk = 0
+    ed.folds = []
     ed.lines = slice(snap[0], 0)
     ed.cy = min(snap[2], len(ed.lines) - 1)
     ed.cx = min(snap[1], len(ed.lines[ed.cy]))
@@ -466,6 +479,14 @@ func edMatchBracket(ed) {
     if (col < 0) { return null }
     _warmTokens(ed, ed.cy)
     if (!_isCodeAt(ed, ed.cy, col)) { return null }
+    var m = _scanMatch(ed, ed.cy, col)
+    if (m == null) { return null }
+    return [[ed.cy, col], m]
+}
+
+// Пара для дужки на (y, col): [y, x] або null.
+func _scanMatch(ed, y0, col) {
+    var ch = ed.lines[y0][col]
     var dir = 1
     var open = ch
     var close = ""
@@ -477,7 +498,7 @@ func edMatchBracket(ed) {
         open = _OPEN_BR[indexOf(_CLOSE_BR, ch)]
     }
     var depth = 0
-    var y = ed.cy
+    var y = y0
     var x = col
     var limit = 3000
     while (y >= 0 && y < len(ed.lines) && limit > 0) {
@@ -487,7 +508,7 @@ func edMatchBracket(ed) {
             var c2 = ln[x]
             if ((c2 == open || c2 == close) && _isCodeAt(ed, y, x)) {
                 if (c2 == ch) { depth = depth + 1 } else { depth = depth - 1 }
-                if (depth == 0) { return [[ed.cy, col], [y, x]] }
+                if (depth == 0) { return [y, x] }
             }
             x = x + dir
         }
@@ -498,6 +519,206 @@ func edMatchBracket(ed) {
         }
     }
     return null
+}
+
+// ---------- згортання коду ----------
+
+var FOLD_COL = 16
+//
+// ed.folds - згорнуті рядки з { у кінці (сортовані); рядки між ними й
+// парною } сховані, сама } видно (як у VS Code). ed.foldR - [[початок,
+// кінець]] для поточного тексту. Після правки, що змінила кількість
+// рядків, згортки нижче місця правки зсуваються (_foldSync).
+
+// Рядок з парною } для { у кінці рядка li (після неї - лише пробіли чи
+// коментар), або -1: нема такої { або ховати нічого.
+func edFoldEnd(ed, li) {
+    if (ed.plain || li < 0 || li >= len(ed.lines)) { return -1 }
+    var line = ed.lines[li]
+    _warmTokens(ed, li)
+    var i = len(line) - 1
+    while (i >= 0 && (line[i] == " " || !_isCodeAt(ed, li, i))) { i = i - 1 }
+    if (i < 0 || line[i] != "{") { return -1 }
+    var m = _scanMatch(ed, li, i)
+    if (m == null || m[0] < li + 2) { return -1 }
+    return m[0]
+}
+
+func edIsFolded(ed, li) { return indexOf(ed.folds, li) >= 0 }
+
+// Згортка, у якій схований рядок li (зовнішня), або null.
+func _hiddenIn(ed, li) {
+    for r in ed.foldR { if (li > r[0] && li < r[1]) { return r } }
+    return null
+}
+
+func _nextVis(ed, li) {
+    if (len(ed.foldR) > 0) { for r in ed.foldR { if (r[0] == li) { return r[1] } } }
+    return li + 1
+}
+
+func _prevVis(ed, li) {
+    var p = li - 1
+    if (len(ed.foldR) > 0) {
+        var h = _hiddenIn(ed, p)
+        if (h != null) { return h[0] }
+    }
+    return p
+}
+
+// Скільки видимих рядків від a до b (a <= b, обидва видимі).
+func _rowsBetween(ed, a, b) {
+    if (len(ed.foldR) == 0) { return b - a }
+    var n = 0
+    var li = a
+    while (li < b) {
+        li = _nextVis(ed, li)
+        n = n + 1
+    }
+    return n
+}
+
+// Рядок тексту на row-му видимому рядку від верху.
+func _rowLine(ed, row) {
+    if (len(ed.foldR) == 0) { return clamp(ed.top + row, 0, len(ed.lines) - 1) }
+    var li = ed.top
+    var r = 0
+    while (r < row && _nextVis(ed, li) < len(ed.lines)) {
+        li = _nextVis(ed, li)
+        r = r + 1
+    }
+    return li
+}
+
+func _foldSync(ed) {
+    if (len(ed.folds) == 0) {
+        ed.foldR = []
+        return
+    }
+    var n = len(ed.lines)
+    if (n != ed.foldN) {
+        var d = n - ed.foldN
+        var moved = []
+        for f in ed.folds {
+            var f2 = f
+            if (f > ed.editLine) {
+                f2 = f + d
+                if (f2 <= ed.editLine) { f2 = -1 }
+            } else if (f == ed.editLine && d > 0 && f + d < n && edFoldEnd(ed, f) < 0 && edFoldEnd(ed, f + d) >= 0) {
+                // Enter на початку рядка згортки - вона їде вниз разом з ним
+                f2 = f + d
+            }
+            if (f2 >= 0 && f2 < n && indexOf(moved, f2) < 0) { append(moved, f2) }
+        }
+        ed.folds = sort(moved)
+        ed.foldN = n
+    }
+    var key = toString(ed.editSeq) + ":" + join(ed.folds, ",")
+    if (key != ed.foldKey) {
+        var keep = []
+        var rs = []
+        for f in ed.folds {
+            var e = edFoldEnd(ed, f)
+            if (e >= 0) {
+                append(keep, f)
+                append(rs, [f, e])
+            }
+        }
+        ed.folds = keep
+        ed.foldR = rs
+        ed.foldKey = toString(ed.editSeq) + ":" + join(ed.folds, ",")
+    }
+    // курсор не ховається: його згортки розгортаються
+    var h = _hiddenIn(ed, ed.cy)
+    while (h != null) {
+        removeAt(ed.folds, indexOf(ed.folds, h[0]))
+        _foldSync(ed)
+        h = _hiddenIn(ed, ed.cy)
+    }
+    var ht = _hiddenIn(ed, ed.top)
+    if (ht != null) { ed.top = ht[0] }
+}
+
+// Згорнути / розгорнути блок, що починається на рядку li.
+func edToggleFold(ed, li) {
+    var i = indexOf(ed.folds, li)
+    if (i >= 0) {
+        removeAt(ed.folds, i)
+        _foldSync(ed)
+        return true
+    }
+    var e = edFoldEnd(ed, li)
+    if (e < 0) { return false }
+    if (len(ed.folds) == 0) { ed.foldN = len(ed.lines) }
+    append(ed.folds, li)
+    ed.folds = sort(ed.folds)
+    // курсор усередині - на початок блоку
+    if (ed.cy > li && ed.cy < e) {
+        ed.cy = li
+        ed.cx = min(ed.cx, len(ed.lines[li]))
+        ed.ay = -1
+    }
+    _foldSync(ed)
+    return true
+}
+
+// Ctrl+Shift+[ - згорнути найближчий блок, у якому курсор.
+func edFoldAtCursor(ed) {
+    var li = ed.cy
+    var limit = 3000
+    while (li >= 0 && limit > 0) {
+        if (!edIsFolded(ed, li)) {
+            var e = edFoldEnd(ed, li)
+            if (e >= 0 && (li == ed.cy || e >= ed.cy)) { return edToggleFold(ed, li) }
+        }
+        li = li - 1
+        limit = limit - 1
+    }
+    return false
+}
+
+// Ctrl+Shift+] - розгорнути блок на рядку курсора.
+func edUnfoldAtCursor(ed) {
+    if (edIsFolded(ed, ed.cy)) { return edToggleFold(ed, ed.cy) }
+    return false
+}
+
+func edFoldAll(ed) {
+    var li = 0
+    var fs = []
+    while (li < len(ed.lines)) {
+        if (edFoldEnd(ed, li) >= 0) { append(fs, li) }
+        li = li + 1
+    }
+    if (len(fs) == 0) { return }
+    // курсор у блоці - на початок зовнішнього (інакше той розгорнувся б)
+    for f in fs {
+        if (ed.cy > f && ed.cy < edFoldEnd(ed, f)) {
+            ed.cy = f
+            ed.cx = min(ed.cx, len(ed.lines[f]))
+            break
+        }
+    }
+    ed.foldN = len(ed.lines)
+    ed.folds = fs
+    _foldSync(ed)
+    ed.ay = -1
+}
+
+// Показати рядок li (розгорнути згортки, що його ховають).
+func edReveal(ed, li) {
+    _foldSync(ed)
+    var h = _hiddenIn(ed, li)
+    while (h != null) {
+        removeAt(ed.folds, indexOf(ed.folds, h[0]))
+        _foldSync(ed)
+        h = _hiddenIn(ed, li)
+    }
+}
+
+func edUnfoldAll(ed) {
+    ed.folds = []
+    _foldSync(ed)
 }
 
 // ---------- заміна (Ctrl+H) ----------
@@ -635,6 +856,7 @@ func _beginMove(ed, shift) {
 }
 
 func edMoveKey(ed, key, ctrl, shift) {
+    _foldSync(ed)
     var hadSel = edHasSel(ed)
     var r = edSelRange(ed)
     _beginMove(ed, shift)
@@ -646,7 +868,7 @@ func edMoveKey(ed, key, ctrl, shift) {
             ed.cx = ed.cx - 1
             if (_isLowSur(ed.lines[ed.cy], ed.cx) && _isHighSur(ed.lines[ed.cy], ed.cx - 1)) { ed.cx = ed.cx - 1 }
         }
-        else if (ed.cy > 0) { ed.cy = ed.cy - 1  ed.cx = len(ed.lines[ed.cy]) }
+        else if (ed.cy > 0) { ed.cy = _prevVis(ed, ed.cy)  ed.cx = len(ed.lines[ed.cy]) }
     } else if (key == "Right") {
         if (hadSel && !shift) { ed.cy = r[2]  ed.cx = r[3] }
         else if (ctrl) { edWordRight(ed) }
@@ -654,16 +876,24 @@ func edMoveKey(ed, key, ctrl, shift) {
             ed.cx = ed.cx + 1
             if (_isLowSur(ed.lines[ed.cy], ed.cx)) { ed.cx = ed.cx + 1 }
         }
-        else if (ed.cy < len(ed.lines) - 1) { ed.cy = ed.cy + 1  ed.cx = 0 }
+        else if (ed.cy < len(ed.lines) - 1) { ed.cy = min(_nextVis(ed, ed.cy), len(ed.lines) - 1)  ed.cx = 0 }
     } else if (key == "Up" || key == "Down" || key == "PageUp" || key == "PageDown") {
         var step = 1
         if (key == "PageUp" || key == "PageDown") { step = _visibleRows(ed) - 1 }
         if (key == "Up" || key == "PageUp") { step = -step }
         if (ctrl && (key == "Up" || key == "Down")) {
-            ed.top = clamp(ed.top + step, 0, max(0, len(ed.lines) - 1))
+            edScroll(ed, step)
             return
         }
-        ed.cy = clamp(ed.cy + step, 0, len(ed.lines) - 1)
+        if (len(ed.foldR) == 0) { ed.cy = clamp(ed.cy + step, 0, len(ed.lines) - 1) }
+        else {
+            var k = 0
+            while (k < abs(step)) {
+                if (step > 0 && _nextVis(ed, ed.cy) < len(ed.lines)) { ed.cy = _nextVis(ed, ed.cy) }
+                if (step < 0 && ed.cy > 0) { ed.cy = _prevVis(ed, ed.cy) }
+                k = k + 1
+            }
+        }
         ed.cx = min(ed.wantCol, len(ed.lines[ed.cy]))
         keepWant = true
     } else if (key == "Home") {
@@ -680,16 +910,35 @@ func edMoveKey(ed, key, ctrl, shift) {
 }
 
 func edEnsureVisible(ed) {
+    _foldSync(ed)
     var rows = _visibleRows(ed)
     if (ed.cy < ed.top) { ed.top = ed.cy }
-    if (ed.cy > ed.top + rows - 2) { ed.top = max(0, ed.cy - rows + 2) }
+    if (len(ed.foldR) == 0) {
+        if (ed.cy > ed.top + rows - 2) { ed.top = max(0, ed.cy - rows + 2) }
+    } else {
+        var between = _rowsBetween(ed, ed.top, ed.cy)
+        while (between > rows - 2) {
+            ed.top = _nextVis(ed, ed.top)
+            between = between - 1
+        }
+    }
     var cols = max(4, toInt((ed.w - ed.gutterW - 12) / ed.charW))
     if (ed.cx < ed.left) { ed.left = max(0, ed.cx - 4) }
     if (ed.cx > ed.left + cols - 2) { ed.left = ed.cx - cols + 2 }
 }
 
 func edScroll(ed, lines) {
-    ed.top = clamp(ed.top + lines, 0, max(0, len(ed.lines) - 3))
+    _foldSync(ed)
+    if (len(ed.foldR) == 0) {
+        ed.top = clamp(ed.top + lines, 0, max(0, len(ed.lines) - 3))
+        return
+    }
+    var k = 0
+    while (k < abs(lines)) {
+        if (lines > 0 && _nextVis(ed, ed.top) < len(ed.lines) - 2) { ed.top = _nextVis(ed, ed.top) }
+        if (lines < 0 && ed.top > 0) { ed.top = _prevVis(ed, ed.top) }
+        k = k + 1
+    }
 }
 
 // Ім'я під курсором: [початок, кінець, слово] або null.
@@ -715,6 +964,7 @@ func edJumpTo(ed, line, col) {
 // Нові рядки однією дією скасування (перейменування тощо).
 func edReplaceLines(ed, lines) {
     edBeginEdit(ed, "other")
+    if (len(lines) != len(ed.lines)) { ed.folds = [] }
     ed.hlOk = 0
     ed.lines = lines
     ed.cy = min(ed.cy, len(ed.lines) - 1)
@@ -727,12 +977,24 @@ func edGoToLine(ed, line) {
     ed.cx = leadingSpaces(ed.lines[ed.cy])
     ed.ay = -1
     var rows = _visibleRows(ed)
-    if (ed.cy < ed.top || ed.cy >= ed.top + rows - 1) { ed.top = max(0, ed.cy - toInt(rows / 3)) }
+    _foldSync(ed)
+    if (len(ed.foldR) == 0) {
+        if (ed.cy < ed.top || ed.cy >= ed.top + rows - 1) { ed.top = max(0, ed.cy - toInt(rows / 3)) }
+    } else if (ed.cy < ed.top || _rowsBetween(ed, ed.top, ed.cy) >= rows - 1) {
+        ed.top = ed.cy
+        var k = 0
+        while (k < toInt(rows / 3) && ed.top > 0) {
+            ed.top = _prevVis(ed, ed.top)
+            k = k + 1
+        }
+    }
 }
 
 // Точка зупинки на рядку під мишею (клік по жолобу).
 func edToggleBreakAt(ed, my) {
-    var row = toInt(floor((my - ed.y - 4) / ed.lineH)) + ed.top
+    var vr = toInt(floor((my - ed.y - 4) / ed.lineH))
+    if (vr < 0) { return }
+    var row = _rowLine(ed, vr)
     if (row < 0 || row >= len(ed.lines)) { return }
     var i = indexOf(ed.breaks, row)
     if (i >= 0) { removeAt(ed.breaks, i) } else { append(ed.breaks, row) }
@@ -747,8 +1009,7 @@ func edBreakLines(ed) {
 
 // Пікселі -> позиція в тексті.
 func edPosAt(ed, mx, my) {
-    var row = toInt(floor((my - ed.y - 4) / ed.lineH)) + ed.top
-    row = clamp(row, 0, len(ed.lines) - 1)
+    var row = _rowLine(ed, max(0, toInt(floor((my - ed.y - 4) / ed.lineH))))
     var col = toInt(round((mx - ed.x - ed.gutterW) / ed.charW)) + ed.left
     col = clamp(col, 0, len(ed.lines[row]))
     return [row, col]
@@ -1044,6 +1305,8 @@ func edKey(ed, e) {
         if (k == "=" || k == "+") { edZoom(ed, 1)  return true }
         if (k == "-") { edZoom(ed, -1)  return true }
     }
+    if (e.ctrl && e.shift && (k == "[" || k == "{" || k == "х" || k == "Х")) { edFoldAtCursor(ed)  edEnsureVisible(ed)  return true }
+    if (e.ctrl && e.shift && (k == "]" || k == "}" || k == "ї" || k == "Ї")) { edUnfoldAtCursor(ed)  return true }
     if (e.alt && !e.ctrl && (k == "Up" || k == "Down")) {
         var md = 1
         if (k == "Up") { md = -1 }
@@ -1144,7 +1407,8 @@ func edDraw(ed, x, y, w, h, focused) {
     ed.charW = textWidth("M", fs)
     ed.lineH = textHeight(fs) + 4
     var digits = len(toString(len(ed.lines)))
-    ed.gutterW = (max(digits, 2) + 2) * ed.charW + 8
+    // + колонка стрілок згортання між номерами й текстом
+    ed.gutterW = (max(digits, 2) + 2) * ed.charW + 8 + FOLD_COL
     var cw = ed.charW
     var lh = ed.lineH
     var textX = x + ed.gutterW
@@ -1154,7 +1418,9 @@ func edDraw(ed, x, y, w, h, focused) {
     surfaceClip(S, x, y, w, h)
 
     var rows = toInt(h / lh) + 1
+    _foldSync(ed)
     var last = min(len(ed.lines) - 1, ed.top + rows)
+    if (len(ed.foldR) > 0) { last = _rowLine(ed, rows) }
     _warmTokens(ed, last)
     var sel = [-1, 0, -1, 0]
     if (edHasSel(ed)) { sel = edSelRange(ed) }
@@ -1179,10 +1445,17 @@ func edDraw(ed, x, y, w, h, focused) {
     var br = null
     if (focused && !edHasSel(ed)) { br = edMatchBracket(ed) }
 
+    // стрілки згортання - коли миша над жолобом (згорнуті - завжди)
+    var gutHover = uiHover(x, y, ed.gutterW, h)
+    var drawn = []
+    var foldHits = []
+    var curRow = -1
     var row = 0
+    var li = ed.top
     while (row < rows) {
-        var li = ed.top + row
         if (li >= len(ed.lines)) { break }
+        append(drawn, li)
+        if (li == ed.cy) { curRow = row }
         var ly = y + 4 + row * lh
         var line = ed.lines[li]
         if (li == ed.dbgLine) { surfaceRect(S, textX - 4, ly - 2, w, lh, C_DBGLINE) }
@@ -1260,15 +1533,31 @@ func edDraw(ed, x, y, w, h, focused) {
             var ay = ly + toInt(lh / 2) - 1
             surfacePolygon(S, [x + 3, ay - 6, x + 11, ay - 6, x + 17, ay, x + 11, ay + 6, x + 3, ay + 6], C_YELLOW)
         }
-        surfaceText(S, num, x + ed.gutterW - 14 - len(num) * cw, ly, fs, numColor)
+        surfaceText(S, num, x + ed.gutterW - 14 - FOLD_COL - len(num) * cw, ly, fs, numColor)
+        var folded = edIsFolded(ed, li)
+        if (folded || (gutHover && edFoldEnd(ed, li) >= 0)) {
+            var fx0 = x + ed.gutterW - FOLD_COL - 12
+            iconChevron(fx0, ly + toInt(lh / 2) - 9, 18, !folded, C_SUBTEXT)
+            append(foldHits, ["fold:" + toString(li), fx0, ly - 2, FOLD_COL, lh])
+        }
+        if (folded) {
+            // «...» після рядка - клік розгортає
+            var ex2 = textX + (len(line) + 1 - ed.left) * cw
+            if (ex2 >= textX) {
+                surfaceRoundRect(S, ex2, ly, 3 * cw, lh - 4, 4, C_SURFACE2)
+                surfaceText(S, "...", ex2, ly - 3, fs, C_SUBTEXT)
+                append(foldHits, ["fold:" + toString(li), ex2, ly, 3 * cw, lh - 4])
+            }
+        }
         row = row + 1
+        li = _nextVis(ed, li)
     }
 
     // курсор
-    if (focused && ed.cy >= ed.top && ed.cy < ed.top + rows) {
+    if (focused && curRow >= 0) {
         var cxp = textX + (ed.cx - ed.left) * cw
         if (cxp >= textX - 1) {
-            surfaceRect(S, cxp, y + 4 + (ed.cy - ed.top) * lh - 1, 2, lh - 2, C_ACCENT)
+            surfaceRect(S, cxp, y + 4 + curRow * lh - 1, 2, lh - 2, C_ACCENT)
         }
     }
 
@@ -1276,8 +1565,8 @@ func edDraw(ed, x, y, w, h, focused) {
     if (ed.findOpen && ed.findText != "") {
         var lq = toLower(ed.findText)
         var r2 = 0
-        while (r2 < rows && ed.top + r2 < len(ed.lines)) {
-            var ln = toLower(ed.lines[ed.top + r2])
+        while (r2 < len(drawn)) {
+            var ln = toLower(ed.lines[drawn[r2]])
             var pos = 0
             while (true) {
                 var at = indexOf(cut(ln, pos, len(ln)), lq)
@@ -1301,6 +1590,8 @@ func edDraw(ed, x, y, w, h, focused) {
     uiRegion("editor", x, y, w, h)
     // жолоб з номерами рядків - клік ставить/знімає точку зупинки
     uiRegion("gutter", x, y, ed.gutterW - 6, h)
+    // стрілки й «...» згортання - поверх редактора й жолоба
+    for fh in foldHits { uiRegion(fh[0], fh[1], fh[2], fh[3], fh[4]) }
 
     // рядок пошуку
     if (ed.findOpen) {
@@ -1327,14 +1618,14 @@ func edDraw(ed, x, y, w, h, focused) {
     }
 
     // список автодоповнення під курсором
-    if (ed.acOpen && focused && ed.cy >= ed.top && ed.cy < ed.top + rows) {
+    if (ed.acOpen && focused && curRow >= 0) {
         var wb = _wordBefore(ed)
         var px = textX + (wb[0] - ed.left) * cw - 4
-        var py = y + 4 + (ed.cy - ed.top + 1) * lh
+        var py = y + 4 + (curRow + 1) * lh
         var pw = 0
         for it in ed.acItems { pw = max(pw, textWidth(it[0], fs) + textWidth(it[1], 12) + 40) }
         var ph = len(ed.acItems) * (lh + 2) + 8
-        if (py + ph > y + h) { py = y + 4 + (ed.cy - ed.top) * lh - ph }
+        if (py + ph > y + h) { py = y + 4 + curRow * lh - ph }
         px = min(px, x + w - pw - 8)
         surfaceRoundRect(S, px + 3, py + 3, pw, ph, 8, 0x66000000)
         surfaceRoundRect(S, px, py, pw, ph, 8, C_SURFACE)

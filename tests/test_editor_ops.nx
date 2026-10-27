@@ -83,5 +83,35 @@ func main() {
     ed3.cy = 1
     ed3.cx = 11
     check(edMatchBracket(ed3) == null, "дужка в лапках - без пари")
+    // згортання
+    var src = "func a() {\n    var x = 1\n    if (x) {\n        print(x)\n    }\n}\nfunc b() {\n    print(\"{\")\n}\nvar z = 0"
+    var ed4 = newEditor(src, "d.nx")
+    ed4.h = 400
+    ed4.lineH = 20
+    check(edFoldEnd(ed4, 0) == 5 && edFoldEnd(ed4, 2) == 4 && edFoldEnd(ed4, 1) == -1, "де можна згорнути: { у кінці рядка до парної }")
+    check(edFoldEnd(ed4, 6) == 8, "{ у лапках не плутає")
+    ed4.cy = 3
+    k(ed4, "[", true, true, false)
+    check(edIsFolded(ed4, 2) && ed4.cy == 2, "Ctrl+Shift+[ згортає блок з курсором, курсор - на його початок")
+    k(ed4, "Down", false, false, false)
+    check(ed4.cy == 4, "↓ перескакує сховані рядки (на })")
+    k(ed4, "Up", false, false, false)
+    check(ed4.cy == 2, "↑ - назад на згорнутий рядок")
+    edToggleFold(ed4, 0)
+    k(ed4, "Down", false, false, false)
+    check(ed4.cy == 5, "згортка вкладена в іншу - ↓ одразу на }")
+    // правка вище згортки - згортка їде разом з текстом
+    ed4.cy = 0
+    ed4.cx = 0
+    k(ed4, "Enter", false, false, false)
+    k(ed4, "Down", false, false, false)
+    check(edIsFolded(ed4, 1) && ed4.cy == 6, "новий рядок вище - згортка зсунулась")
+    // перехід у схований рядок - розгортає
+    edGoToLine(ed4, 4)
+    check(!edIsFolded(ed4, 1) && !edIsFolded(ed4, 3), "перехід на схований рядок розгортає")
+    edFoldAll(ed4)
+    check(len(ed4.folds) == 3, "«Згорнути все»")
+    edUnfoldAll(ed4)
+    check(len(ed4.folds) == 0, "«Розгорнути все»")
     print("РЕДАКТОР: УСЕ ГАРАЗД")
 }
