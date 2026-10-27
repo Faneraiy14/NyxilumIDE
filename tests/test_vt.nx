@@ -1,0 +1,82 @@
+// Емулятор терміналу (vt.nx) без вікна: текст, кольори, курсор, стирання,
+// альтернативний екран, прокрутка назад, позначки шелу, клавіші.
+// NX_HEADLESS=1 nx tests/test_vt.nx
+import "helpers.nx"
+import "../src/vt.nx"
+
+var E = fromCharCode(27)
+
+func main() {
+    var v = newVt(20, 5)
+    vtFeed(v, "привіт\r\nсвіт")
+    check(vtRowText(v.lines[0]) == "привіт" && vtRowText(v.lines[1]) == "світ", "текст і перехід рядка")
+    check(v.cx == 4 && v.cy == 1, "курсор після тексту")
+    // кольори: ls --color
+    vtFeed(v, "\r\n" + E + "[01;34mboot" + E + "[0m ok")
+    var st = v.styles[v.lines[2].st[0]]
+    check(st.fg == 4 && st.bold, "SGR: синій жирний")
+    check(v.styles[v.lines[2].st[5]].fg == -1, "SGR 0 - скидання")
+    vtFeed(v, E + "[38;5;196mA" + E + "[38;2;1;2;3mB" + E + "[m")
+    check(v.styles[v.lines[2].st[7]].fg == 196, "256 кольорів")
+    check(v.styles[v.lines[2].st[8]].fg == 0x1000000 + 0x010203, "RGB")
+    // рух курсора й стирання
+    vtFeed(v, E + "[1;3H" + E + "[K")
+    check(vtRowText(v.lines[0]) == "пр", "CUP + EL")
+    vtFeed(v, E + "[2J" + E + "[H")
+    check(vtRowText(v.lines[2]) == "" && v.cx == 0 && v.cy == 0, "ED 2 + домівка")
+    // перенос довгого рядка й прокрутка назад
+    var v2 = newVt(10, 3)
+    vtFeed(v2, "0123456789abc\r\nx\r\ny\r\nz")
+    check(vtRowText(v2.lines[2]) == "z" && len(v2.sb) == 2, "прокрутка: старі рядки - у прокрутку назад")
+    check(vtRowText(v2.sb[0]) == "0123456789" && vtRowText(v2.sb[1]) == "abc", "автоперенос на 10-й колонці")
+    check(contains(vtText(v2), "abc\nx\ny\nz"), "vtText - увесь текст")
+    // альтернативний екран (vim, top) - після виходу старий екран на місці
+    vtFeed(v2, E + "[?1049h" + E + "[2J" + E + "[HVIM")
+    check(v2.altOn && vtRowText(v2.lines[0]) == "VIM", "альтернативний екран")
+    vtFeed(v2, E + "[?1049l")
+    check(!v2.altOn && vtRowText(v2.lines[2]) == "z", "повернення зі збереженим екраном")
+    // область прокрутки (як у less/vim)
+    var v3 = newVt(5, 4)
+    vtFeed(v3, "a\r\nb\r\nc\r\nd" + E + "[2;3r" + E + "[3;1H\n")
+    check(vtRowText(v3.lines[0]) == "a" && vtRowText(v3.lines[1]) == "c" && vtRowText(v3.lines[2]) == "" && vtRowText(v3.lines[3]) == "d", "DECSTBM: прокрутка лише в області")
+    // вставка/видалення символів
+    var v4 = newVt(10, 2)
+    vtFeed(v4, "abcdef" + E + "[1;2H" + E + "[2P")
+    check(vtRowText(v4.lines[0]) == "adef", "DCH")
+    vtFeed(v4, E + "[2@")
+    check(vtRowText(v4.lines[0]) == "a  def", "ICH")
+    // запит позиції курсора - відповідь програмі
+    vtFeed(v4, E + "[6n")
+    check(v4.reply == E + "[1;2R", "DSR 6n")
+    // позначки шелу: команда завершилась з кодом, тека
+    vtFeed(v4, E + "]633;D;1" + fromCharCode(7) + E + "]7;file://host/home/%D0%BF%D1%80" + E + "\\")
+    check(len(v4.events) == 2 && v4.events[0][0] == "prompt" && v4.events[0][1] == 1, "OSC 633;D - код виходу")
+    check(v4.events[1][0] == "cwd" && v4.events[1][2] == "/home/пр", "OSC 7 - тека (UTF-8)")
+    // послідовність, розрізана між шматками виводу
+    var v5 = newVt(10, 2)
+    vtFeed(v5, "x" + E + "[3")
+    vtFeed(v5, "1mY")
+    check(v5.styles[v5.lines[0].st[1]].fg == 1 && vtRowText(v5.lines[0]) == "xY", "ESC-послідовність між шматками")
+    // псевдографіка й широкі символи
+    vtFeed(v5, "\r\n" + E + "(0lqk" + E + "(B中")
+    check(vtRowText(v5.lines[1]) == "┌─┐中", "DEC-рамки і широкий символ")
+    check(v5.cx == 5, "широкий символ займає 2 клітинки")
+    // клавіші
+    check(vtKey(v5, keyEv("Up", false, false, false)) == E + "[A", "стрілка")
+    v5.appCursor = true
+    check(vtKey(v5, keyEv("Up", false, false, false)) == E + "OA", "стрілка в режимі програми (vim)")
+    check(vtKey(v5, keyEv("c", true, false, false)) == fromCharCode(3), "Ctrl+C")
+    check(vtKey(v5, keyEv("Left", true, false, false)) == E + "[1;5D", "Ctrl+←")
+    check(vtKey(v5, keyEv("Delete", false, false, false)) == E + "[3~", "Delete")
+    check(vtKey(v5, keyEv("b", false, false, true)) == E + "b", "Alt+b")
+    print("VT: УСЕ ГАРАЗД")
+}
+
+struct KeyEv {
+    key: string
+    ctrl: bool
+    shift: bool
+    alt: bool
+}
+
+func keyEv(k, ctrl, shift, alt) { return KeyEv { key: k, ctrl: ctrl, shift: shift, alt: alt } }

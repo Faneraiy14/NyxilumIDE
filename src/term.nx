@@ -1,12 +1,20 @@
-// Термінал у нижній панелі (як у VS Code): команди системи в теці проєкту.
+// Термінал у нижній панелі (як у VS Code).
 //
-// Кожна команда - окремий процес оболонки (sh -c / cmd /c) з потоковим
-// виводом, як у консолі. "cd" і "clear" робить сам термінал (тека
-// пам'ятається між командами), "nx" - той самий nx, яким запущено IDE.
-// Поки команда працює, набраний рядок іде їй у stdin; Ctrl+C - зупинити.
+// Звичайно це справжній термінал: оболонка (bash; Windows - cmd.exe) у
+// псевдотерміналі (ptyStart), вивід малює емулятор vt.nx - кольори, vim,
+// nano, top, less, Ctrl+C, стрілки, Tab-доповнення й історія самого bash,
+// git push з паролем. Наш bashrc (поверх ~/.bashrc) після кожної команди
+// шле позначку OSC 633;D;<код> і теку (OSC 7) - так IDE знає, що команда
+// (git push, оновлення) завершилась і з яким кодом. На Windows те саме -
+// заголовок "nx-ready;<тека>" у PROMPT.
+//
+// Запасний "рядковий" режим (кожна команда - окремий процес sh -c, cd і
+// clear робить сам термінал): коли NYX_IDE_NO_SHELL=1 (випадкові тести -
+// там команди системи вимкнено) або псевдотермінал не запустився.
 
 import "theme.nx"
 import "ui.nx"
+import "vt.nx"
 
 struct Terminal {
     lines: array
@@ -25,14 +33,542 @@ struct Terminal {
     y: i32
     w: i32
     h: i32
+    mode: string
+    pty: any
+    vt: any
+    pend: string
+    ready: bool
+    integrated: bool
+    queued: array
+    started: i32
+    lastIO: i32
+    lastCode: any
+    side: bool
+    selA: array
+    selB: array
+    selecting: bool
+    cols: i32
+    rows: i32
+    cw: i32
+    dead: bool
 }
+
+var TERM_FS = 15
+var TERM_LH = 19
 
 func newTerminal(dir) {
     return Terminal { lines: [], proc: null, outLen: 0, errLen: 0, running: false, cwd: dir, root: dir, input: "",
-        history: [], histIdx: -1, scroll: 0, focused: false, x: 0, y: 0, w: 0, h: 0 }
+        history: [], histIdx: -1, scroll: 0, focused: false, x: 0, y: 0, w: 0, h: 0,
+        mode: "", pty: null, vt: null, pend: "", ready: false, integrated: false, queued: [], started: 0, lastIO: 0,
+        lastCode: null, side: false, selA: [], selB: [], selecting: false, cols: 100, rows: 20, cw: 9, dead: false }
 }
 
 func termIsWindows() { return contains(toLower(osPlatform()), "windows") }
+
+func termIsPty(t) { return t.mode == "pty" }
+
+// Чи треба IDE часто опитувати термінал і як часто (мс; -1 - не треба).
+func termWait(t) {
+    if (t.mode == "pty" && t.pty != null) {
+        if (timeMs() - t.lastIO < 600) { return 15 }
+        if (t.running || len(t.pend) > 0) { return 30 }
+        return 150
+    }
+    if (t.running) { return 40 }
+    return -1
+}
+
+// Увесь текст терміналу (прокрутка назад + екран).
+func termText(t) {
+    if (t.mode == "pty" && t.vt != null) { return vtText(t.vt) }
+    var parts = []
+    for l in t.lines { append(parts, l[0]) }
+    return join(parts, "\n")
+}
+
+// ---------- запуск оболонки ----------
+
+func _termCfgDir() {
+    var cfg = osEnv("NYX_IDE_CONFIG")
+    if (cfg != null && cfg != "") {
+        var p = replace(cfg, "\\", "/")
+        var cut = 0
+        var i = 0
+        while (i < len(p)) {
+            if (p[i] == "/") { cut = i }
+            i = i + 1
+        }
+        return substring(p, 0, cut)
+    }
+    var home = osEnv("HOME")
+    if (home == null || home == "") { home = osEnv("USERPROFILE") }
+    return home + "/.nyx-ide"
+}
+
+// Наш bashrc: звичайний ~/.bashrc, nx = той самий nx, що й IDE, і позначка
+// після кожної команди (код виходу + тека).
+func _termBashrc() {
+    var dir = _termCfgDir()
+    if (!dirExists(dir)) { makeDir(dir) }
+    var path = dir + "/term-bashrc"
+    var nxq = replace(nxPath(), "'", "'\\''")
+    var rc = "# Nx IDE: термінал (створюється заново при кожному запуску - не редагуй)\n" +
+        "[ -f ~/.bashrc ] && . ~/.bashrc\n" +
+        "alias nx='\"" + nxq + "\"'\n" +
+        "__nx_ide_prompt() { local c=$?; printf '\\033]633;D;%s\\007\\033]7;file://%s%s\\007' \"$c\" \"\${HOSTNAME:-localhost}\" \"$PWD\"; return $c; }\n" +
+        "PROMPT_COMMAND=\"__nx_ide_prompt\${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"\n"
+    var old = ""
+    if (fileExists(path)) { old = readFile(path) }
+    if (old != rc) { writeFile(path, rc) }
+    return path
+}
+
+func _termEnv() {
+    // git у терміналі IDE: кирилиця в назвах файлів - як є, а не \320\277...
+    // (лише для команд звідси; глобальні налаштування git не чіпаються)
+    var env = newMap()
+    mapSet(env, "GIT_CONFIG_COUNT", "1")
+    mapSet(env, "GIT_CONFIG_KEY_0", "core.quotePath")
+    mapSet(env, "GIT_CONFIG_VALUE_0", "false")
+    if (termIsWindows()) {
+        // тека nx першою в PATH - "nx" у терміналі той самий, що й IDE
+        var np = replace(nxPath(), "/", "\\")
+        var cut = 0
+        var k = 0
+        while (k < len(np)) {
+            if (np[k] == "\\") { cut = k }
+            k = k + 1
+        }
+        var path = osEnv("PATH")
+        if (path == null) { path = "" }
+        mapSet(env, "PATH", substring(np, 0, cut) + ";" + path)
+    }
+    return env
+}
+
+// true - оболонка працює в псевдотерміналі.
+func _termStartShell(t) {
+    if (osEnv("NYX_IDE_NO_SHELL") == "1") {
+        t.mode = "line"
+        return false
+    }
+    var env = _termEnv()
+    var opts = newMap()
+    mapSet(opts, "cwd", t.cwd)
+    mapSet(opts, "cols", t.cols)
+    mapSet(opts, "rows", t.rows)
+    mapSet(opts, "env", env)
+    try {
+        if (termIsWindows()) {
+            mapSet(env, "PROMPT", "$e]0;nx-ready;$P$e\\$P$G")
+            t.pty = ptyStart("cmd.exe", ["/d"], opts)
+        } else if (fileExists("/bin/bash")) {
+            t.pty = ptyStart("/bin/bash", ["--rcfile", _termBashrc(), "-i"], opts)
+        } else {
+            mapSet(env, "PS1", fromCharCode(27) + "]633;D" + fromCharCode(7) + "$ ")
+            t.pty = ptyStart("/bin/sh", ["-i"], opts)
+        }
+    } catch (e) {
+        t.mode = "line"
+        t.pty = null
+        termAdd(t, "Справжній термінал не запустився (" + toString(e) + ") - простий режим: кожна команда окремо.", "info")
+        return false
+    }
+    t.mode = "pty"
+    if (t.vt == null) { t.vt = newVt(t.cols, t.rows) }
+    t.ready = false
+    t.integrated = false
+    t.started = timeMs()
+    t.lastIO = timeMs()
+    t.dead = false
+    t.running = len(t.queued) > 0
+    return true
+}
+
+func _termEnsure(t) {
+    if (t.mode == "") { _termStartShell(t) }
+    else if (t.mode == "pty" && t.pty == null) { _termStartShell(t) }
+    return t.mode == "pty"
+}
+
+func _termWrite(t, s) {
+    if (t.pty == null || s == "") { return }
+    ptyWrite(t.pty, s)
+    t.lastIO = timeMs()
+}
+
+// ---------- команди ----------
+
+// Виконати рядок команди (з IDE: git push, оновлення, команди розширень;
+// у простому режимі - і набране людиною).
+func termExec(t, line) {
+    if (!_termEnsure(t)) {
+        _termLineExec(t, line)
+        return
+    }
+    t.scroll = 0
+    if (t.running) { termStop(t) }
+    if (t.pty == null) { _termStartShell(t) }
+    if (!t.ready) {
+        // оболонка ще стартує: перша позначка (запрошувач) прибрала б
+        // "працює" надто рано - команда піде після неї
+        append(t.queued, line)
+        t.running = true
+        return
+    }
+    if (t.integrated) {
+        _termWrite(t, line + "\r")
+        t.running = true
+    } else { _termSide(t, line) }
+}
+
+// Команда в теці dir (git push - у корені проєкту, хоч би де був шел).
+func termRunIn(t, dir, cmd) {
+    if (!_termEnsure(t)) {
+        t.cwd = dir
+        _termLineExec(t, cmd)
+        return
+    }
+    if (t.cwd == dir) {
+        termExec(t, cmd)
+        return
+    }
+    if (termIsWindows()) { termExec(t, "cd /d \"" + dir + "\" && " + cmd) }
+    else { termExec(t, "cd '" + replace(dir, "'", "'\\''") + "' && " + cmd) }
+}
+
+// Оболонка без позначок (чужий шел, старий Windows): команду IDE - окремим
+// процесом, а вивід - у той самий екран.
+func _termSide(t, cmd) {
+    try {
+        t.proc = _termProc(t, cmd)
+        t.side = true
+        t.running = true
+        t.outLen = 0
+        t.errLen = 0
+        vtFeed(t.vt, "\r\n" + fromCharCode(27) + "[32m> " + cmd + fromCharCode(27) + "[0m\r\n")
+    } catch (e) { vtFeed(t.vt, "\r\nНе вдалося запустити: " + toString(e) + "\r\n") }
+}
+
+func termStop(t) {
+    if (t.mode != "pty") {
+        _termLineStop(t)
+        return
+    }
+    if (t.side && t.proc != null) {
+        procKill(t.proc)
+        t.side = false
+        t.running = false
+        vtFeed(t.vt, "^C\r\n")
+        return
+    }
+    if (t.pty == null) { return }
+    if (!t.ready) {
+        t.queued = []
+        t.running = false
+        return
+    }
+    _termWrite(t, fromCharCode(3))
+    var t0 = timeMs()
+    while (t.running && timeMs() - t0 < 400) {
+        sleep(20)
+        termPoll(t)
+    }
+    if (t.running) {
+        // програма не зупиняється на Ctrl+C (vim, повноекранне) - новий шел
+        ptyKill(t.pty)
+        t.pty = null
+        t.running = false
+        vtFeed(t.vt, "\r\n" + fromCharCode(27) + "[0m[команду зупинено - новий термінал]\r\n")
+        _termStartShell(t)
+    }
+}
+
+// Забрати новий вивід. true - щось змінилось.
+func termPoll(t) {
+    if (t.mode != "pty") { return _termLinePoll(t) }
+    var changed = false
+    if (t.side && t.proc != null) {
+        var out = procOutput(t.proc)
+        if (len(out) > t.outLen) {
+            vtFeed(t.vt, replace(substring(out, t.outLen, len(out) - t.outLen), "\n", "\r\n"))
+            t.outLen = len(out)
+            changed = true
+        }
+        var err = procErrorOutput(t.proc)
+        if (len(err) > t.errLen) {
+            vtFeed(t.vt, replace(substring(err, t.errLen, len(err) - t.errLen), "\n", "\r\n"))
+            t.errLen = len(err)
+            changed = true
+        }
+        if (!procIsRunning(t.proc) && procOutput(t.proc) == out && procErrorOutput(t.proc) == err) {
+            t.side = false
+            t.running = false
+            t.lastCode = procExitCode(t.proc)
+            changed = true
+        }
+    }
+    if (t.pty == null) { return changed }
+    var s = ptyRead(t.pty)
+    if (s != "") { t.pend = t.pend + s }
+    if (len(t.pend) > 0) {
+        // великий вивід (cat великого файла) - частинами, IDE не замерзає
+        var part = t.pend
+        if (len(part) > 32768) {
+            part = substring(t.pend, 0, 32768)
+            t.pend = substring(t.pend, 32768, len(t.pend) - 32768)
+        } else { t.pend = "" }
+        vtFeed(t.vt, part)
+        t.lastIO = timeMs()
+        changed = true
+    }
+    if (t.vt.reply != "") {
+        _termWrite(t, t.vt.reply)
+        t.vt.reply = ""
+    }
+    for ev in t.vt.events {
+        if (ev[0] == "prompt") {
+            t.integrated = true
+            if (ev[2] != "") { t.cwd = replace(ev[2], "\\", "/") }
+            if (!t.ready) {
+                t.ready = true
+                _termFlushQueue(t)
+            } else if (!t.side) {
+                t.running = false
+                t.lastCode = ev[1]
+            }
+        } else if (ev[0] == "cwd") { t.cwd = ev[2] }
+    }
+    t.vt.events = []
+    // позначок нема 3 с - чужий шел: команди IDE підуть окремими процесами
+    if (!t.ready && timeMs() - t.started > 3000) {
+        t.ready = true
+        _termFlushQueue(t)
+    }
+    if (len(t.pend) == 0 && !ptyIsRunning(t.pty)) {
+        var code = ptyExitCode(t.pty)
+        t.pty = null
+        t.dead = true
+        t.running = false
+        vtFeed(t.vt, "\r\n" + fromCharCode(27) + "[0m[термінал закрито (код " + toString(code) + ") - Enter, щоб відкрити новий]\r\n")
+        changed = true
+    }
+    if (changed) { t.scroll = 0 }
+    return changed
+}
+
+func _termFlushQueue(t) {
+    var q = t.queued
+    t.queued = []
+    t.running = false
+    for line in q {
+        if (t.integrated) {
+            _termWrite(t, line + "\r")
+            t.running = true
+        } else { _termSide(t, line) }
+    }
+}
+
+// ---------- клавіші й миша ----------
+
+func termKey(t, e) {
+    if (t.mode != "pty") { return _termLineKey(t, e) }
+    var k = e.key
+    if (t.pty == null) {
+        if (k == "Enter") {
+            t.dead = false
+            _termStartShell(t)
+            return true
+        }
+        return k != "Escape"
+    }
+    var v = t.vt
+    var hasSel = len(t.selA) == 2 && (t.selA[0] != t.selB[0] || t.selA[1] != t.selB[1])
+    // копіювати: Ctrl+Shift+C, або Ctrl+C, коли щось виділено (як у Windows Terminal)
+    if (e.ctrl && toLower(k) == "c" && (e.shift || hasSel)) {
+        if (hasSel) { clipboardSet(vtTextRange(v, t.selA, t.selB)) }
+        t.selA = []
+        t.selB = []
+        return true
+    }
+    if (e.ctrl && toLower(k) == "v") {
+        termPaste(t, clipboardGet())
+        return true
+    }
+    if (e.shift && (k == "PageUp" || k == "PageDown")) {
+        if (k == "PageUp") { termScroll(t, t.rows - 1) } else { termScroll(t, -(t.rows - 1)) }
+        return true
+    }
+    var bytes = vtKey(v, e)
+    if (bytes == "") { return false }
+    t.selA = []
+    t.selB = []
+    t.scroll = 0
+    _termWrite(t, bytes)
+    if (k == "Enter" && !v.altOn && t.integrated && !e.alt) { t.running = true }
+    return true
+}
+
+func termTextInput(t, text) {
+    if (t.mode != "pty") {
+        t.input = t.input + text
+        return
+    }
+    if (t.pty == null) { return }
+    t.selA = []
+    t.selB = []
+    t.scroll = 0
+    _termWrite(t, text)
+}
+
+func termPaste(t, text) {
+    if (t.mode != "pty") {
+        t.input = t.input + replace(text, "\n", " ")
+        return
+    }
+    if (t.pty == null || text == "") { return }
+    text = replace(replace(text, "\r\n", "\r"), "\n", "\r")
+    if (t.vt.paste) { text = fromCharCode(27) + "[200~" + text + fromCharCode(27) + "[201~" }
+    t.scroll = 0
+    _termWrite(t, text)
+}
+
+// n > 0 - назад (вгору), n < 0 - вниз.
+func termScroll(t, n) {
+    if (t.mode == "pty" && t.vt != null) {
+        if (t.vt.altOn) {
+            // у повноекранній програмі колесо - стрілки (як у xterm: less, man)
+            var e2 = fromCharCode(27)
+            var seq = e2 + "[A"
+            if (n < 0) { seq = e2 + "[B" }
+            if (t.vt.appCursor) {
+                seq = e2 + "OA"
+                if (n < 0) { seq = e2 + "OB" }
+            }
+            var k = 0
+            while (k < min(abs(n), 10)) {
+                _termWrite(t, seq)
+                k = k + 1
+            }
+            return
+        }
+        t.scroll = clamp(t.scroll + n, 0, len(t.vt.sb))
+        return
+    }
+    t.scroll = max(0, t.scroll + n)
+}
+
+// Клітинка [рядок (абсолютний), стовпець] під мишею.
+func _termCell(t, mx, my) {
+    var v = t.vt
+    var first = len(v.sb) - t.scroll
+    var row = clamp(toInt((my - t.y - 4) / TERM_LH), 0, t.rows - 1)
+    var col = clamp(toInt((mx - t.x - 8 + t.cw / 2) / t.cw), 0, t.cols)
+    return [first + row, col]
+}
+
+func termMouseDown(t, mx, my) {
+    if (t.mode != "pty" || t.vt == null) { return }
+    t.selA = _termCell(t, mx, my)
+    t.selB = t.selA
+    t.selecting = true
+}
+
+func termMouseMove(t, mx, my) {
+    if (!t.selecting) { return }
+    if (my < t.y) { termScroll(t, 1) }
+    if (my > t.y + t.h) { termScroll(t, -1) }
+    t.selB = _termCell(t, mx, my)
+}
+
+// Відпустили: виділене одразу в буфер (як у терміналах Linux).
+func termMouseUp(t) {
+    if (!t.selecting) { return }
+    t.selecting = false
+    if (len(t.selA) == 2 && (t.selA[0] != t.selB[0] || t.selA[1] != t.selB[1])) {
+        clipboardSet(vtTextRange(t.vt, t.selA, t.selB))
+    } else {
+        t.selA = []
+        t.selB = []
+    }
+}
+
+// ---------- малювання ----------
+
+func termDraw(t, x, y, w, h) {
+    if (t.mode == "") { _termStartShell(t) }
+    if (t.mode != "pty") {
+        _termLineDraw(t, x, y, w, h)
+        return
+    }
+    var prevFont = surfaceFont("mono")
+    if (prevFont == "pixel") { surfaceFont("pixel") }
+    t.x = x
+    t.y = y
+    t.w = w
+    t.h = h
+    surfaceRect(S, x, y, w, h, C_BG)
+    uiRegion("term.area", x, y, w, h)
+    var cw = textWidth("M", TERM_FS)
+    if (cw < 1) { cw = 8 }
+    t.cw = cw
+    var cols = max(10, toInt((w - 16) / cw))
+    var rows = max(2, toInt((h - 8) / TERM_LH))
+    var v = t.vt
+    if (cols != t.cols || rows != t.rows) {
+        t.cols = cols
+        t.rows = rows
+        vtResize(v, cols, rows)
+        if (t.pty != null) { ptyResize(t.pty, cols, rows) }
+    }
+    if (v.altOn) { t.scroll = 0 }
+    t.scroll = clamp(t.scroll, 0, len(v.sb))
+    surfaceClip(S, x, y, w, h)
+    var first = len(v.sb) - t.scroll
+    // виділення - від меншої точки до більшої
+    var sa = t.selA
+    var sb = t.selB
+    var hasSel = len(sa) == 2 && (sa[0] != sb[0] || sa[1] != sb[1])
+    if (hasSel && (sa[0] > sb[0] || (sa[0] == sb[0] && sa[1] > sb[1]))) {
+        var tmp = sa
+        sa = sb
+        sb = tmp
+    }
+    var r = 0
+    while (r < rows) {
+        var li = first + r
+        var ry = y + 4 + r * TERM_LH
+        var s0 = 0
+        var s1 = 0
+        if (hasSel && li >= sa[0] && li <= sb[0]) {
+            if (li == sa[0]) { s0 = sa[1] }
+            s1 = cols
+            if (li == sb[0]) { s1 = sb[1] }
+        }
+        if (li >= 0 && li < vtLineCount(v)) { vtDrawRow(v, vtLine(v, li), x + 8, ry, cw, TERM_LH, TERM_FS, s0, s1) }
+        r = r + 1
+    }
+    // курсор
+    if (t.scroll == 0 && v.cursorOn && t.pty != null) {
+        var cx = x + 8 + v.cx * cw
+        var cy = y + 4 + v.cy * TERM_LH
+        if (t.focused) {
+            surfaceRect(S, cx, cy, cw, TERM_LH, C_TEXT)
+            var under = v.lines[v.cy].ch[v.cx]
+            if (under != "" && under != " ") { surfaceText(S, under, cx, cy + 1, TERM_FS, C_BG) }
+        } else { surfaceRectLine(S, cx, cy, cw, TERM_LH, C_DIM) }
+    }
+    if (t.scroll > 0) {
+        var note = "↑ " + toString(t.scroll) + " (Shift+PgDn - вниз)"
+        var nw = textWidth(note, 13) + 16
+        surfaceRoundRect(S, x + w - nw - 8, y + 6, nw, 22, 4, C_SURFACE)
+        surfaceText(S, note, x + w - nw, y + 9, 13, C_SUBTEXT)
+    }
+    surfaceUnclip(S)
+    surfaceFont(prevFont)
+}
+
+// ================= простий (рядковий) режим =================
 
 // Рядок - [текст, вид]; вид: "out" | "err" | "cmd" | "info".
 func termAdd(t, text, kind) {
@@ -104,8 +640,26 @@ func _termCd(t, arg) {
     return res
 }
 
-// Виконати рядок команди.
-func termExec(t, line) {
+// Окремий процес оболонки для однієї команди.
+func _termProc(t, cmd) {
+    var win = termIsWindows()
+    // "nx ..." - той самий nx, що й IDE: на Linux/Mac - підставляємо шлях,
+    // на Windows - тека nx першою в PATH (лапки в cmd.exe - окрема історія)
+    if (!win && (cmd == "nx" || startsWith(cmd, "nx "))) { cmd = "\"" + nxPath() + "\"" + substring(cmd, 2, len(cmd) - 2) }
+    var opts = newMap()
+    mapSet(opts, "interactive", true)
+    mapSet(opts, "cwd", t.cwd)
+    if (win) {
+        // /s /c "...": cmd бере рядок між першою й останньою лапкою як є -
+        // git commit -m "два слова" доходить без зіпсованих лапок
+        mapSet(opts, "rawArgs", "/d /s /c \"" + cmd + "\"")
+    }
+    mapSet(opts, "env", _termEnv())
+    if (win) { return procStart("cmd.exe", [], opts) }
+    return procStart("/bin/sh", ["-c", cmd], opts)
+}
+
+func _termLineExec(t, line) {
     var cmd = trim(line)
     termAdd(t, termPrompt(t) + " " + cmd, "cmd")
     if (cmd == "") { return }
@@ -128,38 +682,8 @@ func termExec(t, line) {
         termAdd(t, "(команди системи вимкнено: NYX_IDE_NO_SHELL)", "info")
         return
     }
-    var win = termIsWindows()
-    // "nx ..." - той самий nx, що й IDE: на Linux/Mac - підставляємо шлях,
-    // на Windows - тека nx першою в PATH (лапки в cmd.exe - окрема історія)
-    if (!win && (cmd == "nx" || startsWith(cmd, "nx "))) { cmd = "\"" + nxPath() + "\"" + substring(cmd, 2, len(cmd) - 2) }
-    var opts = newMap()
-    mapSet(opts, "interactive", true)
-    mapSet(opts, "cwd", t.cwd)
-    // git у терміналі IDE: кирилиця в назвах файлів - як є, а не \320\277...
-    // (лише для команд звідси; глобальні налаштування git не чіпаються)
-    var env = newMap()
-    mapSet(env, "GIT_CONFIG_COUNT", "1")
-    mapSet(env, "GIT_CONFIG_KEY_0", "core.quotePath")
-    mapSet(env, "GIT_CONFIG_VALUE_0", "false")
-    if (win) {
-        var np = replace(nxPath(), "/", "\\")
-        var cut2 = 0
-        var k = 0
-        while (k < len(np)) {
-            if (np[k] == "\\") { cut2 = k }
-            k = k + 1
-        }
-        var path = osEnv("PATH")
-        if (path == null) { path = "" }
-        mapSet(env, "PATH", substring(np, 0, cut2) + ";" + path)
-        // /s /c "...": cmd бере рядок між першою й останньою лапкою як є -
-        // git commit -m "два слова" доходить без зіпсованих лапок
-        mapSet(opts, "rawArgs", "/d /s /c \"" + cmd + "\"")
-    }
-    mapSet(opts, "env", env)
     try {
-        if (win) { t.proc = procStart("cmd.exe", [], opts) }
-        else { t.proc = procStart("/bin/sh", ["-c", cmd], opts) }
+        t.proc = _termProc(t, cmd)
         t.running = true
         t.outLen = 0
         t.errLen = 0
@@ -168,17 +692,16 @@ func termExec(t, line) {
     }
 }
 
-func termStop(t) {
+func _termLineStop(t) {
     if (!t.running) { return }
     procKill(t.proc)
     // спершу "не працює" - тоді termPoll не друкує код виходу вбитого процесу
     t.running = false
-    termPoll(t)
+    _termLinePoll(t)
     termAdd(t, "^C", "info")
 }
 
-// Забрати новий вивід. true - щось змінилось.
-func termPoll(t) {
+func _termLinePoll(t) {
     if (t.proc == null) { return false }
     var changed = false
     var out = procOutput(t.proc)
@@ -201,6 +724,7 @@ func termPoll(t) {
         if (len(err) > t.errLen) { _termChunk(t, substring(err, t.errLen, len(err) - t.errLen), "err")  t.errLen = len(err) }
         t.running = false
         var code = procExitCode(t.proc)
+        t.lastCode = code
         if (code != 0) { termAdd(t, "(код виходу " + toString(code) + ")", "info") }
         changed = true
     }
@@ -208,10 +732,10 @@ func termPoll(t) {
     return changed
 }
 
-func termKey(t, e) {
+func _termLineKey(t, e) {
     var k = e.key
     if (e.ctrl && k == "c") {
-        if (t.running) { termStop(t) }
+        if (t.running) { _termLineStop(t) }
         else {
             termAdd(t, termPrompt(t) + " " + t.input + "^C", "cmd")
             t.input = ""
@@ -230,7 +754,7 @@ func termKey(t, e) {
         if (t.running) {
             termAdd(t, t.input, "in")
             procWrite(t.proc, t.input + "\n")
-        } else { termExec(t, t.input) }
+        } else { _termLineExec(t, t.input) }
         t.input = ""
         return true
     }
@@ -254,7 +778,7 @@ func termKey(t, e) {
     return false
 }
 
-func termDraw(t, x, y, w, h) {
+func _termLineDraw(t, x, y, w, h) {
     var prevFont = surfaceFont("mono")
     if (prevFont == "pixel") { surfaceFont("pixel") }
     t.x = x
@@ -297,4 +821,12 @@ func termDraw(t, x, y, w, h) {
     }
     surfaceUnclip(S)
     surfaceFont(prevFont)
+}
+
+// Закрити оболонку (вихід з IDE).
+func termClose(t) {
+    if (t.mode == "pty" && t.pty != null) {
+        ptyKill(t.pty)
+        t.pty = null
+    } else if (t.running) { _termLineStop(t) }
 }

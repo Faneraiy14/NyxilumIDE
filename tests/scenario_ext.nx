@@ -4,7 +4,7 @@
 // (якщо php і Anylint є на цій машині).
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_ext.nx <тека> <тека-для-png>
 import "helpers.nx"
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, userExtDir, saveAll }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, userExtDir, saveAll, termText }
 
 func waitLint(ms) {
     var t0 = timeMs()
@@ -72,8 +72,7 @@ func main() {
     var t0 = timeMs()
     while (timeMs() - t0 < 15000 && app.term.running) { ideStep(20) }
     ideStep(10)
-    var tt = ""
-    for l in app.term.lines { tt = tt + l[0] + "\n" }
+    var tt = termText(app.term)
     check(contains(tt, "Привіт з розширення!") && app.panelTab == "terminal", "команда розширення працює в терміналі")
 
     // «Відкрити» вбудованого - своя копія, не файли IDE

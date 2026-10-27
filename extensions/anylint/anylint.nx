@@ -21,8 +21,11 @@ func anylintPhp() {
     return "php"
 }
 
-// Запустити Anylint з аргументами: [код виходу, stdout, помилка запуску].
-func anylintRun(args) {
+// Запустити Anylint: [код виходу, stdout+stderr, помилка запуску, лише stdout].
+func anylintRun(args) { return anylintRunIn(args, "") }
+
+// Те саме в теці dir (baseline і anylint.json шукаються від неї).
+func anylintRunIn(args, dir) {
     var bin = anylintBin()
     if (bin == "") { return [-1, "", "не знайдено Anylint - постав змінну ANYLINT_BIN=<шлях до bin/anylint>"] }
     var opts = newMap()
@@ -30,11 +33,12 @@ func anylintRun(args) {
     // Anylint читає .nx через "nx ast" - той самий nx, що й IDE
     mapSet(env, "NX_EXE", nxPath())
     mapSet(opts, "env", env)
+    if (dir != "") { mapSet(opts, "cwd", dir) }
     var all = [bin]
     for a in args { append(all, a) }
     try {
         var r = procRun(anylintPhp(), all, opts)
-        return [toInt(r.exitCode), r.stdout, ""]
+        return [toInt(r.exitCode), r.stdout + r.stderr, "", r.stdout]
     } catch (e) {
         return [-1, "", "не вдалося запустити php (" + toString(e) + ") - встанови php або постав ANYLINT_PHP"]
     }

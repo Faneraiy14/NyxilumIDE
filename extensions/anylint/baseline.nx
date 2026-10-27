@@ -1,0 +1,23 @@
+// Команда «Anylint: Прийняти поточні знахідки (baseline)»: старий борг
+// записується в anylint-baseline.json і більше не показується - видно лише
+// нові знахідки. anylint.json з "baseline" створюється, якщо його нема.
+//   nx baseline.nx <тека проєкту> <поточний файл>
+import "anylint.nx"
+
+func main() {
+    var dir = scriptArgs()[0]
+    var cfg = dir + "/anylint.json"
+    if (!fileExists(cfg) && !fileExists(dir + "/.anylint.json")) {
+        var m = newMap()
+        mapSet(m, "baseline", "anylint-baseline.json")
+        writeFile(cfg, toJson(m) + "\n")
+        print("Створено anylint.json (baseline: anylint-baseline.json)")
+    }
+    var r = anylintRunIn([dir, "--generate-baseline"], dir)
+    if (r[2] != "") {
+        print(r[2])
+        exit(1)
+    }
+    print(r[1])
+    print("Тепер Anylint показує лише нові знахідки. Повернути все - видали anylint-baseline.json.")
+}

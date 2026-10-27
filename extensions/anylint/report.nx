@@ -1,0 +1,28 @@
+// Команда «Anylint: Звіт про проєкт (HTML)»: мови й рядки коду, знахідки
+// за правилами, найскладніші функції, дублювання - у браузері.
+//   nx report.nx <тека проєкту> <поточний файл>
+import "anylint.nx"
+
+func main() {
+    var dir = scriptArgs()[0]
+    var nyx = dir + "/.nyx"
+    if (!dirExists(nyx)) { makeDir(nyx) }
+    var out = nyx + "/anylint-звіт.html"
+    print("Anylint складає звіт про " + dir + " ...")
+    var r = anylintRunIn(["report", dir, "--format", "html", "--output", out, "--jobs", "auto"], dir)
+    if (r[2] != "") {
+        print(r[2])
+        exit(1)
+    }
+    if (!fileExists(out)) {
+        print(r[1])
+        exit(1)
+    }
+    print("Звіт: " + out)
+    try {
+        if (contains(toLower(osPlatform()), "windows")) { procStart("cmd.exe", ["/c", "start", "", out]) }
+        else if (contains(osPlatform(), "Darwin")) { procStart("open", [out]) }
+        else { procStart("xdg-open", [out]) }
+        print("Відкрито в браузері.")
+    } catch (e) { print("Відкрий цей файл у браузері.") }
+}

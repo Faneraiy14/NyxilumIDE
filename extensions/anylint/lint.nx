@@ -11,7 +11,7 @@ func main() {
         print(toJson(e))
         return
     }
-    var out = trim(r[1])
+    var out = trim(r[3])
     var at = indexOf(out, "{")
     if (at < 0) {
         var e2 = newMap()

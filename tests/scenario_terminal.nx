@@ -1,13 +1,18 @@
-// Термінал у нижній панелі: команди в теці проєкту, cd, nx (той самий, що
-// й IDE), введення в запущену команду, Ctrl+C, історія ↑.
+// Термінал у нижній панелі - справжній шел у псевдотерміналі: команди,
+// cd (тека з позначки шелу), nx, введення в запущену програму, код
+// виходу, Ctrl+C, історія ↑ самого bash, кольори, повноекранна програма,
+// файл, змінений з терміналу, перечитується в редакторі.
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_terminal.nx <тека> <тека-для-png>
 import "helpers.nx"
-import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw }
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, termText, vtLineCount, vtLine, vtRowText }
 
-func termText() {
-    var parts = []
-    for l in app.term.lines { append(parts, l[0]) }
-    return join(parts, "\n")
+func screen() { return termText(app.term) }
+
+// Чекати, поки умова (текст на екрані) не з'явиться.
+func waitText(s, ms) {
+    var t0 = timeMs()
+    while (timeMs() - t0 < ms && !contains(screen(), s)) { ideStep(20) }
+    return contains(screen(), s)
 }
 
 // Набрати команду, Enter і чекати, поки вона завершиться.
@@ -15,9 +20,9 @@ func run(cmd, ms) {
     typeText(cmd)
     key("Enter", false, false)
     var t0 = timeMs()
-    ideStep(10)
+    ideStep(30)
     while (timeMs() - t0 < ms && app.term.running) { ideStep(20) }
-    ideStep(10)
+    ideStep(30)
 }
 
 func main() {
@@ -27,51 +32,99 @@ func main() {
     makeDir(dir + "/ігри")
     writeFile(dir + "/ігри/рахунок.nx", "func main() {\n    print(\"рахунок: \" + toString(2 + 3))\n}\n")
     writeFile(dir + "/ігри/ім'я.nx", "func main() {\n    var n = readLine()\n    print(\"Привіт, \" + n)\n}\n")
+    writeFile(dir + "/нотатка.txt", "старий текст\n")
     ideInit(dir)
     key("`", true, false)
     step()
     check(app.panelOpen && app.panelTab == "terminal" && app.focus == "terminal", "Ctrl+` відкриває термінал")
+    check(app.term.mode == "pty", "справжній термінал (псевдотермінал)")
+    var t0 = timeMs()
+    while (timeMs() - t0 < 5000 && !app.term.ready) { ideStep(20) }
+    check(app.term.integrated, "шел шле позначки (кінець команди, тека)")
 
     run("echo привіт з терміналу", 5000)
-    check(contains(termText(), "привіт з терміналу"), "команда системи працює")
-    run("cd ігри", 2000)
-    check(endsWith(app.term.cwd, "/ігри"), "cd змінює теку")
+    check(contains(screen(), "привіт з терміналу"), "команда системи працює")
+    run("cd ігри", 3000)
+    check(endsWith(app.term.cwd, "/ігри"), "cd змінює теку (позначка OSC 7)")
     run("nx рахунок.nx", 15000)
-    check(contains(termText(), "рахунок: 5"), "nx запускає програму")
+    check(contains(screen(), "рахунок: 5"), "nx запускає програму")
     // програма питає - рядок іде їй
     typeText("nx \"ім'я.nx\"")
     key("Enter", false, false)
-    var t0 = timeMs()
-    while (timeMs() - t0 < 3000) { ideStep(20) }
+    ideStep(30)
+    check(app.term.running, "програма працює - термінал зайнятий")
+    t0 = timeMs()
+    while (timeMs() - t0 < 2000) { ideStep(20) }
     typeText("Сева")
     key("Enter", false, false)
+    check(waitText("Привіт, Сева", 15000), "введення йде запущеній програмі")
     t0 = timeMs()
-    while (timeMs() - t0 < 15000 && app.term.running) { ideStep(20) }
-    ideStep(10)
-    check(contains(termText(), "Привіт, Сева"), "введення йде запущеній програмі")
-    run("cd ..", 2000)
-    check(app.term.cwd == dir, "cd .. повертає назад")
-    run("cd нема-такої", 2000)
-    check(contains(termText(), "Нема такої теки"), "cd у неіснуючу теку - зрозуміла помилка")
+    while (timeMs() - t0 < 3000 && app.term.running) { ideStep(20) }
+    check(!app.term.running, "програма завершилась - термінал вільний")
     run("ls нема-такого-файла", 5000)
-    check(contains(termText(), "код виходу"), "помилка команди - код виходу")
+    check(app.term.lastCode != null && app.term.lastCode != 0, "помилка команди - код виходу")
+    run("cd ..", 3000)
+    check(app.term.cwd == dir, "cd .. повертає назад")
+    // кольори: printf з ESC[31m
+    run("printf '\\033[31mЧЕРВОНИЙ\\033[0m\\n'", 3000)
+    var v = app.term.vt
+    var found = false
+    var li = 0
+    while (li < vtLineCount(v)) {
+        var r = vtLine(v, li)
+        if (startsWith(vtRowText(r), "ЧЕРВОНИЙ")) { found = v.styles[r.st[0]].fg == 1 }
+        li = li + 1
+    }
+    check(found, "кольори ESC[31m")
     // Ctrl+C зупиняє довгу команду
     typeText("sleep 30")
     key("Enter", false, false)
-    ideStep(50)
+    ideStep(100)
     check(app.term.running, "довга команда працює")
     key("c", true, false)
-    ideStep(10)
-    check(!app.term.running && contains(termText(), "^C"), "Ctrl+C зупинив команду")
-    // ↑ - попередня команда
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && app.term.running) { ideStep(20) }
+    check(!app.term.running, "Ctrl+C зупинив команду")
+    // ↑ - історія самого bash
     key("Up", false, false)
-    step()
-    check(app.term.input == "sleep 30", "↑ - попередня команда")
+    check(waitText("$ sleep 30", 3000), "↑ - попередня команда (історія bash)")
+    key("c", true, false)
+    ideStep(100)
+    // повноекранна програма: альтернативний екран, Escape - їй, не IDE
+    typeText("printf '\\033[?1049hПОВНИЙ ЕКРАН'; read x; printf '\\033[?1049l'")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && !app.term.vt.altOn) { ideStep(20) }
+    check(app.term.vt.altOn && contains(screen(), "ПОВНИЙ ЕКРАН"), "повноекранна програма (альтернативний екран)")
+    key("Escape", false, false)
+    check(app.focus == "terminal", "Escape у повноекранній програмі - їй")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && app.term.vt.altOn) { ideStep(20) }
+    check(!app.term.vt.altOn && contains(screen(), "Сева"), "вихід - старий екран на місці")
+    // файл змінили з терміналу - редактор перечитує
+    openPath(dir + "/нотатка.txt")
+    app.focus = "terminal"
+    run("echo новий текст > нотатка.txt", 3000)
+    ideStep(30)
+    check(currentEditor().lines[0] == "новий текст", "файл, змінений з терміналу, перечитано")
     key("Escape", false, false)
     step()
-    check(app.focus == "editor", "Escape - назад у редактор")
+    check(app.focus == "editor", "Escape біля запрошувача - назад у редактор")
     draw()
     shot("t01_terminal")
+    // термінал закрили (exit) - Enter відкриває новий
+    app.focus = "terminal"
+    typeText("exit")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && app.term.pty != null) { ideStep(20) }
+    check(app.term.pty == null && contains(screen(), "термінал закрито"), "exit закриває шел")
+    key("Enter", false, false)
+    t0 = timeMs()
+    while (timeMs() - t0 < 5000 && !app.term.ready) { ideStep(20) }
+    run("echo знову", 3000)
+    check(contains(screen(), "знову"), "Enter - новий термінал")
     ideShutdown()
     print("ТЕРМІНАЛ: УСЕ ГАРАЗД")
 }

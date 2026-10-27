@@ -1,0 +1,1099 @@
+// Емулятор терміналу (як xterm): з того, що програма пише в псевдотермінал
+// (текст + керівні послідовності ESC[...), складає екран - сітку символів
+// з кольорами. Так у терміналі IDE працюють кольори ls/git, vim, nano, top,
+// htop, less, mc, Ctrl+C, стрілки й історія самого bash.
+//
+// Що вміє: кольори (16, 256, RGB), жирний/підкреслений/інверсія, рух
+// курсора, стирання, вставка/видалення рядків і символів, область
+// прокрутки, альтернативний екран (повноекранні програми), прокрутка назад
+// (до 3000 рядків), символи псевдографіки (ESC ( 0), широкі символи,
+// відповіді на запити позиції курсора. Позначки від шелу (OSC 633/7) -
+// команда завершилась, з яким кодом, у якій теці.
+
+import "theme.nx"
+
+struct VtRow {
+    ch: array
+    st: array
+    runs: any
+}
+
+struct VtStyle {
+    fg: i32
+    bg: i32
+    bold: bool
+    ul: bool
+    inv: bool
+    dim: bool
+    it: bool
+}
+
+struct Vt {
+    cols: i32
+    rows: i32
+    main: array
+    alt: array
+    lines: array
+    sb: array
+    altOn: bool
+    cx: i32
+    cy: i32
+    wrapNext: bool
+    top: i32
+    bot: i32
+    fg: i32
+    bg: i32
+    bold: bool
+    ul: bool
+    inv: bool
+    dim: bool
+    it: bool
+    pen: i32
+    blank: i32
+    styles: array
+    styleIds: any
+    saved: array
+    appCursor: bool
+    autowrap: bool
+    cursorOn: bool
+    paste: bool
+    gfx: bool
+    g1gfx: bool
+    shiftOut: bool
+    state: i32
+    params: string
+    inter: string
+    osc: string
+    hi: string
+    reply: string
+    events: array
+    title: string
+    dirty: bool
+}
+
+var VT_SB_MAX = 3000
+
+func newVt(cols, rows) {
+    var v = Vt { cols: cols, rows: rows, main: [], alt: [], lines: [], sb: [], altOn: false, cx: 0, cy: 0, wrapNext: false,
+        top: 0, bot: rows - 1, fg: -1, bg: -1, bold: false, ul: false, inv: false, dim: false, it: false, pen: 0, blank: 0,
+        styles: [], styleIds: newMap(), saved: [0, 0, 0], appCursor: false, autowrap: true, cursorOn: true, paste: false,
+        gfx: false, g1gfx: false, shiftOut: false, state: 0, params: "", inter: "", osc: "", hi: "", reply: "", events: [],
+        title: "", dirty: true }
+    _vtStyleId(v, -1, -1, false, false, false, false, false)
+    v.main = _vtScreen(v)
+    v.lines = v.main
+    return v
+}
+
+func _vtRow(v, st) {
+    var ch = []
+    var sts = []
+    var i = 0
+    while (i < v.cols) {
+        append(ch, " ")
+        append(sts, st)
+        i = i + 1
+    }
+    return VtRow { ch: ch, st: sts, runs: null }
+}
+
+func _vtScreen(v) {
+    var out = []
+    var i = 0
+    while (i < v.rows) {
+        append(out, _vtRow(v, 0))
+        i = i + 1
+    }
+    return out
+}
+
+func _vtStyleId(v, fg, bg, bold, ul, inv, dim, it) {
+    var key = toString(fg) + "," + toString(bg) + "," + toString(bold) + toString(ul) + toString(inv) + toString(dim) + toString(it)
+    if (mapHas(v.styleIds, key)) { return mapGet(v.styleIds, key) }
+    var id = len(v.styles)
+    append(v.styles, VtStyle { fg: fg, bg: bg, bold: bold, ul: ul, inv: inv, dim: dim, it: it })
+    mapSet(v.styleIds, key, id)
+    return id
+}
+
+func _vtPen(v) {
+    v.pen = _vtStyleId(v, v.fg, v.bg, v.bold, v.ul, v.inv, v.dim, v.it)
+    // стерте місце - з поточним фоном (як у xterm)
+    v.blank = _vtStyleId(v, -1, v.bg, false, false, false, false, false)
+}
+
+// ---------- розмір ----------
+
+func vtResize(v, cols, rows) {
+    if (cols == v.cols && rows == v.rows) { return }
+    for scr in [v.main, v.alt] {
+        for r in scr {
+            while (len(r.ch) < cols) {
+                append(r.ch, " ")
+                append(r.st, 0)
+            }
+            while (len(r.ch) > cols) {
+                pop(r.ch)
+                pop(r.st)
+            }
+            r.runs = null
+        }
+    }
+    v.cols = cols
+    // менше рядків: верхні (над курсором) - у прокрутку назад
+    while (len(v.main) > rows) {
+        if (!v.altOn && v.cy > 0) {
+            _vtPushSb(v, v.main[0])
+            removeAt(v.main, 0)
+            v.cy = v.cy - 1
+        } else { pop(v.main) }
+    }
+    while (len(v.main) < rows) { append(v.main, _vtRow(v, 0)) }
+    if (len(v.alt) > 0) {
+        while (len(v.alt) > rows) { pop(v.alt) }
+        while (len(v.alt) < rows) { append(v.alt, _vtRow(v, 0)) }
+    }
+    v.rows = rows
+    if (v.altOn) { v.lines = v.alt } else { v.lines = v.main }
+    v.cx = clamp(v.cx, 0, cols - 1)
+    v.cy = clamp(v.cy, 0, rows - 1)
+    v.top = 0
+    v.bot = rows - 1
+    v.wrapNext = false
+    v.dirty = true
+}
+
+func _vtPushSb(v, row) {
+    append(v.sb, row)
+    if (len(v.sb) > VT_SB_MAX) { removeAt(v.sb, 0) }
+}
+
+// ---------- прокрутка й стирання ----------
+
+func _vtScrollUp(v, top, bot, n) {
+    var k = 0
+    while (k < n) {
+        var row = v.lines[top]
+        removeAt(v.lines, top)
+        insert(v.lines, bot, _vtRow(v, v.blank))
+        if (top == 0 && !v.altOn) { _vtPushSb(v, row) }
+        k = k + 1
+    }
+    v.dirty = true
+}
+
+func _vtScrollDown(v, top, bot, n) {
+    var k = 0
+    while (k < n) {
+        removeAt(v.lines, bot)
+        insert(v.lines, top, _vtRow(v, v.blank))
+        k = k + 1
+    }
+    v.dirty = true
+}
+
+func _vtErase(v, y, x0, x1) {
+    var r = v.lines[y]
+    var x = max(0, x0)
+    while (x < min(x1, v.cols)) {
+        r.ch[x] = " "
+        r.st[x] = v.blank
+        x = x + 1
+    }
+    r.runs = null
+    v.dirty = true
+}
+
+func _vtLineFeed(v) {
+    v.wrapNext = false
+    if (v.cy == v.bot) { _vtScrollUp(v, v.top, v.bot, 1) }
+    else if (v.cy < v.rows - 1) { v.cy = v.cy + 1 }
+}
+
+// ---------- ширина символу ----------
+
+func _vtWide(c) {
+    if (c < 0x1100) { return false }
+    if (c <= 0x115F) { return true }
+    if (c >= 0x2E80 && c <= 0xA4CF && c != 0x303F) { return true }
+    if (c >= 0xAC00 && c <= 0xD7A3) { return true }
+    if (c >= 0xF900 && c <= 0xFAFF) { return true }
+    if (c >= 0xFE30 && c <= 0xFE4F) { return true }
+    if (c >= 0xFF00 && c <= 0xFF60) { return true }
+    if (c >= 0xFFE0 && c <= 0xFFE6) { return true }
+    return false
+}
+
+func _vtZeroWidth(c) {
+    return (c >= 0x300 && c <= 0x36F) || (c >= 0x200B && c <= 0x200F) || c == 0xFE0F || c == 0xFE0E || (c >= 0x20D0 && c <= 0x20FF)
+}
+
+// Псевдографіка DEC (ESC ( 0): mc, старі top, рамки dialog.
+var VT_GFX_FROM = "jklmnqtuvwx`afgy z~"
+var VT_GFX_TO = ["┘", "┐", "┌", "└", "┼", "─", "├", "┤", "┴", "┬", "│", "◆", "▒", "°", "±", "≤", "≥", "π", "·"]
+
+func _vtPut(v, c, wide) {
+    if (v.wrapNext && v.autowrap) {
+        v.cx = 0
+        _vtLineFeed(v)
+    }
+    if (wide && v.cx == v.cols - 1) {
+        if (v.autowrap) {
+            v.cx = 0
+            _vtLineFeed(v)
+        } else { wide = false }
+    }
+    var r = v.lines[v.cy]
+    r.ch[v.cx] = c
+    r.st[v.cx] = v.pen
+    if (wide) {
+        r.ch[v.cx + 1] = ""
+        r.st[v.cx + 1] = v.pen
+    }
+    r.runs = null
+    v.dirty = true
+    var nx = v.cx + 1
+    if (wide) { nx = nx + 1 }
+    if (nx >= v.cols) {
+        v.cx = v.cols - 1
+        v.wrapNext = v.autowrap
+    } else {
+        v.cx = nx
+        v.wrapNext = false
+    }
+}
+
+func _vtPrint(v, ch) {
+    var c = charCode(ch)
+    if (c >= 0xD800 && c <= 0xDBFF) {
+        v.hi = ch
+        return
+    }
+    if (c >= 0xDC00 && c <= 0xDFFF) {
+        if (v.hi == "") { return }
+        var pair = v.hi + ch
+        v.hi = ""
+        // символи поза BMP (емодзі, рідкісні ієрогліфи) - подвійної ширини
+        _vtPut(v, pair, true)
+        return
+    }
+    v.hi = ""
+    if (_vtZeroWidth(c)) {
+        // до попереднього символу (наголоси, варіанти емодзі)
+        var px = v.cx
+        if (!v.wrapNext) { px = px - 1 }
+        if (px >= 0) {
+            var r = v.lines[v.cy]
+            if (r.ch[px] == "" && px > 0) { px = px - 1 }
+            r.ch[px] = r.ch[px] + ch
+            r.runs = null
+        }
+        return
+    }
+    if (v.gfx != v.shiftOut || (v.shiftOut && v.g1gfx)) {
+        var g = indexOf(VT_GFX_FROM, ch)
+        if (g >= 0 && ((v.shiftOut && v.g1gfx) || (!v.shiftOut && v.gfx))) { ch = VT_GFX_TO[g] }
+    }
+    _vtPut(v, ch, _vtWide(c))
+}
+
+// ---------- розбір ----------
+
+// Подати вивід програми. Стан розбору переживає межі шматків.
+func vtFeed(v, s) {
+    var n = len(s)
+    var i = 0
+    while (i < n) {
+        var ch = s[i]
+        var c = charCode(ch)
+        i = i + 1
+        var st = v.state
+        if (st == 0) {
+            if (c >= 32 && c != 127) {
+                _vtPrint(v, ch)
+                continue
+            }
+            _vtControl(v, c)
+            continue
+        }
+        if (st == 1) {
+            _vtEsc(v, ch, c)
+            continue
+        }
+        if (st == 2) {
+            if (c >= 0x30 && c <= 0x3F) { v.params = v.params + ch }
+            else if (c >= 0x20 && c <= 0x2F) { v.inter = v.inter + ch }
+            else if (c >= 0x40 && c <= 0x7E) {
+                v.state = 0
+                _vtCsi(v, ch)
+            } else if (c == 27) {
+                v.state = 1
+            } else if (c < 32) {
+                _vtControl(v, c)
+            } else { v.state = 0 }
+            continue
+        }
+        if (st == 3) {
+            // OSC: до BEL або ESC \
+            if (c == 7) {
+                v.state = 0
+                _vtOsc(v)
+            } else if (c == 27) {
+                v.state = 4
+            } else if (len(v.osc) < 4096) { v.osc = v.osc + ch }
+            continue
+        }
+        if (st == 4) {
+            v.state = 0
+            _vtOsc(v)
+            if (ch != "\\") { i = i - 1 }
+            continue
+        }
+        if (st == 5) {
+            // ESC ( x / ESC ) x - набір символів
+            if (v.inter == "(") { v.gfx = ch == "0" }
+            if (v.inter == ")") { v.g1gfx = ch == "0" }
+            v.state = 0
+            continue
+        }
+        if (st == 6) {
+            // DCS / APC / PM - пропустити до ESC \ або BEL
+            if (c == 7) { v.state = 0 }
+            else if (c == 27) { v.state = 7 }
+            continue
+        }
+        if (st == 7) {
+            v.state = 0
+            if (ch != "\\") { v.state = 6 }
+            continue
+        }
+        v.state = 0
+    }
+}
+
+func _vtControl(v, c) {
+    if (c == 27) {
+        v.state = 1
+        v.params = ""
+        v.inter = ""
+        return
+    }
+    if (c == 13) {
+        v.cx = 0
+        v.wrapNext = false
+        return
+    }
+    if (c == 10 || c == 11 || c == 12) {
+        _vtLineFeed(v)
+        return
+    }
+    if (c == 8) {
+        if (v.cx > 0) { v.cx = v.cx - 1 }
+        v.wrapNext = false
+        return
+    }
+    if (c == 9) {
+        v.cx = min(v.cols - 1, (toInt(v.cx / 8) + 1) * 8)
+        return
+    }
+    if (c == 14) { v.shiftOut = true }
+    if (c == 15) { v.shiftOut = false }
+}
+
+func _vtEsc(v, ch, c) {
+    v.state = 0
+    if (ch == "[") {
+        v.state = 2
+        v.params = ""
+        v.inter = ""
+        return
+    }
+    if (ch == "]") {
+        v.state = 3
+        v.osc = ""
+        return
+    }
+    if (ch == "(" || ch == ")" || ch == "*" || ch == "+") {
+        v.inter = ch
+        v.state = 5
+        return
+    }
+    if (ch == "P" || ch == "_" || ch == "^" || ch == "X") {
+        v.state = 6
+        return
+    }
+    if (ch == "7") { _vtSave(v) }
+    else if (ch == "8") { _vtRestore(v) }
+    else if (ch == "D") { _vtLineFeed(v) }
+    else if (ch == "E") {
+        v.cx = 0
+        _vtLineFeed(v)
+    }
+    else if (ch == "M") {
+        v.wrapNext = false
+        if (v.cy == v.top) { _vtScrollDown(v, v.top, v.bot, 1) }
+        else if (v.cy > 0) { v.cy = v.cy - 1 }
+    }
+    else if (ch == "c") { _vtReset(v) }
+    // ESC = / ESC > (клавіатура), ESC # ... - не впливають на екран
+}
+
+func _vtSave(v) { v.saved = [v.cx, v.cy, v.pen, v.fg, v.bg, v.bold, v.ul, v.inv, v.dim, v.it, v.gfx] }
+
+func _vtRestore(v) {
+    var s = v.saved
+    if (len(s) < 11) { return }
+    v.cx = clamp(s[0], 0, v.cols - 1)
+    v.cy = clamp(s[1], 0, v.rows - 1)
+    v.fg = s[3]
+    v.bg = s[4]
+    v.bold = s[5]
+    v.ul = s[6]
+    v.inv = s[7]
+    v.dim = s[8]
+    v.it = s[9]
+    v.gfx = s[10]
+    v.wrapNext = false
+    _vtPen(v)
+}
+
+func _vtReset(v) {
+    v.fg = -1
+    v.bg = -1
+    v.bold = false
+    v.ul = false
+    v.inv = false
+    v.dim = false
+    v.it = false
+    _vtPen(v)
+    v.altOn = false
+    v.main = _vtScreen(v)
+    v.alt = []
+    v.lines = v.main
+    v.cx = 0
+    v.cy = 0
+    v.top = 0
+    v.bot = v.rows - 1
+    v.appCursor = false
+    v.autowrap = true
+    v.cursorOn = true
+    v.gfx = false
+    v.shiftOut = false
+    v.wrapNext = false
+    v.dirty = true
+}
+
+func _vtNums(v) {
+    var out = []
+    if (v.params == "") { return out }
+    var p = replace(v.params, ":", ";")
+    for s in split(p, ";") {
+        if (s == "") { append(out, -1) } else { append(out, toInt(s)) }
+    }
+    return out
+}
+
+// n-й параметр або def (0 і пропуск - теж def, як у VT100)
+func _vtArg(a, n, def) {
+    if (n >= len(a) || a[n] <= 0) { return def }
+    return a[n]
+}
+
+func _vtAltScreen(v, on, saveCursor) {
+    if (on == v.altOn) { return }
+    if (on) {
+        if (saveCursor) { _vtSave(v) }
+        v.alt = _vtScreen(v)
+        v.lines = v.alt
+        v.altOn = true
+        v.cx = 0
+        v.cy = 0
+    } else {
+        v.lines = v.main
+        v.altOn = false
+        v.alt = []
+        if (saveCursor) { _vtRestore(v) }
+    }
+    v.top = 0
+    v.bot = v.rows - 1
+    v.wrapNext = false
+    v.dirty = true
+}
+
+func _vtCsi(v, f) {
+    var priv = ""
+    if (len(v.params) > 0 && (v.params[0] == "?" || v.params[0] == ">" || v.params[0] == "=" || v.params[0] == "<")) {
+        priv = v.params[0]
+        v.params = substring(v.params, 1, len(v.params) - 1)
+    }
+    var a = _vtNums(v)
+    if (v.inter != "") {
+        // CSI ... SP q (форма курсора), CSI ! p (м'яке скидання) тощо
+        if (v.inter == "!" && f == "p") { _vtReset(v) }
+        return
+    }
+    if (f == "m") {
+        if (priv == "") { _vtSgr(v, a) }
+        return
+    }
+    if (f == "h" || f == "l") {
+        var on = f == "h"
+        for m in a {
+            if (priv == "?") {
+                if (m == 1) { v.appCursor = on }
+                else if (m == 7) { v.autowrap = on }
+                else if (m == 25) { v.cursorOn = on }
+                else if (m == 47 || m == 1047) { _vtAltScreen(v, on, false) }
+                else if (m == 1049) { _vtAltScreen(v, on, true) }
+                else if (m == 2004) { v.paste = on }
+            }
+        }
+        v.dirty = true
+        return
+    }
+    if (priv != "") {
+        // CSI > c, CSI ? u ... - вторинні запити
+        if (priv == ">" && f == "c") { v.reply = v.reply + fromCharCode(27) + "[>0;10;1c" }
+        return
+    }
+    v.dirty = true
+    if (f == "A") {
+        var lim0 = 0
+        if (v.cy >= v.top) { lim0 = v.top }
+        v.cy = max(lim0, v.cy - _vtArg(a, 0, 1))
+        v.wrapNext = false
+    }
+    else if (f == "B" || f == "e") {
+        var lim = v.rows - 1
+        if (v.cy <= v.bot) { lim = v.bot }
+        v.cy = min(lim, v.cy + _vtArg(a, 0, 1))
+        v.wrapNext = false
+    }
+    else if (f == "C" || f == "a") {
+        v.cx = min(v.cols - 1, v.cx + _vtArg(a, 0, 1))
+        v.wrapNext = false
+    }
+    else if (f == "D") {
+        v.cx = max(0, v.cx - _vtArg(a, 0, 1))
+        v.wrapNext = false
+    }
+    else if (f == "E") {
+        v.cy = min(v.rows - 1, v.cy + _vtArg(a, 0, 1))
+        v.cx = 0
+        v.wrapNext = false
+    }
+    else if (f == "F") {
+        v.cy = max(0, v.cy - _vtArg(a, 0, 1))
+        v.cx = 0
+        v.wrapNext = false
+    }
+    else if (f == "G" || f == "`") {
+        v.cx = clamp(_vtArg(a, 0, 1) - 1, 0, v.cols - 1)
+        v.wrapNext = false
+    }
+    else if (f == "d") {
+        v.cy = clamp(_vtArg(a, 0, 1) - 1, 0, v.rows - 1)
+        v.wrapNext = false
+    }
+    else if (f == "H" || f == "f") {
+        v.cy = clamp(_vtArg(a, 0, 1) - 1, 0, v.rows - 1)
+        v.cx = clamp(_vtArg(a, 1, 1) - 1, 0, v.cols - 1)
+        v.wrapNext = false
+    }
+    else if (f == "J") {
+        var m = _vtArg(a, 0, 0)
+        if (m == 0) {
+            _vtErase(v, v.cy, v.cx, v.cols)
+            var y = v.cy + 1
+            while (y < v.rows) { _vtErase(v, y, 0, v.cols)  y = y + 1 }
+        } else if (m == 1) {
+            var y2 = 0
+            while (y2 < v.cy) { _vtErase(v, y2, 0, v.cols)  y2 = y2 + 1 }
+            _vtErase(v, v.cy, 0, v.cx + 1)
+        } else if (m == 2) {
+            var y3 = 0
+            while (y3 < v.rows) { _vtErase(v, y3, 0, v.cols)  y3 = y3 + 1 }
+        } else if (m == 3) { v.sb = [] }
+    }
+    else if (f == "K") {
+        var m2 = _vtArg(a, 0, 0)
+        if (m2 == 0) { _vtErase(v, v.cy, v.cx, v.cols) }
+        else if (m2 == 1) { _vtErase(v, v.cy, 0, v.cx + 1) }
+        else if (m2 == 2) { _vtErase(v, v.cy, 0, v.cols) }
+    }
+    else if (f == "X") { _vtErase(v, v.cy, v.cx, v.cx + _vtArg(a, 0, 1)) }
+    else if (f == "L") {
+        if (v.cy >= v.top && v.cy <= v.bot) { _vtScrollDown(v, v.cy, v.bot, min(_vtArg(a, 0, 1), v.bot - v.cy + 1)) }
+        v.cx = 0
+    }
+    else if (f == "M") {
+        if (v.cy >= v.top && v.cy <= v.bot) {
+            // видалені рядки не йдуть у прокрутку назад
+            var k = 0
+            var nDel = min(_vtArg(a, 0, 1), v.bot - v.cy + 1)
+            while (k < nDel) {
+                removeAt(v.lines, v.cy)
+                insert(v.lines, v.bot, _vtRow(v, v.blank))
+                k = k + 1
+            }
+        }
+        v.cx = 0
+    }
+    else if (f == "S") { _vtScrollUpNoSb(v, _vtArg(a, 0, 1)) }
+    else if (f == "T") { _vtScrollDown(v, v.top, v.bot, _vtArg(a, 0, 1)) }
+    else if (f == "P") {
+        var r = v.lines[v.cy]
+        var k2 = 0
+        var nd = min(_vtArg(a, 0, 1), v.cols - v.cx)
+        while (k2 < nd) {
+            removeAt(r.ch, v.cx)
+            removeAt(r.st, v.cx)
+            append(r.ch, " ")
+            append(r.st, v.blank)
+            k2 = k2 + 1
+        }
+        r.runs = null
+    }
+    else if (f == "@") {
+        var r2 = v.lines[v.cy]
+        var k3 = 0
+        var ni = min(_vtArg(a, 0, 1), v.cols - v.cx)
+        while (k3 < ni) {
+            insert(r2.ch, v.cx, " ")
+            insert(r2.st, v.cx, v.blank)
+            pop(r2.ch)
+            pop(r2.st)
+            k3 = k3 + 1
+        }
+        r2.runs = null
+    }
+    else if (f == "b") {
+        // повторити попередній символ
+        var px = v.cx - 1
+        if (v.wrapNext) { px = v.cx }
+        if (px >= 0) {
+            var pc = v.lines[v.cy].ch[px]
+            var k4 = 0
+            while (k4 < min(_vtArg(a, 0, 1), 1000)) { _vtPut(v, pc, false)  k4 = k4 + 1 }
+        }
+    }
+    else if (f == "r") {
+        var t = _vtArg(a, 0, 1) - 1
+        var b = _vtArg(a, 1, v.rows) - 1
+        if (t < b && b < v.rows) {
+            v.top = t
+            v.bot = b
+            v.cx = 0
+            v.cy = 0
+        }
+    }
+    else if (f == "s") { _vtSave(v) }
+    else if (f == "u") { _vtRestore(v) }
+    else if (f == "n") {
+        var q = _vtArg(a, 0, 0)
+        if (q == 6) { v.reply = v.reply + fromCharCode(27) + "[" + toString(v.cy + 1) + ";" + toString(v.cx + 1) + "R" }
+        if (q == 5) { v.reply = v.reply + fromCharCode(27) + "[0n" }
+    }
+    else if (f == "c") { v.reply = v.reply + fromCharCode(27) + "[?62;22c" }
+    else if (f == "t") {
+        // розмір вікна в символах
+        if (_vtArg(a, 0, 0) == 18) { v.reply = v.reply + fromCharCode(27) + "[8;" + toString(v.rows) + ";" + toString(v.cols) + "t" }
+    }
+}
+
+func _vtScrollUpNoSb(v, n) {
+    var k = 0
+    while (k < n) {
+        removeAt(v.lines, v.top)
+        insert(v.lines, v.bot, _vtRow(v, v.blank))
+        k = k + 1
+    }
+}
+
+func _vtSgr(v, a) {
+    if (len(a) == 0) { a = [0] }
+    var i = 0
+    while (i < len(a)) {
+        var p = a[i]
+        if (p < 0) { p = 0 }
+        if (p == 0) {
+            v.fg = -1
+            v.bg = -1
+            v.bold = false
+            v.ul = false
+            v.inv = false
+            v.dim = false
+            v.it = false
+        }
+        else if (p == 1) { v.bold = true }
+        else if (p == 2) { v.dim = true }
+        else if (p == 3) { v.it = true }
+        else if (p == 4) { v.ul = true }
+        else if (p == 7) { v.inv = true }
+        else if (p == 22) {
+            v.bold = false
+            v.dim = false
+        }
+        else if (p == 23) { v.it = false }
+        else if (p == 24) { v.ul = false }
+        else if (p == 27) { v.inv = false }
+        else if (p >= 30 && p <= 37) { v.fg = p - 30 }
+        else if (p == 39) { v.fg = -1 }
+        else if (p >= 40 && p <= 47) { v.bg = p - 40 }
+        else if (p == 49) { v.bg = -1 }
+        else if (p >= 90 && p <= 97) { v.fg = p - 90 + 8 }
+        else if (p >= 100 && p <= 107) { v.bg = p - 100 + 8 }
+        else if (p == 38 || p == 48) {
+            // 38;5;n - 256 кольорів, 38;2;r;g;b - будь-який (RGB)
+            var col = -1
+            if (i + 2 < len(a) && a[i + 1] == 5) {
+                col = clamp(a[i + 2], 0, 255)
+                i = i + 2
+            } else if (i + 1 < len(a) && a[i + 1] == 2) {
+                var j = i + 2
+                // 38:2::r:g:b (з порожнім "простором кольорів")
+                if (len(a) - j >= 4 && a[j] == -1) { j = j + 1 }
+                if (j + 2 < len(a)) {
+                    col = 0x1000000 + clamp(a[j], 0, 255) * 65536 + clamp(a[j + 1], 0, 255) * 256 + clamp(a[j + 2], 0, 255)
+                }
+                i = j + 2
+            }
+            if (p == 38) { v.fg = col } else { v.bg = col }
+        }
+        i = i + 1
+    }
+    _vtPen(v)
+}
+
+func _vtOsc(v) {
+    var s = v.osc
+    v.osc = ""
+    var semi = indexOf(s, ";")
+    var num = s
+    var data = ""
+    if (semi >= 0) {
+        num = substring(s, 0, semi)
+        data = substring(s, semi + 1, len(s) - semi - 1)
+    }
+    if (num == "0" || num == "2") {
+        v.title = data
+        // Windows (cmd.exe): позначка в PROMPT ставить заголовок "nx-ready;<тека>"
+        if (startsWith(data, "nx-ready")) {
+            var d = ""
+            if (len(data) > 9) { d = substring(data, 9, len(data) - 9) }
+            append(v.events, ["prompt", null, d])
+        }
+    } else if (num == "7") {
+        // file://хост/шлях - поточна тека шелу
+        if (startsWith(data, "file://")) {
+            var rest = substring(data, 7, len(data) - 7)
+            var sl = indexOf(rest, "/")
+            if (sl >= 0) { append(v.events, ["cwd", null, _vtUrlDecode(substring(rest, sl, len(rest) - sl))]) }
+        }
+    } else if (num == "633") {
+        // 633;D;код - команда завершилась (позначка нашого bashrc, як у VS Code)
+        if (startsWith(data, "D")) {
+            var code = null
+            if (len(data) > 2) { code = toInt(substring(data, 2, len(data) - 2)) }
+            append(v.events, ["prompt", code, ""])
+        }
+    }
+}
+
+func _vtUrlDecode(s) {
+    if (!contains(s, "%")) { return s }
+    // %XX - байти UTF-8: збираємо й декодуємо
+    var out = ""
+    var bytes = []
+    var i = 0
+    while (i < len(s)) {
+        if (s[i] == "%" && i + 2 < len(s)) {
+            append(bytes, _vtHex(substring(s, i + 1, 2)))
+            i = i + 3
+            continue
+        }
+        if (len(bytes) > 0) {
+            out = out + _vtUtf8(bytes)
+            bytes = []
+        }
+        out = out + s[i]
+        i = i + 1
+    }
+    if (len(bytes) > 0) { out = out + _vtUtf8(bytes) }
+    return out
+}
+
+func _vtHex(h) {
+    var n = 0
+    for c in [h[0], h[1]] {
+        var d = indexOf("0123456789abcdef", toLower(c))
+        if (d < 0) { d = 0 }
+        n = n * 16 + d
+    }
+    return n
+}
+
+func _vtUtf8(b) {
+    var out = ""
+    var i = 0
+    while (i < len(b)) {
+        var c = b[i]
+        var cp = c
+        var extra = 0
+        if (c >= 0xF0) {
+            cp = c - 0xF0
+            extra = 3
+        } else if (c >= 0xE0) {
+            cp = c - 0xE0
+            extra = 2
+        } else if (c >= 0xC0) {
+            cp = c - 0xC0
+            extra = 1
+        }
+        var k = 0
+        while (k < extra && i + 1 < len(b)) {
+            i = i + 1
+            cp = cp * 64 + (b[i] - 0x80)
+            k = k + 1
+        }
+        if (cp >= 0x10000) {
+            var u = cp - 0x10000
+            out = out + fromCharCode(0xD800 + toInt(u / 1024)) + fromCharCode(0xDC00 + u % 1024)
+        } else { out = out + fromCharCode(cp) }
+        i = i + 1
+    }
+    return out
+}
+
+// ---------- текст ----------
+
+func vtRowText(r) {
+    var s = join(r.ch, "")
+    return trimEnd(s)
+}
+
+func trimEnd(s) {
+    var n = len(s)
+    while (n > 0 && s[n - 1] == " ") { n = n - 1 }
+    return substring(s, 0, n)
+}
+
+// Рядок за абсолютним номером: спершу прокрутка назад, далі екран.
+func vtLine(v, i) {
+    if (i < len(v.sb)) { return v.sb[i] }
+    return v.lines[i - len(v.sb)]
+}
+
+func vtLineCount(v) { return len(v.sb) + v.rows }
+
+// Увесь текст (прокрутка назад + екран) - для пошуку й тестів.
+func vtText(v) {
+    var out = []
+    var i = 0
+    var n = vtLineCount(v)
+    while (i < n) {
+        append(out, vtRowText(vtLine(v, i)))
+        i = i + 1
+    }
+    while (len(out) > 0 && out[len(out) - 1] == "") { pop(out) }
+    return join(out, "\n")
+}
+
+// Текст між двома точками [рядок, стовпець] (включно з першою, без другої).
+func vtTextRange(v, a, b) {
+    if (a[0] > b[0] || (a[0] == b[0] && a[1] > b[1])) {
+        var t = a
+        a = b
+        b = t
+    }
+    var out = []
+    var i = a[0]
+    while (i <= b[0] && i < vtLineCount(v)) {
+        var r = vtLine(v, i)
+        var x0 = 0
+        var x1 = len(r.ch)
+        if (i == a[0]) { x0 = a[1] }
+        if (i == b[0]) { x1 = b[1] }
+        append(out, trimEnd(join(slice(r.ch, clamp(x0, 0, len(r.ch)), clamp(x1, 0, len(r.ch))), "")))
+        i = i + 1
+    }
+    return join(out, "\n")
+}
+
+// ---------- кольори ----------
+
+var VT_BASE = []
+
+func _vtBase() {
+    if (len(VT_BASE) > 0) { return VT_BASE }
+    // як у терміналі VS Code (темна тема)
+    VT_BASE = [rgb(0, 0, 0), rgb(205, 49, 49), rgb(13, 188, 121), rgb(229, 229, 16), rgb(36, 114, 200), rgb(188, 63, 188),
+        rgb(17, 168, 205), rgb(229, 229, 229), rgb(102, 102, 102), rgb(241, 76, 76), rgb(35, 209, 139), rgb(245, 245, 67),
+        rgb(59, 142, 234), rgb(214, 112, 214), rgb(41, 184, 219), rgb(255, 255, 255)]
+    return VT_BASE
+}
+
+var VT_CUBE = [0, 95, 135, 175, 215, 255]
+
+func vtColor(c, def) {
+    if (c < 0) { return def }
+    if (c >= 0x1000000) {
+        var x = c - 0x1000000
+        return rgb(toInt(x / 65536), toInt(x / 256) % 256, x % 256)
+    }
+    if (c < 16) {
+        // світла тема: білий текст на білому не видно - звичайний текст
+        if (c == 7 && THEME == "light") { return C_TEXT }
+        if (c == 15 && THEME == "light") { return C_TEXT }
+        return _vtBase()[c]
+    }
+    if (c < 232) {
+        var k = c - 16
+        return rgb(VT_CUBE[toInt(k / 36)], VT_CUBE[toInt(k / 6) % 6], VT_CUBE[k % 6])
+    }
+    var g = 8 + (c - 232) * 10
+    return rgb(g, g, g)
+}
+
+// Шматки рядка з однаковим стилем: [стовпець, текст, стиль]. Символи
+// поза основними (рамки, ієрогліфи, емодзі) - окремо, точно в своїй клітинці.
+func _vtRuns(r) {
+    if (r.runs != null) { return r.runs }
+    var runs = []
+    var n = len(r.ch)
+    var x = 0
+    while (x < n) {
+        var st = r.st[x]
+        var start = x
+        var text = ""
+        var ch0 = r.ch[x]
+        if (ch0 == "") {
+            x = x + 1
+            continue
+        }
+        if (len(ch0) > 1 || charCode(ch0) >= 0x2000) {
+            append(runs, [x, ch0, st])
+            x = x + 1
+            continue
+        }
+        while (x < n && r.st[x] == st) {
+            var c = r.ch[x]
+            if (c == "" || len(c) > 1 || charCode(c) >= 0x2000) { break }
+            text = text + c
+            x = x + 1
+        }
+        append(runs, [start, text, st])
+    }
+    r.runs = runs
+    return runs
+}
+
+// Намалювати рядок r у (x, y); cw - ширина клітинки, lh - висота рядка.
+func vtDrawRow(v, r, x, y, cw, lh, fs, selFrom, selTo) {
+    for run in _vtRuns(r) {
+        var s = v.styles[run[2]]
+        var fg = vtColor(s.fg, C_TEXT)
+        var bg = vtColor(s.bg, -1)
+        if (s.bold && s.fg >= 0 && s.fg < 8) { fg = vtColor(s.fg + 8, C_TEXT) }
+        if (s.inv) {
+            var t = fg
+            fg = bg
+            bg = t
+            if (fg < 0) { fg = C_BG }
+            if (bg < 0) { bg = C_TEXT }
+        }
+        if (s.dim) { fg = uiMixColor(fg, C_BG) }
+        var text = run[1]
+        var w = len(text) * cw
+        var wide = len(text) > 1 && charCode(text[0]) >= 0xD800 && charCode(text[0]) <= 0xDBFF
+        if (len(text) == 1 && _vtWide(charCode(text))) { wide = true }
+        if (wide) { w = cw * 2 }
+        var rx = x + run[0] * cw
+        if (bg >= 0) { surfaceRect(S, rx, y, w, lh, bg) }
+        if (trim(text) != "") { surfaceText(S, text, rx, y + 1, fs, fg, s.bold) }
+        if (s.ul) { surfaceRect(S, rx, y + lh - 2, w, 1, fg) }
+    }
+    if (selTo > selFrom) { surfaceRect(S, x + selFrom * cw, y, (selTo - selFrom) * cw, lh, 0x60000000 + C_ACCENT) }
+}
+
+// середнє двох кольорів (для "тьмяного" тексту)
+func uiMixColor(a, b) {
+    var ar = toInt(a / 65536) % 256
+    var ag = toInt(a / 256) % 256
+    var ab = a % 256
+    var br = toInt(b / 65536) % 256
+    var bg = toInt(b / 256) % 256
+    var bb = b % 256
+    return rgb(toInt((ar + br) / 2), toInt((ag + bg) / 2), toInt((ab + bb) / 2))
+}
+
+// ---------- клавіші ----------
+
+// Послідовність байтів для клавіші (як шле xterm). "" - не для терміналу.
+func vtKey(v, e) {
+    var k = e.key
+    var esc = fromCharCode(27)
+    if (e.ctrl && !e.alt && len(k) == 1) {
+        var c = charCode(toLower(k))
+        if (c >= 97 && c <= 122) { return fromCharCode(c - 96) }
+        if (k == "[" || k == "3") { return esc }
+        if (k == "\\" || k == "4") { return fromCharCode(28) }
+        if (k == "]" || k == "5") { return fromCharCode(29) }
+        if (k == "6") { return fromCharCode(30) }
+        if (k == "/" || k == "-" || k == "7") { return fromCharCode(31) }
+        if (k == " " || k == "2" || k == "@") { return fromCharCode(0) }
+        return ""
+    }
+    if (e.alt && len(k) == 1) {
+        if (e.shift) { return esc + toUpper(k) }
+        return esc + k
+    }
+    // модифікатори для стрілок і F-клавіш: 2 - Shift, 3 - Alt, 5 - Ctrl
+    var mod = 1
+    if (e.shift) { mod = mod + 1 }
+    if (e.alt) { mod = mod + 2 }
+    if (e.ctrl) { mod = mod + 4 }
+    var arrows = ["Up", "Down", "Right", "Left"]
+    var ai = indexOf(arrows, k)
+    if (ai < 0 && (k == "Home" || k == "End")) { ai = 0 }
+    if (ai >= 0) {
+        var letters = "ABCD"
+        var f = letters[max(0, indexOf(arrows, k))]
+        if (k == "Home") { f = "H" }
+        if (k == "End") { f = "F" }
+        if (mod > 1) { return esc + "[1;" + toString(mod) + f }
+        if (v.appCursor) { return esc + "O" + f }
+        return esc + "[" + f
+    }
+    if (k == "Enter") {
+        if (e.alt) { return esc + "\r" }
+        return "\r"
+    }
+    if (k == "Backspace") {
+        if (e.alt) { return esc + fromCharCode(127) }
+        if (e.ctrl) { return fromCharCode(8) }
+        return fromCharCode(127)
+    }
+    if (k == "Tab") {
+        if (e.shift) { return esc + "[Z" }
+        return "\t"
+    }
+    if (k == "Escape") { return esc }
+    var tilde = ["Insert", "2", "Delete", "3", "PageUp", "5", "PageDown", "6", "F5", "15", "F6", "17", "F7", "18", "F8", "19",
+        "F9", "20", "F10", "21", "F11", "23", "F12", "24"]
+    var ti = 0
+    while (ti < len(tilde)) {
+        if (tilde[ti] == k) {
+            if (mod > 1) { return esc + "[" + tilde[ti + 1] + ";" + toString(mod) + "~" }
+            return esc + "[" + tilde[ti + 1] + "~"
+        }
+        ti = ti + 2
+    }
+    var fk = indexOf(["F1", "F2", "F3", "F4"], k)
+    if (fk >= 0) {
+        var pqrs = "PQRS"
+        if (mod > 1) { return esc + "[1;" + toString(mod) + pqrs[fk] }
+        return esc + "O" + pqrs[fk]
+    }
+    return ""
+}

@@ -241,6 +241,7 @@ func openFile(path) {
         var ed = newEditor(text, path)
         ed.plain = fileKind(path) == "text"
         mapSet(app.editors, path, ed)
+        mapSet(_mtimes, path, fileModified(path))
         // при відновленні сесії - лише активний файл (не 15 перевірок разом)
         if (!_restoring) { lintFile(path) }
     }
@@ -299,9 +300,61 @@ func setMode(mode) {
     openPath(list[0])
 }
 
+// Час зміни відкритих файлів, коли IDE їх читала чи писала востаннє:
+// інший час - файл змінили ззовні (термінал, git, anylint --fix).
+var _mtimes = newMap()
+var _lastDiskCheck = 0
+
+// Команда в терміналі завершилась: стан git, нові файли, змінені файли.
+func afterExternalChange() {
+    app.git.stale = true
+    refreshFiles()
+    checkDiskChanges()
+}
+
+// Відкриті файли, змінені на диску: без незбережених правок - перечитати
+// (Ctrl+Z повертає як було), з правками - лише попередити.
+func checkDiskChanges() {
+    _lastDiskCheck = timeMs()
+    for p in mapKeys(app.editors) {
+        var m = fileModified(p)
+        if (!mapHas(_mtimes, p)) {
+            mapSet(_mtimes, p, m)
+            continue
+        }
+        if (m == mapGet(_mtimes, p) || m < 0) { continue }
+        mapSet(_mtimes, p, m)
+        var ed = mapGet(app.editors, p)
+        var text = normalizeText(readFile(p))
+        if (text == edText(ed)) { continue }
+        if (ed.dirty) {
+            setStatus("«" + fileName(p) + "» змінено ззовні, але тут є незбережені правки - лишаю твою версію")
+            continue
+        }
+        var top = ed.top
+        edReplaceLines(ed, split(text, "\n"))
+        ed.dirty = false
+        ed.top = clamp(top, 0, max(0, len(ed.lines) - 1))
+        lintFile(p)
+        setStatus("«" + fileName(p) + "» змінено ззовні - перечитано (Ctrl+Z - як було)")
+    }
+    for p2 in mapKeys(app.blocks) {
+        var m2 = fileModified(p2)
+        if (!mapHas(_mtimes, p2)) {
+            mapSet(_mtimes, p2, m2)
+            continue
+        }
+        if (m2 == mapGet(_mtimes, p2) || m2 < 0) { continue }
+        mapSet(_mtimes, p2, m2)
+        var ws = mapGet(app.blocks, p2)
+        if (!ws.dirty) { mapSet(app.blocks, p2, newBlocksWs(p2, readFile(p2))) }
+    }
+}
+
 func saveEditor(ed) {
     if (ed == null || !ed.dirty) { return }
     writeFile(ed.path, edText(ed))
+    mapSet(_mtimes, ed.path, fileModified(ed.path))
     ed.dirty = false
     lintFile(ed.path)
     app.git.stale = true
@@ -313,6 +366,7 @@ func saveAll() {
         var ws = mapGet(app.blocks, p)
         if (ws.dirty) {
             writeFile(ws.path, stacksToJson(ws.stacks))
+            mapSet(_mtimes, ws.path, fileModified(ws.path))
             ws.dirty = false
         }
     }
@@ -729,7 +783,7 @@ func pollUpdate() {
     if (app.updRunning && !app.term.running) {
         app.updRunning = false
         var ok = false
-        for l in app.term.lines { if (contains(l[0], "Готово: nx оновлено")) { ok = true } }
+        if (contains(termText(app.term), "Готово: nx оновлено")) { ok = true }
         if (ok) {
             app.updInfo = null
             app.updDone = true
@@ -868,11 +922,10 @@ func gitAction(id) {
         app.panelTab = "terminal"
         app.focus = "terminal"
         if (app.term.running) { termStop(app.term) }
-        app.term.cwd = app.dir
         if (id == "git.push") {
             // гілка без upstream - одразу з -u, як пропонує сам git
-            if (g.upstream) { termExec(app.term, "git push") } else { termExec(app.term, "git push -u origin " + g.branch) }
-        } else { termExec(app.term, "git pull") }
+            if (g.upstream) { termRunIn(app.term, app.dir, "git push") } else { termRunIn(app.term, app.dir, "git push -u origin " + g.branch) }
+        } else { termRunIn(app.term, app.dir, "git pull") }
     }
     else if (startsWith(id, "git.file:")) {
         var p = substring(id, 9, len(id) - 9)
@@ -893,6 +946,7 @@ func reloadFromDisk() {
     for p in mapKeys(app.editors) {
         var ed = mapGet(app.editors, p)
         if (fileExists(p)) { edSetText(ed, readFile(p)) }
+        mapSet(_mtimes, p, fileModified(p))
         ed.dirty = false
     }
     for p2 in mapKeys(app.blocks) {
@@ -2983,6 +3037,8 @@ func onMouseDown(e) {
     if (id == "term.area") {
         app.focus = "terminal"
         app.con.focused = false
+        termMouseDown(app.term, e.x, e.y)
+        app.drag = "term"
         return
     }
     if (id == "con.input") {
@@ -3006,6 +3062,7 @@ func onMouseUp(e) {
     if (app.dragActive && app.dragKind == "file") { dropFile(app.dragSrc, dropTarget(id)) }
     else if (uiPressedId != "" && id == uiPressedId) { doAction(id) }
     uiPressedId = ""
+    if (app.drag == "term") { termMouseUp(app.term) }
     app.drag = ""
     app.dragSrc = ""
     app.dragActive = false
@@ -3089,6 +3146,7 @@ func onMouseMove(e) {
         if (e.y < ed.y) { edScroll(ed, -1) }
         if (e.y > ed.y + ed.h) { edScroll(ed, 1) }
     }
+    if (app.drag == "term") { termMouseMove(app.term, e.x, e.y) }
     if (app.drag == "split") {
         app.consoleH = surfaceHeight(S) - STATUS_H - e.y
     }
@@ -3128,7 +3186,7 @@ func onWheel(e) {
     } else if (id == "git.diff") {
         app.git.scroll = max(0, app.git.scroll + e.dy * 3)
     } else if (id == "term.area") {
-        app.term.scroll = max(0, app.term.scroll - e.dy * 3)
+        termScroll(app.term, -e.dy * 3)
     }
 }
 
@@ -3170,11 +3228,13 @@ func onKey(e) {
     }
     // термінал у фокусі: його клавіші (Enter, Ctrl+C, ↑/↓...) - йому
     if (app.focus == "terminal" && app.panelOpen && app.panelTab == "terminal") {
-        if (k == "Escape") {
+        // Escape у vim/less/запущеній програмі - їй; біля запрошувача - назад у редактор
+        var toProg = termIsPty(app.term) && app.term.vt != null && (app.term.vt.altOn || app.term.running)
+        if (k == "Escape" && !toProg) {
             app.focus = "editor"
             return
         }
-        if (termKey(app.term, e)) { return }
+        if (!termSkipKey(e) && termKey(app.term, e)) { return }
     }
     if (e.ctrl && (k == "`" || k == "'")) {
         doAction("terminal")
@@ -3329,7 +3389,7 @@ func onText(e) {
         return
     }
     if (app.focus == "terminal" && app.panelOpen && app.panelTab == "terminal") {
-        app.term.input = app.term.input + e.text
+        termTextInput(app.term, e.text)
         return
     }
     if (app.active == "") { return }
@@ -4048,11 +4108,22 @@ func _restoreCursor(path, cursors) {
     ed.wantCol = ed.cx
 }
 
+// Клавіші IDE, які не йдуть у термінал навіть коли він у фокусі (як у VS Code).
+func termSkipKey(e) {
+    var k = e.key
+    if (e.ctrl && e.shift && toLower(k) == "p") { return true }
+    if (e.ctrl && !e.shift && !e.alt && (k == "p" || k == "b" || k == "j" || k == "`" || k == "'")) { return true }
+    if (k == "F5" || k == "F10" || k == "F11") { return true }
+    return false
+}
+
 // Один крок циклу: дочекатися подій (wait мс, -1 - безкінечно), обробити
 // ВСІ, що назбирались, і лише потім один раз перемалювати.
 // false - вікно закрили.
 func ideStep(wait) {
-    if ((app.con.running || app.term.running || len(app.lintJobs) > 0) && (wait < 0 || wait > 40)) { wait = 40 }
+    if ((app.con.running || len(app.lintJobs) > 0) && (wait < 0 || wait > 40)) { wait = 40 }
+    var tw = termWait(app.term)
+    if (tw >= 0 && (wait < 0 || wait > tw)) { wait = tw }
     if (app.con.running && app.stageOpen && (wait < 0 || wait > 16)) { wait = 16 }
     if (app.demo != null && (wait < 0 || wait > 16)) { wait = 16 }
     // анімація (наведення, конфеті...) - наступний кадр через ~16 мс
@@ -4069,12 +4140,17 @@ func ideStep(wait) {
         if (conPoll(app.con)) { dirty = true }
         afterPoll()
     }
-    if (app.term.running && termPoll(app.term)) {
-        dirty = true
-        // команда (git push/pull, ...) завершилась - стан git міг змінитись
-        if (!app.term.running) { app.git.stale = true }
+    if (tw >= 0) {
+        var wasRunning = app.term.running
+        if (termPoll(app.term)) {
+            dirty = true
+            // команда (git push/pull, ...) завершилась - стан git і файли могли змінитись
+            if (wasRunning && !app.term.running) { afterExternalChange() }
+        }
     }
     if (len(app.lintJobs) > 0 && pollLint()) { dirty = true }
+    // раз на 2 с - чи не змінили відкриті файли ззовні
+    if (timeMs() - _lastDiskCheck > 2000) { checkDiskChanges() }
     if (pollUpdate()) { dirty = true }
     // git: після збереження/команди - перечитати стан (не частіше ніж раз на 0.7 с)
     if (app.git.stale && app.git.available && timeMs() - app.git.last > 700) {
@@ -4147,7 +4223,7 @@ func ideShutdown() {
     saveAll()
     saveSession()
     if (app.con.running) { conStop(app.con) }
-    if (app.term.running) { termStop(app.term) }
+    termClose(app.term)
 }
 
 func main() {
