@@ -150,3 +150,19 @@ func iconBranch(x, y, s, c) {
     _ln(x + 17 * a, y + 11 * a, x + 17 * a, y + 13 * a, c)
     _ln(x + 17 * a, y + 13 * a, x + 8 * a, y + 16 * a, c)
 }
+
+// Скасувати зміни: стрілка-дуга проти годинникової (дзеркальна до «оновити»).
+func iconUndo(x, y, s, c) {
+    var a = s / 16
+    var cx = x + 8 * a
+    var cy = y + 8 * a
+    var k = 0
+    while (k < 10) {
+        var a1 = 3.14159 - 0.6 - k * 0.5
+        var a2 = 3.14159 - 0.6 - (k + 1) * 0.5
+        _ln(cx + cos(a1) * 5 * a, cy + sin(a1) * 5 * a, cx + cos(a2) * 5 * a, cy + sin(a2) * 5 * a, c)
+        k = k + 1
+    }
+    _ln(cx - 5 * a, cy - 4 * a, cx - 5 * a, cy + 0 * a, c)
+    _ln(cx - 5 * a, cy + 0 * a, cx - 1 * a, cy + 0 * a, c)
+}

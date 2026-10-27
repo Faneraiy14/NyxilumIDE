@@ -4,7 +4,7 @@
 // NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_git.nx <тека> <тека-для-png>
 import "helpers.nx"
 import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, doAction, draw, openPath, currentEditor, saveAll }
-import "../src/git.nx" { gitRun }
+import "../src/git.nx" { gitRun, gitRefresh }
 
 func main() {
     var dir = scriptArgs()[0]
@@ -81,6 +81,65 @@ func main() {
     check(app.git.branch == defBranch && currentEditor().lines[1] == "    print(1)", "перемкнулись на " + defBranch + " - файл перечитано")
     clickId("git.commit")
     check(app.dialog == null && app.git.msg == "Нема змін для коміту", "без змін - коміт не пропонується")
+
+    // вибір файлів: два змінені, у коміт - лише один
+    writeFile(dir + "/а.nx", "func main() { print(\"а\") }\n")
+    writeFile(dir + "/б.nx", "func main() { print(\"б\") }\n")
+    app.git.stale = true
+    t0 = timeMs()
+    while (timeMs() - t0 < 3000 && len(app.git.files) < 2) { ideStep(50) }
+    app.side = "git"
+    draw()
+    check(len(app.git.files) == 2 && app.git.staged == 0, "два нові файли, нічого не вибрано")
+    clickId("git.stage:" + dir + "/а.nx")
+    check(app.git.staged == 1, "+ - файл підготовлено до коміту")
+    draw()
+    check(uiFind("git.unstage:" + dir + "/а.nx") != null, "розділ «Підготовлено» з кнопкою −")
+    shot("g03_staged")
+    clickId("git.commit")
+    check(app.dialog != null && contains(app.dialog.title, "вибрано 1 з 2"), "діалог коміту каже, скільки вибрано")
+    typeText("Лише а")
+    key("Enter", false, false)
+    step()
+    var shown = gitRun(dir, ["-c", "core.quotePath=false", "show", "--name-only", "--format="])[1]
+    check(contains(shown, "а.nx") && !contains(shown, "б.nx") && len(app.git.files) == 1, "коміт - лише вибраний файл")
+    clickId("git.stageall")
+    check(app.git.staged == 1, "+ усі")
+    clickId("git.unstageall")
+    check(app.git.staged == 0, "− усі")
+    // скасувати зміни: новий файл - видаляється, змінений - як у коміті
+    clickId("git.discard:" + dir + "/б.nx")
+    check(app.dialog != null && app.dialog.action == "gitdiscard", "↺ питає підтвердження")
+    key("Enter", false, false)
+    step()
+    check(!fileExists(dir + "/б.nx") && len(app.git.files) == 0, "↺ нового файла - видалено")
+    openPath(dir + "/а.nx")
+    currentEditor().lines[0] = "зіпсовано"
+    currentEditor().dirty = true
+    saveAll()
+    gitRefresh(app.git, dir)
+    draw()
+    clickId("git.discard:" + dir + "/а.nx")
+    key("Enter", false, false)
+    step()
+    check(currentEditor().lines[0] == "func main() { print(\"а\") }", "↺ зміненого - як у коміті, редактор перечитано")
+    // історія
+    clickId("git.tab:history")
+    check(len(app.git.log) >= 2 && app.git.log[0][4] == "Лише а", "історія комітів")
+    draw()
+    shot("g04_history")
+    clickId("git.commitsel:" + app.git.log[0][0])
+    check(len(app.git.logFiles) == 1 && app.git.logFiles[0][1] == "а.nx", "файли коміту")
+    draw()
+    clickId("git.logfile:а.nx")
+    var added = false
+    for r in app.git.diff { if (r[0] == "+" && contains(r[1], "print(\"а\")")) { added = true } }
+    check(added, "що змінилось у файлі в цьому коміті")
+    draw()
+    shot("g05_commit_diff")
+    clickId("git.logback")
+    clickId("git.logback")
+    check(app.git.logSel == "", "назад до списку комітів")
     ideShutdown()
     print("GIT: УСЕ ГАРАЗД")
 }

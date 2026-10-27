@@ -913,7 +913,9 @@ func gitAction(id) {
         if (len(g.files) == 0) { g.msg = "Нема змін для коміту" }
         else {
             g.msg = ""
-            openDialog("Коміт: що змінилось? (" + toString(len(g.files)) + " файл.)", "", "gitcommit")
+            var what = toString(len(g.files)) + " файл."
+            if (g.staged > 0) { what = "вибрано " + toString(g.staged) + " з " + toString(len(g.files)) }
+            openDialog("Коміт: що змінилось? (" + what + ")", "", "gitcommit")
         }
     }
     else if (id == "git.push" || id == "git.pull") {
@@ -939,6 +941,50 @@ func gitAction(id) {
         if (fileExists(p) && fileKind(p) != "blocks") { openPath(p) }
     }
     else if (id == "git.back") { g.sel = "" }
+    else if (startsWith(id, "git.sfile:")) { gitAction("git.file:" + substring(id, 10, len(id) - 10)) }
+    else if (startsWith(id, "git.tab:")) {
+        g.tab = substring(id, 8, len(id) - 8)
+        g.listScroll = 0
+        g.scroll = 0
+        if (g.tab == "history") {
+            g.log = gitLog(g)
+            g.logSel = ""
+            g.logFile = ""
+        }
+    }
+    else if (id == "git.stageall" || startsWith(id, "git.stage:")) {
+        saveAll()
+        var sp = ""
+        if (id != "git.stageall") { sp = substring(id, 10, len(id) - 10) }
+        var sr = gitStage(g, sp)
+        if (sr[0] != 0) { g.msg = split(trim(sr[2]), "\n")[0] } else { g.msg = "" }
+        gitRefresh(g, app.dir)
+    }
+    else if (id == "git.unstageall" || startsWith(id, "git.unstage:")) {
+        var up = ""
+        if (id != "git.unstageall") { up = substring(id, 12, len(id) - 12) }
+        var ur = gitUnstage(g, up)
+        if (ur[0] != 0) { g.msg = split(trim(ur[2]), "\n")[0] } else { g.msg = "" }
+        gitRefresh(g, app.dir)
+    }
+    else if (startsWith(id, "git.discard:")) {
+        var dp = substring(id, 12, len(id) - 12)
+        openDialog("Скасувати зміни в «" + fileName(dp) + "»?", "Файл стане як в останньому коміті (новий файл - видалиться). Це не можна скасувати.", "gitdiscard")
+        app.dialog.target = dp
+    }
+    else if (startsWith(id, "git.commitsel:")) {
+        g.logSel = substring(id, 14, len(id) - 14)
+        g.logFiles = gitCommitFiles(g, g.logSel)
+        g.logFile = ""
+    }
+    else if (startsWith(id, "git.logfile:")) {
+        g.logFile = substring(id, 12, len(id) - 12)
+        g.diff = gitCommitDiff(g, g.logSel, g.logFile)
+        g.scroll = 0
+    }
+    else if (id == "git.logback") {
+        if (g.logFile != "") { g.logFile = "" } else { g.logSel = "" }
+    }
 }
 
 // Після перемикання гілки файли на диску інші - відкриті редактори перечитати.
@@ -1117,6 +1163,10 @@ func openDialog(title, text, action) {
         okLabel = "Видалити"
         suffix = ""
     }
+    if (action == "gitdiscard") {
+        okLabel = "Скасувати зміни"
+        suffix = ""
+    }
     if (action == "newblock" || action == "newext" || action == "gitcommit" || action == "gitbranch") { suffix = "" }
     if (action == "gitcommit") { okLabel = "Коміт" }
     if (action == "renamesym") {
@@ -1135,6 +1185,22 @@ func closeDialog(ok) {
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
     if (ok && d.action == "delete") { deletePath(d.target) }
+    if (ok && d.action == "gitdiscard") {
+        var dr = gitDiscard(app.git, d.target)
+        if (dr[0] != 0) { app.git.msg = split(trim(dr[2]), "\n")[0] }
+        else {
+            app.git.msg = ""
+            if (!fileExists(d.target) && indexOf(app.tabs, d.target) >= 0) {
+                mapRemove(app.editors, d.target)
+                closeTab(d.target)
+            }
+            checkDiskChanges()
+            refreshFiles()
+            setStatus("Зміни в «" + fileName(d.target) + "» скасовано")
+        }
+        app.git.sel = ""
+        gitRefresh(app.git, app.dir)
+    }
     if (ok && d.action == "newext" && trim(d.text) != "") {
         var edir = extCreateTemplate(userExtDir(), d.text)
         reloadExtensions()
@@ -1179,11 +1245,16 @@ func drawDialog() {
     var y = toInt((H - h) / 2)
     surfaceRoundRect(S, x, y, w, h, 10, C_PANEL)
     surfaceText(S, uiFit(d.title, w - 40, 20), x + 20, y + 18, 20, C_TEXT, true)
-    if (d.action == "delete") {
+    if (dialogIsConfirm(d)) {
         // підтвердження: без поля вводу
-        surfaceText(S, uiFit(d.text, w - 40, 16), x + 20, y + 64, 16, C_SUBTEXT)
-        uiButton("dialog.cancel", "Скасувати", x + w - 250, y + h - 52, 110, 34, "normal")
-        uiButton("dialog.ok", d.okLabel, x + w - 130, y + h - 52, 110, 34, "danger")
+        var ty = y + 60
+        for l in wrapLines(d.text, w - 40, 15) {
+            surfaceText(S, l, x + 20, ty, 15, C_SUBTEXT)
+            ty = ty + 19
+        }
+        var okW = max(110, uiButtonW(d.okLabel))
+        uiButton("dialog.cancel", "Скасувати", x + w - 30 - okW - 110, y + h - 52, 110, 34, "normal")
+        uiButton("dialog.ok", d.okLabel, x + w - 20 - okW, y + h - 52, okW, 34, "danger")
         return
     }
     surfaceRoundRect(S, x + 20, y + 58, w - 40, 36, 6, C_ACCENT)
@@ -1198,6 +1269,9 @@ func drawDialog() {
     uiButton("dialog.ok", d.okLabel, x + w - 130, y + h - 52, 110, 34, "primary")
 }
 
+// Діалог-питання «так/ні» (без поля вводу).
+func dialogIsConfirm(d) { return d.action == "delete" || d.action == "gitdiscard" }
+
 func dialogKey(e) {
     var d = app.dialog
     if (e.key == "Enter") {
@@ -1208,7 +1282,7 @@ func dialogKey(e) {
         closeDialog(false)
         return
     }
-    if (d.action == "delete") { return }
+    if (dialogIsConfirm(d)) { return }
     if (e.key == "Backspace" && len(d.text) > 0) { d.text = uiDropLast(d.text) }
 }
 
@@ -1888,6 +1962,7 @@ func drawSidebar(x, y, w, h) {
         if (app.git.stale || timeMs() - app.git.last > 3000) { gitRefresh(app.git, app.dir) }
         uiRegion("git.panel", x, cy, w, ch)
         drawGit(app.git, x, cy, w, ch)
+        if (GIT_TIP != "") { app.tooltip = GIT_TIP }
     }
     else if (app.side == "settings") { drawSettingsView(x, cy, w, ch) }
 }
@@ -3183,6 +3258,8 @@ func onWheel(e) {
         app.con.scroll = max(0, app.con.scroll - e.dy * 3)
     } else if (startsWith(id, "ext.")) {
         app.extScroll = max(0, app.extScroll + e.dy * 48)
+    } else if (id == "git.list") {
+        app.git.listScroll = max(0, app.git.listScroll + e.dy * 48)
     } else if (id == "git.diff") {
         app.git.scroll = max(0, app.git.scroll + e.dy * 3)
     } else if (id == "term.area") {
@@ -3360,7 +3437,7 @@ func onKey(e) {
 
 func onText(e) {
     if (app.dialog != null) {
-        if (app.dialog.action == "delete") { return }
+        if (dialogIsConfirm(app.dialog)) { return }
         var newKind = app.dialog.action == "newcode" || app.dialog.action == "newblocks"
         if (!newKind || (e.text != "/" && e.text != "\\")) { app.dialog.text = app.dialog.text + e.text }
         return
