@@ -36,7 +36,8 @@ func main() {
     check(app.panelTab == "terminal" && !app.updRunning, "«Оновити» - у терміналі (тут оболонка вимкнена)")
     clickId("upd.later")
     check(app.updInfo == null, "«Пізніше» ховає плашку")
-    app.side = "settings"
+    app.settingsOpen = true
+    app.setSection = "update"
     draw()
     check(uiFind("upd.check") != null, "у Налаштуваннях - версія й «Перевірити зараз»")
     shot("u03_settings")

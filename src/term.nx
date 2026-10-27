@@ -56,6 +56,12 @@ struct Terminal {
 var TERM_FS = 15
 var TERM_LH = 19
 
+// Розмір шрифту терміналу (з налаштувань).
+func termSetFont(size) {
+    TERM_FS = size
+    TERM_LH = size + 4
+}
+
 func newTerminal(dir) {
     return Terminal { lines: [], proc: null, outLen: 0, errLen: 0, running: false, cwd: dir, root: dir, input: "",
         history: [], histIdx: -1, scroll: 0, focused: false, x: 0, y: 0, w: 0, h: 0,

@@ -242,6 +242,10 @@ func edInsert(ed, text) {
     ed.wantCol = ed.cx
 }
 
+// З налаштувань IDE: ширина відступу й автозакриття дужок/лапок.
+var ED_TAB = 4
+var ED_AUTOCLOSE = true
+
 func edBackspace(ed) {
     _hlFrom(ed, ed.cy - 1)
     if (edHasSel(ed)) { edDeleteSel(ed)  return }
@@ -249,13 +253,13 @@ func edBackspace(ed) {
     if (ed.cx > 0) {
         var n = 1
         // Лише пробіли перед курсором - стираємо до попереднього кроку відступу.
-        if (leadingSpaces(line) >= ed.cx && ed.cx >= 4) {
-            n = ed.cx % 4
-            if (n == 0) { n = 4 }
+        if (leadingSpaces(line) >= ed.cx && ed.cx >= ED_TAB) {
+            n = ed.cx % ED_TAB
+            if (n == 0) { n = ED_TAB }
         } else {
             // Порожня пара () "" [] {} - стираємо обидва символи.
             var prev = line[ed.cx - 1]
-            if (ed.cx < len(line)) {
+            if (ed.cx < len(line) && ED_AUTOCLOSE) {
                 var nxt = line[ed.cx]
                 if ((prev == "(" && nxt == ")") || (prev == "[" && nxt == "]") || (prev == "{" && nxt == "}") || (prev == "\"" && nxt == "\"")) {
                     ed.lines[ed.cy] = cut(line, 0, ed.cx - 1) + cut(line, ed.cx + 1, len(line))
@@ -292,7 +296,7 @@ func edDelete(ed) {
 }
 
 // Enter з автовідступом: новий рядок отримує відступ поточного, після "{" -
-// ще +4, а якщо курсор стоїть між { і } - дужка переїжджає на свій рядок.
+// ще +ED_TAB, а якщо курсор стоїть між { і } - дужка переїжджає на свій рядок.
 func edNewline(ed) {
     _hlFrom(ed, ed.cy - 1)
     edDeleteSel(ed)
@@ -303,7 +307,7 @@ func edNewline(ed) {
     var after = trim(cut(line, ed.cx, len(line)))
     var extra = 0
     var tb = trim(before)
-    if (len(tb) > 0 && (endsWith(tb, "{") || endsWith(tb, "[") || endsWith(tb, "("))) { extra = 4 }
+    if (len(tb) > 0 && (endsWith(tb, "{") || endsWith(tb, "[") || endsWith(tb, "("))) { extra = ED_TAB }
     ed.lines[ed.cy] = before
     var pad = repeat(" ", indent + extra)
     if (extra > 0 && (startsWith(after, "}") || startsWith(after, "]") || startsWith(after, ")"))) {
@@ -331,21 +335,21 @@ func edIndent(ed, outdent) {
     var multi = edHasSel(ed) && ys[1] > ys[0]
     if (!multi && !outdent) {
         edDeleteSel(ed)
-        edInsert(ed, repeat(" ", 4 - ed.cx % 4))
+        edInsert(ed, repeat(" ", ED_TAB - ed.cx % ED_TAB))
         return
     }
     var y = ys[0]
     while (y <= ys[1]) {
         var line = ed.lines[y]
         if (outdent) {
-            var n = min(4, leadingSpaces(line))
+            var n = min(ED_TAB, leadingSpaces(line))
             ed.lines[y] = cut(line, n, len(line))
             if (y == ed.cy) { ed.cx = max(0, ed.cx - n) }
             if (y == ed.ay) { ed.ax = max(0, ed.ax - n) }
         } else if (len(trim(line)) > 0) {
-            ed.lines[y] = "    " + line
-            if (y == ed.cy) { ed.cx = ed.cx + 4 }
-            if (y == ed.ay) { ed.ax = ed.ax + 4 }
+            ed.lines[y] = repeat(" ", ED_TAB) + line
+            if (y == ed.cy) { ed.cx = ed.cx + ED_TAB }
+            if (y == ed.ay) { ed.ax = ed.ax + ED_TAB }
         }
         y = y + 1
     }
@@ -398,13 +402,13 @@ func edType(ed, t) {
     var line = ed.lines[ed.cy]
     var nxt = ""
     if (ed.cx < len(line)) { nxt = line[ed.cx] }
-    if (!edHasSel(ed) && (t == ")" || t == "]" || t == "}" || t == "\"") && nxt == t) {
+    if (ED_AUTOCLOSE && !edHasSel(ed) && (t == ")" || t == "]" || t == "}" || t == "\"") && nxt == t) {
         ed.cx = ed.cx + 1
         return
     }
-    if (t == "}" && !edHasSel(ed) && leadingSpaces(line) == len(line) && len(line) >= 4) {
-        ed.lines[ed.cy] = repeat(" ", len(line) - 4)
-        ed.cx = len(line) - 4
+    if (t == "}" && !edHasSel(ed) && leadingSpaces(line) == len(line) && len(line) >= ED_TAB) {
+        ed.lines[ed.cy] = repeat(" ", len(line) - ED_TAB)
+        ed.cx = len(line) - ED_TAB
     }
     var freeAfter = nxt == "" || nxt == " " || nxt == ")" || nxt == "]" || nxt == "}" || nxt == ","
     var close = ""
@@ -415,6 +419,20 @@ func edType(ed, t) {
         var prevCh = ""
         if (ed.cx > 0) { prevCh = line[ed.cx - 1] }
         if (prevCh != "\\" && !isIdentPart(charCode(prevCh + " "))) { close = "\"" }
+    }
+    if (!ED_AUTOCLOSE) { close = "" }
+    // виділено одним рядком і набрано ( [ { " - обгорнути виділене
+    if (close != "" && edHasSel(ed)) {
+        var r = edSelRange(ed)
+        if (r[0] == r[2]) {
+            var inner = edSelText(ed)
+            edDeleteSel(ed)
+            edInsert(ed, t + inner + close)
+            ed.ay = ed.cy
+            ed.ax = ed.cx - 1 - len(inner)
+            ed.cx = ed.cx - 1
+            return
+        }
     }
     if (close != "" && freeAfter && !edHasSel(ed)) {
         edInsert(ed, t + close)

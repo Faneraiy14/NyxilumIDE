@@ -119,9 +119,10 @@ func main() {
     // рівень "середній": гайд не нав'язується, а пропонується з "Не треба"
     app.cfg.seen = []
     clickId("act:settings")
-    check(app.side == "settings", "налаштування відкрито")
+    check(app.settingsOpen, "налаштування відкрито (сторінка)")
     shot("s01_settings")
     // масштаб інтерфейсу: 150% - логічне вікно менше, все більше
+    clickId("set.sec:look")
     clickId("set.scale:150")
     check(app.cfg.uiScale == 150 && surfaceWidth(S) == 853, "масштаб 150%")
     draw()
@@ -133,6 +134,7 @@ func main() {
     draw()
     shot("s01c_light")
     clickId("act:settings")
+    check(app.settingsOpen && app.setSection == "look", "налаштування - той самий розділ")
     clickId("set.theme:contrast")
     check(C_BG == 0 && C_ACCENT == 0xffd700, "контрастна тема")
     draw()
@@ -141,6 +143,17 @@ func main() {
     check(app.cfg.theme == "dark" && C_BG == 0x1e1e2e, "темна тема знову")
     clickId("set.scale:100")
     check(app.cfg.uiScale == 100 && surfaceWidth(S) == 1280, "масштаб назад 100%")
+    // пошук по всіх розділах
+    clickId("set.search")
+    typeText("шторк")
+    step()
+    draw()
+    check(uiFind("set.sideoverlay") != null && uiFind("set.scale:100") == null, "пошук: «шторк» - лише налаштування шторки")
+    shot("s01e_search")
+    key("Escape", false, false)
+    step()
+    check(app.setSearch == "" && app.settingsOpen, "Escape - очистити пошук")
+    clickId("set.sec:main")
     clickId("set.level:middle")
     check(app.cfg.level == "middle" && app.cfg.blocks && app.cfg.lessons, "середній: блоки й уроки ввімкнено")
     clickId("act:history")

@@ -117,6 +117,10 @@ struct App {
     updManual: bool
     fpick: any
     sideLast: string
+    settingsOpen: bool
+    setSection: string
+    setSearch: string
+    setScroll: i32
 }
 
 struct FolderPick {
@@ -250,6 +254,7 @@ func openFile(path) {
         if (fileExists(path)) { text = readFile(path) }
         var ed = newEditor(text, path)
         ed.plain = fileKind(path) == "text"
+        ed.fontSize = app.cfg.edFont
         mapSet(app.editors, path, ed)
         mapSet(_mtimes, path, fileModified(path))
         // при відновленні сесії - лише активний файл (не 15 перевірок разом)
@@ -264,6 +269,7 @@ func openFile(path) {
 // Відкрити будь-який файл у відповідному редакторі.
 func openPath(path) {
     saveAll()
+    app.settingsOpen = false
     app.exFocus = false
     if (fileKind(path) == "blocks") { openBlocks(path) } else { openFile(path) }
 }
@@ -1755,120 +1761,307 @@ func drawLevelAsk(W, H) {
     }
 }
 
-// Перемикач у Налаштуваннях.
-func _toggle(id, label, on, x, y, w) {
-    if (uiHover(x, y, w, 30)) { surfaceRoundRect(S, x, y, w, 30, 6, C_BG) }
-    var tx = x + w - 52
-    // повзунок їде плавно
-    var target = 0
-    if (on) { target = 1 }
-    var t = uiAnim("tg:" + id, target, 150)
-    surfaceRoundRect(S, tx, y + 6, 40, 18, 9, uiMix(C_SURFACE2, C_GREEN, t))
-    var knob = tx + 3 + toInt(22 * t)
-    surfaceCircle(S, knob + 6, y + 15, 7, 0xffffff)
-    surfaceText(S, label, x + 10, y + 7, 16, C_TEXT)
-    uiRegion(id, x, y, w, 30)
+// ---------- налаштування (сторінка, як у VS Code, але коротко й зрозуміло) ----------
+//
+// [розділ, id, назва, пояснення, вид, варіанти]
+// вид: "bool" - перемикач; "choice" - кнопки [[значення, підпис]];
+// "num" - [мін, макс, крок]; "action" - кнопки [[дія, підпис]].
+// id кнопок: set.<id> (перемикач), set.<id>:<значення>, set.<id>:- / :+.
+var SET_SECTIONS = [["main", "Основне"], ["look", "Вигляд"], ["editor", "Редактор"], ["terminal", "Термінал"],
+    ["side", "Шторка"], ["learn", "Навчання"], ["update", "Оновлення"]]
+
+func settingsList() {
+    var lv = []
+    for l in LEVELS { append(lv, [l[0], l[1]]) }
+    return [
+        ["main", "level", "Рівень", "Під рівень вмикаються або вимикаються блоки, уроки й підказки. Решта налаштувань лишається, як є.", "choice", lv],
+        ["main", "blocks", "Режим блоків", "Програми з блоків, як у Scratch. Вимкни, якщо пишеш лише код.", "bool", []],
+        ["main", "folder", "Тека з програмами", "Зараз: " + app.dir + ". Іншу теку можна відкрити будь-коли (Ctrl+O).", "action", [["openfolder", "Відкрити теку…"]]],
+        ["look", "theme", "Тема", "Кольори всієї IDE.", "choice", THEMES],
+        ["look", "scale", "Масштаб інтерфейсу", "Усе більше - для великого екрана або якщо дрібно.", "choice", [[100, "100%"], [125, "125%"], [150, "150%"], [175, "175%"], [200, "200%"]]],
+        ["look", "pixelfont", "Піксельний шрифт", "Шрифт, як у старих іграх, замість звичайного згладженого.", "bool", []],
+        ["look", "anim", "Анімації", "Плавна шторка, перемикачі, підсвічування. Вимкни, якщо комп'ютер повільний.", "bool", []],
+        ["editor", "edfont", "Розмір шрифту коду", "Те саме - Ctrl+= і Ctrl+- або Ctrl+колесо миші в редакторі.", "num", [10, 32, 1]],
+        ["editor", "tabsize", "Відступ (Tab)", "Скільки пробілів ставить Tab і новий рядок після {.", "choice", [[2, "2"], [4, "4"], [8, "8"]]],
+        ["editor", "autoclose", "Закривати дужки й лапки", "Набрав ( - одразу з'являється ), так само [ ] { } і лапки.", "bool", []],
+        ["terminal", "termfont", "Розмір шрифту терміналу", "Шрифт у вкладці «Термінал» внизу.", "num", [10, 24, 1]],
+        ["side", "sideoverlay", "Шторка поверх коду", "Бічна панель не стискає код, а виїжджає над ним і ховається, коли клацнеш у код. Зручно на маленькому екрані. Вимкнено - шторка завжди поруч, як у VS Code.", "bool", []],
+        ["side", "sidew", "Ширина шторки", "Або тягни праву межу шторки мишею.", "num", [160, 600, 10]],
+        ["learn", "lessons", "Уроки й навчання", "Значок «Навчання» зліва: уроки з перевіркою і приклади.", "bool", []],
+        ["learn", "hints", "Підказки до помилок", "Пояснення простими словами, що означає помилка і як її виправити.", "bool", []],
+        ["learn", "offers", "Пропонувати гайд", "Коли вперше відкриваєш нове місце IDE - пропозиція показати, як ним користуватись.", "bool", []],
+        ["learn", "learnact", "Екскурсія й пропозиції", "Знову пройти знайомство з IDE або знову показувати всі пропозиції гайду.", "action", [["g.tour", "Екскурсія по IDE"], ["set.resetoffers", "Пропозиції знову"]]],
+        ["update", "updcheck", "Перевіряти оновлення", "Раз на день IDE дивиться, чи вийшла нова версія, і пропонує оновитись кнопкою.", "bool", []],
+        ["update", "updnow", "Версія", "Nx IDE " + IDE_VERSION + ".", "action", [["upd.check", "Перевірити зараз"]]]
+    ]
 }
 
-func drawSettingsView(x, y, w, h) {
+func cfgGet(id) {
     var c = app.cfg
-    var cy = y + 4
-    surfaceText(S, "Рівень", x + 14, cy, 14, C_SUBTEXT, true)
-    cy = cy + 24
-    var bw = toInt((w - 28) / 3)
-    var i = 0
-    while (i < len(LEVELS)) {
-        var kind = "normal"
-        if (c.level == LEVELS[i][0]) { kind = "primary" }
-        uiButton("set.level:" + LEVELS[i][0], LEVELS[i][1], x + 14 + i * bw, cy, bw - 4, 30, kind)
-        i = i + 1
-    }
-    cy = cy + 44
-    surfaceText(S, "Що показувати", x + 14, cy, 14, C_SUBTEXT, true)
-    cy = cy + 24
-    _toggle("set.blocks", "Режим блоків", c.blocks, x + 6, cy, w - 12)
-    cy = cy + 34
-    _toggle("set.lessons", "Уроки й навчання", c.lessons, x + 6, cy, w - 12)
-    cy = cy + 34
-    _toggle("set.hints", "Підказки до помилок", c.hints, x + 6, cy, w - 12)
-    cy = cy + 34
-    _toggle("set.offers", "Пропонувати гайд", c.offers, x + 6, cy, w - 12)
-    cy = cy + 34
-    _toggle("set.pixelfont", "Піксельний шрифт", c.pixelFont, x + 6, cy, w - 12)
-    cy = cy + 34
-    _toggle("set.updcheck", "Перевіряти оновлення", c.updCheck, x + 6, cy, w - 12)
-    cy = cy + 34
-    var vlabel = "Nx IDE " + IDE_VERSION
-    var vw = surfaceText(S, vlabel, x + 16, cy + 7, 14, C_DIM)
-    uiButton("upd.check", "Перевірити зараз", x + w - 170, cy, 156, 28, "flat")
-    cy = cy + 40
-    surfaceText(S, "Тема", x + 14, cy, 14, C_SUBTEXT, true)
-    cy = cy + 22
-    var tw3 = toInt((w - 28) / len(THEMES))
-    var ti = 0
-    while (ti < len(THEMES)) {
-        var tk = "normal"
-        if (c.theme == THEMES[ti][0]) { tk = "primary" }
-        uiButton("set.theme:" + THEMES[ti][0], THEMES[ti][1], x + 14 + ti * tw3, cy, tw3 - 4, 28, tk)
-        ti = ti + 1
-    }
-    cy = cy + 40
-    surfaceText(S, "Масштаб інтерфейсу", x + 14, cy, 14, C_SUBTEXT, true)
-    cy = cy + 22
-    var scales = [100, 125, 150, 175, 200]
-    var sw = toInt((w - 28) / len(scales))
-    var si = 0
-    while (si < len(scales)) {
-        var sk = "normal"
-        if (c.uiScale == scales[si]) { sk = "primary" }
-        uiButton("set.scale:" + toString(scales[si]), toString(scales[si]) + "%", x + 14 + si * sw, cy, sw - 4, 28, sk)
-        si = si + 1
-    }
-    cy = cy + 46
-    uiButton("set.resetoffers", "Показувати пропозиції знову", x + 14, cy, w - 28, 30, "flat")
-    cy = cy + 40
-    uiButton("g.tour", "Екскурсія по IDE", x + 14, cy, w - 28, 30, "normal")
-    cy = cy + 46
-    for l in wrapLines("Налаштування спільні для всіх тек: " + configPath(), w - 28, 12) {
-        surfaceText(S, l, x + 14, cy, 12, C_DIM)
-        cy = cy + 16
-    }
+    if (id == "level") { return c.level }
+    if (id == "blocks") { return c.blocks }
+    if (id == "theme") { return c.theme }
+    if (id == "scale") { return c.uiScale }
+    if (id == "pixelfont") { return c.pixelFont }
+    if (id == "anim") { return c.anim }
+    if (id == "edfont") { return c.edFont }
+    if (id == "tabsize") { return c.tabSize }
+    if (id == "autoclose") { return c.autoClose }
+    if (id == "termfont") { return c.termFont }
+    if (id == "sideoverlay") { return c.sideOverlay }
+    if (id == "sidew") { return app.sideW }
+    if (id == "lessons") { return c.lessons }
+    if (id == "hints") { return c.hints }
+    if (id == "offers") { return c.offers }
+    if (id == "updcheck") { return c.updCheck }
+    return null
 }
 
-func settingsAction(id) {
+// Застосувати й зберегти. v - нове значення (рядок з id кнопки або bool).
+func cfgSet(id, v) {
     var c = app.cfg
-    if (startsWith(id, "set.level:")) {
-        applyLevel(substring(id, 10, len(id) - 10), false)
-        setStatus("Рівень змінено - налаштування виставлено під нього")
+    if (id == "level") {
+        applyLevel(v, false)
+        setStatus("Рівень змінено - блоки, уроки й підказки виставлено під нього")
         return
     }
-    if (id == "set.blocks") { c.blocks = !c.blocks }
-    if (id == "set.lessons") {
-        c.lessons = !c.lessons
-        if (!c.lessons && app.side == "learn") { app.side = "" }
+    if (id == "blocks") { c.blocks = v }
+    if (id == "theme") {
+        c.theme = v
+        applyTheme(v)
     }
-    if (id == "set.hints") { c.hints = !c.hints }
-    if (id == "set.offers") { c.offers = !c.offers }
-    if (id == "set.pixelfont") { c.pixelFont = !c.pixelFont }
-    if (id == "set.updcheck") {
-        c.updCheck = !c.updCheck
-        if (!c.updCheck) { app.updInfo = null }
-    }
-    if (startsWith(id, "set.theme:")) {
-        c.theme = substring(id, 10, len(id) - 10)
-        applyTheme(c.theme)
-    }
-    if (startsWith(id, "set.scale:")) {
-        c.uiScale = toInt(substring(id, 10, len(id) - 10))
+    if (id == "scale") {
+        c.uiScale = toInt(v)
         surfaceScale(c.uiScale / 100)
     }
-    if (id == "set.resetoffers") {
-        c.seen = []
-        c.offers = true
-        setStatus("Пропозиції гайду показуватимуться знову")
+    if (id == "pixelfont") { c.pixelFont = v }
+    if (id == "anim") { c.anim = v }
+    if (id == "edfont") {
+        c.edFont = toInt(v)
+        for p in mapKeys(app.editors) { mapGet(app.editors, p).fontSize = c.edFont }
+    }
+    if (id == "tabsize") {
+        c.tabSize = toInt(v)
+        ED_TAB = c.tabSize
+    }
+    if (id == "autoclose") {
+        c.autoClose = v
+        ED_AUTOCLOSE = v
+    }
+    if (id == "termfont") {
+        c.termFont = toInt(v)
+        termSetFont(c.termFont)
+    }
+    if (id == "sideoverlay") { c.sideOverlay = v }
+    if (id == "sidew") {
+        app.sideW = toInt(v)
+        c.sideW = app.sideW
+    }
+    if (id == "lessons") {
+        c.lessons = v
+        if (!c.lessons && app.side == "learn") { app.side = "" }
+    }
+    if (id == "hints") { c.hints = v }
+    if (id == "offers") { c.offers = v }
+    if (id == "updcheck") {
+        c.updCheck = v
+        if (!c.updCheck) { app.updInfo = null }
     }
     saveSettings()
     refreshFiles()
+}
+
+// Налаштування редактора й терміналу з cfg - у змінні модулів.
+func applyEditorSettings() {
+    ED_TAB = app.cfg.tabSize
+    ED_AUTOCLOSE = app.cfg.autoClose
+    termSetFont(app.cfg.termFont)
+}
+
+func settingsAction(id) {
+    if (id == "set.close") {
+        app.settingsOpen = false
+        app.focus = "editor"
+        return
+    }
+    if (id == "set.search") {
+        app.focus = "settings"
+        return
+    }
+    if (startsWith(id, "set.sec:")) {
+        app.setSection = substring(id, 8, len(id) - 8)
+        app.setSearch = ""
+        app.setScroll = 0
+        return
+    }
+    if (id == "set.resetoffers") {
+        app.cfg.seen = []
+        app.cfg.offers = true
+        saveSettings()
+        setStatus("Пропозиції гайду показуватимуться знову")
+        return
+    }
+    var rest = substring(id, 4, len(id) - 4)
+    var colon = indexOf(rest, ":")
+    var key = rest
+    var val = ""
+    if (colon >= 0) {
+        key = substring(rest, 0, colon)
+        val = substring(rest, colon + 1, len(rest) - colon - 1)
+    }
+    for d in settingsList() {
+        if (d[1] != key) { continue }
+        if (d[4] == "bool") { cfgSet(key, !cfgGet(key)) }
+        else if (d[4] == "choice") { cfgSet(key, val) }
+        else if (d[4] == "num") {
+            var cur = toInt(cfgGet(key))
+            var o = d[5]
+            if (val == "-") { cur = cur - o[2] } else { cur = cur + o[2] }
+            cfgSet(key, clamp(cur, o[0], o[1]))
+        }
+    }
+}
+
+func openSettings() {
+    app.settingsOpen = true
+    app.setScroll = 0
+}
+
+func _setMatches(d, q) {
+    if (q == "") { return true }
+    var all = toLower(d[2] + " " + d[3])
+    for sec in SET_SECTIONS { if (sec[0] == d[0]) { all = all + " " + toLower(sec[1]) } }
+    return contains(all, q)
+}
+
+func drawSettingsPage(x, y, w, h) {
+    surfaceRect(S, x, y, w, h, C_BG)
+    uiRegion("set.page", x, y, w, h)
+    // заголовок + пошук + закрити
+    surfaceRect(S, x, y, w, 52, C_PANEL2)
+    surfaceText(S, "Налаштування", x + 20, y + 14, 20, C_TEXT, true)
+    var sx = x + 200
+    var sw = min(420, w - 280)
+    var focused = app.focus == "settings"
+    if (sw > 120) {
+        var border = C_BORDER
+        if (focused) { border = C_ACCENT }
+        surfaceRoundRect(S, sx, y + 11, sw, 30, 6, C_BG)
+        surfaceRectLine(S, sx, y + 11, sw, 30, border, 1)
+        iconSearch(sx + 8, y + 16, 18, C_DIM)
+        if (app.setSearch == "" && !focused) { surfaceText(S, "Шукати налаштування…", sx + 32, y + 18, 14, C_DIM) }
+        var tw = surfaceText(S, uiFit(app.setSearch, sw - 44, 14), sx + 32, y + 18, 14, C_TEXT)
+        if (focused) { surfaceRect(S, sx + 33 + tw, y + 16, 2, 20, C_ACCENT) }
+        uiRegion("set.search", sx, y + 11, sw, 30)
+    }
+    uiButton("set.close", "×", x + w - 44, y + 11, 30, 30, "flat")
+    // розділи зліва
+    var navW = 170
+    if (w < 620) { navW = 120 }
+    var ny = y + 64
+    var q = toLower(trim(app.setSearch))
+    for sec in SET_SECTIONS {
+        var on = q == "" && app.setSection == sec[0]
+        if (on) { surfaceRoundRect(S, x + 8, ny, navW - 16, 30, 6, C_SURFACE) }
+        else if (uiHover(x + 8, ny, navW - 16, 30)) { surfaceRoundRect(S, x + 8, ny, navW - 16, 30, 6, C_PANEL) }
+        var col = C_SUBTEXT
+        if (on) { col = C_TEXT }
+        surfaceText(S, uiFit(sec[1], navW - 36, 15), x + 20, ny + 6, 15, col, on)
+        uiRegion("set.sec:" + sec[0], x + 8, ny, navW - 16, 30)
+        ny = ny + 34
+    }
+    surfaceRect(S, x + navW, y + 52, 1, h - 52, C_BORDER)
+    // налаштування розділу або знайдені пошуком (з усіх розділів)
+    var cx = x + navW + 24
+    var cw = min(720, w - navW - 48)
+    var top = y + 60
+    surfaceClip(S, x + navW + 1, top, w - navW - 1, h - 60)
+    var cy = top + 8 - app.setScroll
+    var shown = 0
+    var lastSec = ""
+    for d in settingsList() {
+        if (q == "" && d[0] != app.setSection) { continue }
+        if (q != "" && !_setMatches(d, q)) { continue }
+        if (q != "" && d[0] != lastSec) {
+            // при пошуку - підпис розділу над знайденим
+            for sec in SET_SECTIONS { if (sec[0] == d[0]) { surfaceText(S, toUpper(sec[1]), cx, cy + 4, 12, C_DIM, true) } }
+            cy = cy + 24
+            lastSec = d[0]
+        }
+        cy = _drawSetting(d, cx, cy, cw)
+        shown = shown + 1
+    }
+    if (shown == 0) { surfaceText(S, "Нічого не знайдено. Спробуй інше слово: «шрифт», «тема», «шторка»…", cx, cy + 8, 15, C_DIM) }
+    var contentH = cy + app.setScroll - top
+    app.setScroll = clamp(app.setScroll, 0, max(0, contentH - (h - 60) + 20))
+    if (q == "" && app.setSection == "main") {
+        cy = cy + 12
+        for l in wrapLines("Налаштування спільні для всіх тек і зберігаються тут: " + configPath(), cw, 12) {
+            surfaceText(S, l, cx, cy, 12, C_DIM)
+            cy = cy + 16
+        }
+    }
+    surfaceUnclip(S)
+}
+
+// Один пункт: назва, пояснення, елемент керування. Повертає y під ним.
+func _drawSetting(d, x, y, w) {
+    var key = d[1]
+    var kind = d[4]
+    surfaceText(S, d[2], x, y, 16, C_TEXT, true)
+    var ty = y + 24
+    for l in wrapLines(d[3], w - 70, 14) {
+        surfaceText(S, l, x, ty, 14, C_SUBTEXT)
+        ty = ty + 19
+    }
+    if (kind == "bool") {
+        // перемикач праворуч від назви
+        var on = cfgGet(key)
+        var tx = x + w - 48
+        var target = 0
+        if (on) { target = 1 }
+        var t = target
+        if (app.cfg.anim && !HEADLESS) { t = uiAnim("tg:" + key, target, 150) }
+        surfaceRoundRect(S, tx, y + 2, 40, 20, 10, uiMix(C_SURFACE2, C_GREEN, t))
+        surfaceCircle(S, tx + 10 + toInt(20 * t), y + 12, 7, 0xffffff)
+        uiRegion("set." + key, x - 8, y - 4, w + 8, ty - y + 8)
+        return ty + 18
+    }
+    ty = ty + 6
+    if (kind == "choice") {
+        var bx = x
+        for o in d[5] {
+            var lbl = toString(o[1])
+            var bw = max(64, uiButtonW(lbl))
+            if (bx + bw > x + w) {
+                bx = x
+                ty = ty + 36
+            }
+            var style = "normal"
+            if (toString(cfgGet(key)) == toString(o[0])) { style = "primary" }
+            uiButton("set." + key + ":" + toString(o[0]), lbl, bx, ty, bw, 30, style)
+            bx = bx + bw + 6
+        }
+        return ty + 52
+    }
+    if (kind == "num") {
+        uiButton("set." + key + ":-", "−", x, ty, 36, 30, "normal")
+        var vs = toString(cfgGet(key))
+        surfaceRoundRect(S, x + 40, ty, 60, 30, 6, C_PANEL)
+        surfaceText(S, vs, x + 70 - toInt(textWidth(vs, 15) / 2), ty + 6, 15, C_TEXT, true)
+        uiButton("set." + key + ":+", "+", x + 104, ty, 36, 30, "normal")
+        return ty + 52
+    }
+    if (kind == "action") {
+        var ax = x
+        for o in d[5] {
+            var aw = uiButtonW(o[1])
+            uiButton(o[0], o[1], ax, ty, aw, 30, "normal")
+            ax = ax + aw + 6
+        }
+        return ty + 52
+    }
+    return ty + 12
 }
 
 // ---------- малювання ----------
@@ -1941,7 +2134,7 @@ func drawActivityBar(y, h) {
     var acts = activities()
     // шестерня налаштувань - внизу, як у VS Code
     var gy = y + h - ACT_W
-    var gon = app.side == "settings"
+    var gon = app.settingsOpen
     var gc = C_DIM
     if (uiHover(0, gy, ACT_W, ACT_W)) {
         gc = C_SUBTEXT
@@ -1988,12 +2181,13 @@ func _sideTitle(view) {
 func drawSidebar(x, y, w, h) {
     surfaceRect(S, x, y, w, h, C_PANEL)
     uiRegion("side.panel", x, y, w, h)
-    surfaceText(S, _sideTitle(app.side), x + 14, y + 10, 14, C_SUBTEXT, true)
     uiButton("side.collapse", "‹", x + w - 32, y + 4, 26, 26, "flat")
+    // у провіднику окремого заголовка нема: назва теки, значки й ‹ - один рядок
+    if (app.side == "files") { drawExplorer(x, y + 5, w, h - 5); return }
+    surfaceText(S, _sideTitle(app.side), x + 14, y + 10, 14, C_SUBTEXT, true)
     var cy = y + 34
     var ch = h - 34
-    if (app.side == "files") { drawExplorer(x, cy, w, ch) }
-    else if (app.side == "search") { drawSearchView(x, cy, w, ch) }
+    if (app.side == "search") { drawSearchView(x, cy, w, ch) }
     else if (app.side == "history") {
         refreshHistoryDiff()
         if (app.active == "") { surfaceText(S, "Відкрий файл, щоб бачити його версії.", x + 14, cy + 8, 14, C_DIM) }
@@ -2010,7 +2204,6 @@ func drawSidebar(x, y, w, h) {
         drawGit(app.git, x, cy, w, ch)
         if (GIT_TIP != "") { app.tooltip = GIT_TIP }
     }
-    else if (app.side == "settings") { drawSettingsView(x, cy, w, ch) }
 }
 
 func _isDirty(path) {
@@ -2258,15 +2451,15 @@ func _exIcon(id, x, y, tip) {
 func drawExplorer(x, y, w, h) {
     // заголовок: назва теки + іконки (новий файл, нова тека, оновити, згорнути все)
     var title = toUpper(fileName(app.dir))
-    var ttw = textWidth(uiFit(title, w - 130, 13), 13, true)
+    var ttw = textWidth(uiFit(title, w - 160, 13), 13, true)
     if (uiHover(x + 8, y, ttw + 30, 24)) {
         surfaceRoundRect(S, x + 8, y, ttw + 30, 24, 4, C_SURFACE)
         app.tooltip = "Відкрити іншу теку (Ctrl+O)"
     }
-    surfaceText(S, uiFit(title, w - 130, 13), x + 14, y + 4, 13, C_SUBTEXT, true)
+    surfaceText(S, uiFit(title, w - 160, 13), x + 14, y + 4, 13, C_SUBTEXT, true)
     iconChevron(x + 16 + ttw, y + 2, 18, true, C_DIM)
     uiRegion("ex.openfolder", x + 8, y, ttw + 30, 24)
-    var ix = x + w - 26
+    var ix = x + w - 58
     _exIcon("ex.collapse", ix, y, "Згорнути всі теки")
     _exIcon("ex.refresh", ix - 24, y, "Оновити")
     _exIcon("ex.newdir", ix - 48, y, "Нова тека")
@@ -2822,7 +3015,17 @@ func _drawSideSlide(bodyY, bodyH) {
     }
 }
 
+// Ctrl+= / Ctrl+- змінили шрифт одного редактора - це й налаштування для всіх.
+func _syncEdFont() {
+    var ed = currentEditor()
+    if (ed == null || ed.fontSize == app.cfg.edFont) { return }
+    app.cfg.edFont = ed.fontSize
+    for p in mapKeys(app.editors) { mapGet(app.editors, p).fontSize = ed.fontSize }
+    saveSettings()
+}
+
 func draw() {
+    _syncEdFont()
     var W = surfaceWidth(S)
     var H = surfaceHeight(S)
     uiBegin()
@@ -2886,7 +3089,8 @@ func draw() {
         drawWelcome(ex, bodyY, ew, bodyH - panelH)
     } else {
         drawTabs(ex, tabsY, ew)
-        if (app.mode == "blocks") {
+        if (app.settingsOpen) { drawSettingsPage(ex, tabsY, ew, bodyH - panelH) }
+        else if (app.mode == "blocks") {
             var ws = currentBlocks()
             if (ws != null) { blocksDraw(ws, ex, edY, ew, edH, blocksTitle(ws)) }
         } else {
@@ -2979,6 +3183,7 @@ func doAction(id) {
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
+    else if (id == "act:settings") { openSettings() }
     else if (startsWith(id, "act:")) { toggleSide(substring(id, 4, len(id) - 4)) }
     else if (id == "side.collapse") { app.side = "" }
     else if (id == "stage.close") {
@@ -3381,6 +3586,8 @@ func onWheel(e) {
         app.con.scroll = max(0, app.con.scroll - e.dy * 3)
     } else if (startsWith(id, "ext.")) {
         app.extScroll = max(0, app.extScroll + e.dy * 48)
+    } else if (id == "set.page" || startsWith(id, "set.")) {
+        app.setScroll = max(0, app.setScroll + e.dy * 48)
     } else if (id == "git.list") {
         app.git.listScroll = max(0, app.git.listScroll + e.dy * 48)
     } else if (id == "git.diff") {
@@ -3407,6 +3614,17 @@ func onKey(e) {
     if (app.fpick != null) {
         fpickKey(e)
         return
+    }
+    if (app.settingsOpen && (app.focus == "settings" || app.focus == "editor")) {
+        if (k == "Escape") {
+            if (app.setSearch != "") { app.setSearch = "" } else { settingsAction("set.close") }
+            return
+        }
+        if (app.focus == "settings") {
+            if (k == "Backspace") { app.setSearch = uiDropLast(app.setSearch) }
+            if (e.ctrl && k == "v") { app.setSearch = app.setSearch + replace(clipboardGet(), "\n", " ") }
+            if (!e.ctrl || k == "v") { return }
+        }
     }
     if (e.ctrl && k == "o" && !e.shift) {
         openFolderPicker()
@@ -3568,6 +3786,13 @@ func onKey(e) {
 
 func onText(e) {
     if (app.fpick != null) { return }
+    if (app.settingsOpen && (app.focus == "settings" || (app.focus == "editor" && app.dialog == null && app.palette == null))) {
+        // набір тексту на сторінці налаштувань - одразу пошук
+        app.focus = "settings"
+        app.setSearch = app.setSearch + e.text
+        app.setScroll = 0
+        return
+    }
     if (app.dialog != null) {
         if (dialogIsConfirm(app.dialog)) { return }
         var newKind = app.dialog.action == "newcode" || app.dialog.action == "newblocks"
@@ -4171,7 +4396,7 @@ func newApp(dir) {
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,
         lastClickTime: 0, lastClickX: 0, lastClickY: 0, clickCount: 0, dialog: null, status: "",
         statusTime: 0, tooltip: "", probRun: 0, exSel: "", lastAutosave: 0, dbgPath: "", lastPauses: 0, stageOpen: false, stageRect: [], sideBeforeStage: "-", entry: null, ctx: null, cfg: null, askLevel: false, offer: null, exFocus: false, split: "", splitSide: 0, splitTop: 0, splitRect: [], renameGroup: null, term: newTerminal(dir), exts: [], lintJobs: [], extScroll: 0, git: newGitInfo(), dragSrc: "", dragKind: "", dragX: 0, dragY: 0, dragActive: false, updJob: null, updInfo: null, updRunning: false, updDone: false, updManual: false,
-        fpick: null, sideLast: "" }
+        fpick: null, sideLast: "", settingsOpen: false, setSection: "main", setSearch: "", setScroll: 0 }
 }
 
 // Тека за замовчуванням: остання відкрита, інакше ~/NyxПрограми.
@@ -4203,6 +4428,7 @@ func ideInit(dir) {
     reloadExtensions()
     surfaceScale(app.cfg.uiScale / 100)
     applyTheme(app.cfg.theme)
+    applyEditorSettings()
     _loadFolder()
     startUpdateCheck()
     draw()
