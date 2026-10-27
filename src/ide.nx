@@ -1332,6 +1332,7 @@ func commandList() {
         ["act:ext", "Розширення", ""],
         ["act:settings", "Налаштування", ""],
         ["find", "Знайти у файлі", "Ctrl+F"],
+        ["replace", "Замінити у файлі", "Ctrl+H"],
         ["gotodef", "Перейти до визначення", "F12"],
         ["split.toggle", "Розділити редактор / прибрати розділення", "Ctrl+\\"],
         ["renamesym", "Перейменувати всюди", "F2"],
@@ -3245,6 +3246,26 @@ func doAction(id) {
     else if (id == "find") {
         var ed3 = currentEditor()
         if (ed3 != null && app.mode == "code") { ed3.findOpen = true }
+    }
+    else if (id == "replace") {
+        var edr = currentEditor()
+        if (edr != null && app.mode == "code") {
+            edr.findOpen = true
+            edr.replOpen = true
+            app.focus = "editor"
+        }
+    }
+    else if (startsWith(id, "ed.findf:") || id == "ed.replone" || id == "ed.replall") {
+        var edf = currentEditor()
+        if (edf != null) {
+            app.focus = "editor"
+            if (id == "ed.replone") { edReplaceOne(edf) }
+            else if (id == "ed.replall") {
+                var nr = edReplaceAll(edf)
+                setStatus("Замінено: " + toString(nr))
+            }
+            else { edf.findField = toInt(substring(id, 9, 1)) }
+        }
     }
     else if (id == "zoomin" || id == "zoomout") {
         var ed4 = currentEditor()

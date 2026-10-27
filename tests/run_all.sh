@@ -31,6 +31,7 @@ run scenario_stage.nx "$TMP/p7" "$TMP/shots"
 run scenario_crash.nx "$TMP/p5" "$TMP/shots"
 run test_explain.nx
 run test_editor_hl.nx
+run test_editor_ops.nx
 run test_code_to_blocks.nx
 run test_vt.nx
 run scenario_terminal.nx "$TMP/p8" "$TMP/shots"

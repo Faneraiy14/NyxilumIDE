@@ -1,0 +1,87 @@
+// Редактор: заміна (одне / усі, одна дія Ctrl+Z), перенесення й копія
+// рядків Alt+↑/↓, парна дужка (дужки в лапках і коментарях не рахуються).
+import "../src/editor.nx"
+import "../src/highlight.nx"
+import "../src/theme.nx"
+
+func check(cond, msg) {
+    if (!cond) { throw "ПРОВАЛ: " + msg }
+    print("ok - " + msg)
+}
+
+struct Ev {
+    key: string
+    ctrl: bool
+    shift: bool
+    alt: bool
+}
+
+func k(ed, key, ctrl, shift, alt) { edKey(ed, Ev { key: key, ctrl: ctrl, shift: shift, alt: alt }) }
+
+func main() {
+    // заміна
+    var ed = newEditor("var кіт = 1\nprint(Кіт)\nкіт = кіт + 1", "a.nx")
+    k(ed, "h", true, false, false)
+    check(ed.findOpen && ed.replOpen && ed.findField == 0, "Ctrl+H відкриває пошук із заміною")
+    edTextInput(ed, "кіт")
+    k(ed, "Tab", false, false, false)
+    check(ed.findField == 1, "Tab - у поле «замінити на»")
+    edTextInput(ed, "пес")
+    check(ed.findText == "кіт" && ed.replText == "пес", "текст іде в активне поле")
+    ed.cx = 0
+    ed.cy = 0
+    ed.ay = -1
+    k(ed, "Enter", false, false, false)
+    k(ed, "Enter", false, false, false)
+    check(ed.lines[0] == "var пес = 1", "Enter у полі заміни - замінив перший збіг")
+    k(ed, "Enter", true, false, false)
+    check(ed.lines[1] == "print(пес)" && ed.lines[2] == "пес = пес + 1", "Ctrl+Enter - замінити всі (великі/малі не важливі)")
+    edUndo(ed)
+    check(ed.lines[2] == "кіт = кіт + 1" && ed.lines[0] == "var пес = 1", "«замінити всі» скасовується одним Ctrl+Z")
+    k(ed, "Backspace", false, false, false)
+    check(ed.replText == "пе", "Backspace - у полі заміни")
+    k(ed, "Escape", false, false, false)
+
+    // перенесення рядків
+    var ed2 = newEditor("а\nб\nв\nг", "b.nx")
+    ed2.cy = 1
+    k(ed2, "Down", false, false, true)
+    check(join(ed2.lines, ",") == "а,в,б,г" && ed2.cy == 2, "Alt+↓ переносить рядок нижче")
+    k(ed2, "Up", false, false, true)
+    k(ed2, "Up", false, false, true)
+    check(join(ed2.lines, ",") == "б,а,в,г" && ed2.cy == 0, "Alt+↑ переносить вище")
+    k(ed2, "Up", false, false, true)
+    check(join(ed2.lines, ",") == "б,а,в,г", "першу лінію вище нікуди - без змін")
+    // виділено два рядки - переносяться обидва
+    ed2.ay = 0
+    ed2.ax = 0
+    ed2.cy = 1
+    ed2.cx = 1
+    k(ed2, "Down", false, false, true)
+    check(join(ed2.lines, ",") == "в,б,а,г" && ed2.ay == 1 && ed2.cy == 2, "Alt+↓ з виділенням - переносить блок")
+    ed2.ay = -1
+    ed2.cy = 3
+    k(ed2, "Down", false, true, true)
+    check(join(ed2.lines, ",") == "в,б,а,г,г" && ed2.cy == 4, "Alt+Shift+↓ - копія рядка нижче")
+    edUndo(ed2)
+    check(join(ed2.lines, ",") == "в,б,а,г", "Ctrl+Z скасовує копію")
+
+    // парна дужка
+    var ed3 = newEditor("func f(a) {\n    print(\")\")  // )\n    if (a) { g([1]) }\n}", "c.nx")
+    ed3.cy = 0
+    ed3.cx = 10
+    var m = edMatchBracket(ed3)
+    check(m != null && m[1][0] == 3 && m[1][1] == 0, "{ на першому рядку - пара } в кінці (дужки в лапках/коментарі пропущено)")
+    ed3.cy = 3
+    ed3.cx = 1
+    m = edMatchBracket(ed3)
+    check(m != null && m[1][0] == 0 && m[1][1] == 10, "і назад: } -> {")
+    ed3.cy = 2
+    ed3.cx = 17
+    m = edMatchBracket(ed3)
+    check(m != null && m[1][0] == 2 && m[1][1] == 15, "[ ] усередині ( )")
+    ed3.cy = 1
+    ed3.cx = 11
+    check(edMatchBracket(ed3) == null, "дужка в лапках - без пари")
+    print("РЕДАКТОР: УСЕ ГАРАЗД")
+}
