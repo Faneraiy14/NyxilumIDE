@@ -133,6 +133,11 @@ struct FolderPick {
     sel: i32
     scroll: i32
     msg: string
+    follow: bool
+    view: array
+    query: string
+    edit: bool
+    editText: string
 }
 
 var app = null
@@ -3733,6 +3738,10 @@ func onMouseMove(e) {
 
 func onWheel(e) {
     var id = uiHit(e.x, e.y)
+    if (app.fpick != null) {
+        app.fpick.scroll = max(0, app.fpick.scroll + e.dy * 3)
+        return
+    }
     if (id == "h.diff") {
         app.histScroll = max(0, app.histScroll + e.dy * 3)
         return
@@ -3968,7 +3977,10 @@ func onKey(e) {
 }
 
 func onText(e) {
-    if (app.fpick != null) { return }
+    if (app.fpick != null) {
+        fpickText(e.text)
+        return
+    }
     if (app.settingsOpen && (app.focus == "settings" || (app.focus == "editor" && app.dialog == null && app.palette == null))) {
         // набір тексту на сторінці налаштувань - одразу пошук
         app.focus = "settings"
@@ -4707,7 +4719,7 @@ func openFolderPicker() {
     var parts = split(start, "/")
     if (len(parts) > 1) { start = substring(app.dir, 0, len(app.dir) - len(parts[len(parts) - 1]) - 1) }
     if (start == "") { start = "/" }
-    app.fpick = FolderPick { path: start, items: [], sel: 0, scroll: 0, msg: "" }
+    app.fpick = FolderPick { path: start, items: [], sel: 0, scroll: 0, msg: "", follow: true, view: [], query: "", edit: false, editText: "" }
     _fpList()
     app.focus = "fpick"
 }
@@ -4724,8 +4736,39 @@ func _fpList() {
         fp.msg = ""
     } catch (e) { fp.msg = "Немає доступу до цієї теки" }
     fp.items = sort(items)
+    fp.query = ""
+    _fpFilter()
+}
+
+// Список на екрані: теки, у назві яких є набране в пошуку.
+func _fpFilter() {
+    var fp = app.fpick
+    var q = toLower(fp.query)
+    var v = []
+    for n in fp.items { if (q == "" || contains(toLower(n), q)) { append(v, n) } }
+    fp.view = v
     fp.sel = 0
     fp.scroll = 0
+    fp.follow = true
+}
+
+// Вписаний шлях: ~ - домівка, відносний - від поточної теки.
+// Нема такої теки - повідомлення, вікно лишається.
+func _fpGo(text) {
+    var fp = app.fpick
+    var p = trim(replace(text, "\\", "/"))
+    if (p == "") { return }
+    if (p == "~" || startsWith(p, "~/")) { p = replace(homeDir(), "\\", "/") + substring(p, 1, len(p) - 1) }
+    var isAbs = startsWith(p, "/") || (len(p) >= 2 && p[1] == ":")
+    if (!isAbs) { p = joinPath(fp.path, p) }
+    while (len(p) > 1 && endsWith(p, "/") && !(len(p) == 3 && p[1] == ":")) { p = substring(p, 0, len(p) - 1) }
+    if (!dirExists(p)) {
+        fp.msg = "Такої теки нема: " + p
+        return
+    }
+    fp.path = p
+    fp.edit = false
+    _fpList()
 }
 
 func _fpUp() {
@@ -4752,10 +4795,22 @@ func fpickAction(id) {
         app.fpick = null
         app.focus = "editor"
     } else if (id == "fp.up") { _fpUp() }
+    else if (id == "fp.path") {
+        if (!fp.edit) {
+            fp.edit = true
+            fp.editText = fp.path
+        }
+    }
+    else if (id == "fp.search") { fp.edit = false }
     else if (id == "fp.home") {
         fp.path = replace(homeDir(), "\\", "/")
         _fpList()
     } else if (id == "fp.open") {
+        // шлях вписано, але Enter не натиснули - спершу туди
+        if (fp.edit) {
+            _fpGo(fp.editText)
+            if (fp.edit) { return }
+        }
         var p = fp.path
         app.fpick = null
         app.focus = "editor"
@@ -4763,7 +4818,7 @@ func fpickAction(id) {
     } else if (id == "fp.system") { _fpSystemDialog() }
     else if (startsWith(id, "fp.item:")) {
         var i = toInt(substring(id, 8, len(id) - 8))
-        if (i >= 0 && i < len(fp.items)) { _fpEnter(fp.items[i]) }
+        if (i >= 0 && i < len(fp.view)) { _fpEnter(fp.view[i]) }
     } else if (startsWith(id, "fp.recent:")) {
         var r = substring(id, 10, len(id) - 10)
         app.fpick = null
@@ -4814,13 +4869,81 @@ func _have(cmd) {
 func fpickKey(e) {
     var fp = app.fpick
     var k = e.key
-    if (k == "Escape") { fpickAction("fp.cancel") }
+    var last = max(0, len(fp.view) - 1)
+    // клавіші - список їде за вибраною текою (колесо - вільно)
+    fp.follow = true
+    if (e.ctrl && k == "l") {
+        fp.edit = true
+        fp.editText = fp.path
+        return
+    }
+    if (e.ctrl && k == "v") {
+        var clip = trim(replace(clipboardGet(), "\n", ""))
+        if (fp.edit) { fp.editText = fp.editText + clip }
+        else if (startsWith(clip, "/") || startsWith(clip, "~") || (len(clip) >= 2 && clip[1] == ":")) {
+            // вставили шлях - одразу в поле шляху
+            fp.edit = true
+            fp.editText = clip
+        } else {
+            fp.query = fp.query + clip
+            _fpFilter()
+        }
+        return
+    }
+    if (fp.edit) {
+        // редагування шляху
+        if (k == "Escape") { fp.edit = false  fp.msg = "" }
+        else if (k == "Enter") { _fpGo(fp.editText) }
+        else if (k == "Backspace" && len(fp.editText) > 0) { fp.editText = uiDropLast(fp.editText) }
+        else if (k == "Tab") {
+            // доповнити назву теки (як у терміналі)
+            var p = fp.editText
+            var cut0 = len(p) - 1
+            while (cut0 >= 0 && p[cut0] != "/") { cut0 = cut0 - 1 }
+            if (cut0 >= 0) {
+                var base = substring(p, 0, cut0 + 1)
+                var part = toLower(substring(p, cut0 + 1, len(p) - cut0 - 1))
+                var bdir = base
+                if (startsWith(bdir, "~")) { bdir = replace(homeDir(), "\\", "/") + substring(bdir, 1, len(bdir) - 1) }
+                var hits = []
+                try {
+                    for n in listDir(bdir) { if (!startsWith(n, ".") && startsWith(toLower(n), part) && dirExists(joinPath(bdir, n))) { append(hits, n) } }
+                } catch (e2) { }
+                if (len(hits) == 1) { fp.editText = base + hits[0] + "/" }
+            }
+        }
+        return
+    }
+    if (k == "Escape") {
+        if (fp.query != "") { fp.query = ""  _fpFilter() }
+        else { fpickAction("fp.cancel") }
+    }
     else if (k == "Up") { fp.sel = max(0, fp.sel - 1) }
-    else if (k == "Down") { fp.sel = min(max(0, len(fp.items) - 1), fp.sel + 1) }
+    else if (k == "Down") { fp.sel = min(last, fp.sel + 1) }
+    else if (k == "PageUp") { fp.sel = max(0, fp.sel - 10) }
+    else if (k == "PageDown") { fp.sel = min(last, fp.sel + 10) }
+    else if (k == "Home") { fp.sel = 0 }
+    else if (k == "End") { fp.sel = last }
+    else if (k == "Backspace" && fp.query != "") {
+        fp.query = uiDropLast(fp.query)
+        _fpFilter()
+    }
     else if (k == "Backspace" || k == "Left") { _fpUp() }
     else if (k == "Enter" && e.ctrl) { fpickAction("fp.open") }
-    else if ((k == "Enter" || k == "Right") && len(fp.items) > 0) { _fpEnter(fp.items[fp.sel]) }
+    else if ((k == "Enter" || k == "Right") && len(fp.view) > 0) { _fpEnter(fp.view[fp.sel]) }
     else if (k == "Enter") { fpickAction("fp.open") }
+}
+
+// Набраний текст: у поле шляху (якщо його редагують) або в пошук теки.
+func fpickText(t) {
+    var fp = app.fpick
+    if (fp.edit) {
+        fp.editText = fp.editText + t
+        fp.msg = ""
+        return
+    }
+    fp.query = fp.query + t
+    _fpFilter()
 }
 
 func drawFolderPick() {
@@ -4840,13 +4963,38 @@ func drawFolderPick() {
     var cy = y + 52
     uiButton("fp.up", "← Вище", x + 20, cy, 90, 30, "normal")
     uiButton("fp.home", "Домівка", x + 116, cy, 90, 30, "normal")
+    // шлях: клік (або Ctrl+L) - вписати свій, Enter - перейти, Tab - доповнити
+    if (fp.edit) { surfaceRoundRect(S, x + 213, cy - 1, w - 232, 32, 7, C_ACCENT) }
     surfaceRoundRect(S, x + 214, cy, w - 234, 30, 6, C_BG)
-    surfaceText(S, uiFit(fp.path, w - 254, 14), x + 224, cy + 7, 14, C_TEXT)
+    surfaceClip(S, x + 218, cy, w - 242, 30)
+    if (fp.edit) {
+        var etw = textWidth(fp.editText, 14)
+        var ex = x + 224
+        if (etw > w - 260) { ex = x + 224 - (etw - (w - 260)) }
+        surfaceText(S, fp.editText, ex, cy + 7, 14, C_TEXT)
+        surfaceRect(S, ex + etw + 1, cy + 5, 2, 20, C_ACCENT)
+    } else {
+        surfaceText(S, uiFit(fp.path, w - 254, 14), x + 224, cy + 7, 14, C_TEXT)
+        if (uiHover(x + 214, cy, w - 234, 30)) { app.tooltip = "Вписати шлях (Ctrl+L): Enter - перейти, Tab - доповнити назву" }
+    }
+    surfaceUnclip(S)
+    uiRegion("fp.path", x + 214, cy, w - 234, 30)
+    cy = cy + 40
+    // пошук теки в поточній
+    var sOn = !fp.edit
+    if (sOn) { surfaceRoundRect(S, x + 19, cy - 1, w - 38, 32, 7, C_SURFACE2) }
+    surfaceRoundRect(S, x + 20, cy, w - 40, 30, 6, C_BG)
+    iconSearch(x + 28, cy + 6, 18, C_DIM)
+    var qtw = surfaceText(S, fp.query, x + 50, cy + 7, 14, C_TEXT)
+    if (sOn) { surfaceRect(S, x + 51 + qtw, cy + 5, 2, 20, C_ACCENT) }
+    if (fp.query == "") { surfaceText(S, "Шукати теку тут… (просто друкуй)", x + 56, cy + 7, 14, C_DIM) }
+    else { surfaceText(S, toString(len(fp.view)) + " з " + toString(len(fp.items)), x + w - 110, cy + 7, 13, C_DIM) }
+    uiRegion("fp.search", x + 20, cy, w - 40, 30)
     cy = cy + 40
     // недавні
     var recent = []
     for r in app.cfg.recent { if (r != app.dir && dirExists(r) && len(recent) < 4) { append(recent, r) } }
-    var listH = h - (cy - y) - 70
+    var listH = h - (cy - y) - 76
     if (len(recent) > 0) {
         surfaceText(S, "Недавні:", x + 20, cy + 4, 13, C_DIM)
         var rx = x + 84
@@ -4866,29 +5014,39 @@ func drawFolderPick() {
     surfaceClip(S, x + 20, cy, w - 40, listH)
     var rowH = 26
     var vis = max(1, toInt(listH / rowH))
-    if (fp.sel < fp.scroll) { fp.scroll = fp.sel }
-    if (fp.sel >= fp.scroll + vis) { fp.scroll = fp.sel - vis + 1 }
-    fp.scroll = clamp(fp.scroll, 0, max(0, len(fp.items) - vis))
+    if (fp.follow) {
+        if (fp.sel < fp.scroll) { fp.scroll = fp.sel }
+        if (fp.sel >= fp.scroll + vis) { fp.scroll = fp.sel - vis + 1 }
+        fp.follow = false
+    }
+    fp.scroll = clamp(fp.scroll, 0, max(0, len(fp.view) - vis))
     var i = fp.scroll
     var ry = cy
-    while (i < len(fp.items) && ry < cy + listH) {
+    while (i < len(fp.view) && ry < cy + listH) {
         if (i == fp.sel) { surfaceRect(S, x + 20, ry, w - 40, rowH, C_SURFACE) }
         else if (uiHover(x + 20, ry, w - 40, rowH)) { surfaceRect(S, x + 20, ry, w - 40, rowH, C_PANEL2) }
         iconFileKind("dir", x + 30, ry + 4, 18, C_SUBTEXT)
-        surfaceText(S, uiFit(fp.items[i], w - 100, 15), x + 56, ry + 4, 15, C_TEXT)
+        surfaceText(S, uiFit(fp.view[i], w - 100, 15), x + 56, ry + 4, 15, C_TEXT)
         uiRegion("fp.item:" + toString(i), x + 20, ry, w - 40, rowH)
         ry = ry + rowH
         i = i + 1
     }
-    if (len(fp.items) == 0) {
+    // смуга прокрутки
+    if (len(fp.view) > vis) {
+        var barH = max(24, toInt(listH * vis / len(fp.view)))
+        var barY = cy + toInt((listH - barH) * fp.scroll / max(1, len(fp.view) - vis))
+        surfaceRoundRect(S, x + w - 28, barY, 6, barH, 3, C_SURFACE2)
+    }
+    if (len(fp.view) == 0) {
         var note = "Тут нема вкладених тек"
+        if (fp.query != "") { note = "Нема тек з «" + fp.query + "» (Esc - очистити пошук)" }
         if (fp.msg != "") { note = fp.msg }
         surfaceText(S, note, x + 36, cy + 12, 14, C_DIM)
     }
     surfaceUnclip(S)
     // кнопки
     var by = y + h - 50
-    if (fp.msg != "" && len(fp.items) > 0) { surfaceText(S, uiFit(fp.msg, w - 40, 13), x + 20, by - 18, 13, C_YELLOW) }
+    if (fp.msg != "" && len(fp.view) > 0) { surfaceText(S, uiFit(fp.msg, w - 40, 13), x + 20, by - 18, 13, C_RED) }
     uiButton("fp.system", "Системне вікно…", x + 20, by, 160, 34, "flat")
     uiButton("fp.cancel", "Скасувати", x + w - 310, by, 110, 34, "normal")
     uiButton("fp.open", "Відкрити цю теку", x + w - 190, by, 170, 34, "primary")

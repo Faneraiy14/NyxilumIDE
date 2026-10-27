@@ -26,6 +26,62 @@ func main() {
     check(indexOf(app.fpick.items, "сайт") >= 0 && indexOf(app.fpick.items, "програми") >= 0, "видно вкладені теки")
     draw()
     shot("f01_picker")
+    // довгий список гортається колесом (вибрана тека не тягне назад)
+    var k = 0
+    while (k < 40) {
+        makeDir(base + "/тека" + toString(100 + k))
+        k = k + 1
+    }
+    // зайти й вийти - список перечитано з новими теками
+    app.fpick.sel = indexOf(app.fpick.items, "сайт")
+    key("Enter", false, false)
+    step()
+    key("Backspace", false, false)
+    step()
+    draw()
+    var lr = uiFind("fp.list")
+    var m = newMap()
+    mapSet(m, "type", "wheel") mapSet(m, "x", lr[0] + 50) mapSet(m, "y", lr[1] + 50) mapSet(m, "dx", 0) mapSet(m, "dy", 5)
+    mapSet(m, "shift", false) mapSet(m, "ctrl", false) mapSet(m, "alt", false)
+    surfacePostEvent(S, m)
+    step()
+    draw()
+    step()
+    check(app.fpick.scroll == 15 && app.fpick.sel == 0, "колесо гортає список тек")
+    key("End", false, false)
+    step()
+    draw()
+    check(app.fpick.sel == len(app.fpick.items) - 1 && app.fpick.scroll > 15, "End - до останньої, список за нею")
+    // пошук: друк фільтрує теки
+    typeText("сай")
+    step()
+    check(len(app.fpick.view) == 1 && app.fpick.view[0] == "сайт", "пошук теки - друкуєш, список фільтрується")
+    key("Escape", false, false)
+    step()
+    check(app.fpick != null && app.fpick.query == "" && len(app.fpick.view) == len(app.fpick.items), "Escape - очистити пошук (вікно лишається)")
+    // вписати шлях
+    clickId("fp.path")
+    check(app.fpick.edit && app.fpick.editText == base, "клік по шляху - його можна редагувати")
+    typeText("/нема-такої")
+    key("Enter", false, false)
+    step()
+    check(app.fpick.edit && contains(app.fpick.msg, "Такої теки нема"), "неіснуюча тека - помилка")
+    draw()
+    shot("f01b_badpath")
+    var bk = 0
+    while (bk < len("/нема-такої")) {
+        key("Backspace", false, false)
+        bk = bk + 1
+    }
+    typeText("/са")
+    key("Tab", false, false)
+    step()
+    check(app.fpick.editText == base + "/сайт/", "Tab доповнює назву теки")
+    key("Enter", false, false)
+    step()
+    check(!app.fpick.edit && app.fpick.path == proj, "Enter - перейти за вписаним шляхом")
+    key("Backspace", false, false)
+    step()
     // вибрати «сайт» стрілками й зайти Enter
     app.fpick.sel = indexOf(app.fpick.items, "сайт")
     key("Enter", false, false)
