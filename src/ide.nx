@@ -53,6 +53,10 @@ struct App {
     palette: any
     searchText: string
     searchResults: array
+    searchRepl: string
+    searchField: i32
+    searchReplOpen: bool
+    replUndo: array
     genMap: array
     guideTab: string
     guideLesson: i32
@@ -1184,6 +1188,10 @@ func openDialog(title, text, action) {
         okLabel = "Скасувати зміни"
         suffix = ""
     }
+    if (action == "replfiles") {
+        okLabel = "Замінити"
+        suffix = ""
+    }
     if (action == "newblock" || action == "newext" || action == "gitcommit" || action == "gitbranch") { suffix = "" }
     if (action == "gitcommit") { okLabel = "Коміт" }
     if (action == "renamesym") {
@@ -1202,6 +1210,7 @@ func closeDialog(ok) {
     if (ok && d.action == "newblocks") { newFile(d.text, "blocks") }
     if (ok && d.action == "version") { saveVersion(d.text) }
     if (ok && d.action == "delete") { deletePath(d.target) }
+    if (ok && d.action == "replfiles") { replaceInFiles() }
     if (ok && d.action == "gitdiscard") {
         var dr = gitDiscard(app.git, d.target)
         if (dr[0] != 0) { app.git.msg = split(trim(dr[2]), "\n")[0] }
@@ -1287,7 +1296,7 @@ func drawDialog() {
 }
 
 // Діалог-питання «так/ні» (без поля вводу).
-func dialogIsConfirm(d) { return d.action == "delete" || d.action == "gitdiscard" }
+func dialogIsConfirm(d) { return d.action == "delete" || d.action == "gitdiscard" || d.action == "replfiles" }
 
 func dialogKey(e) {
     var d = app.dialog
@@ -1326,6 +1335,7 @@ func commandList() {
         ["panel.toggle", "Показати/сховати нижню панель", "Ctrl+J"],
         ["act:files", "Провідник", ""],
         ["act:search", "Пошук у файлах", "Ctrl+Shift+F"],
+        ["replfiles", "Замінити в усіх файлах", "Ctrl+Shift+H"],
         ["act:history", "Історія версій", ""],
         ["h.save", "Зберегти версію", ""],
         ["act:learn", "Навчання: уроки й приклади", ""],
@@ -1450,14 +1460,89 @@ func drawCmdPalette() {
 
 // ---------- пошук у файлах ----------
 
+// Рядки файла для пошуку: відкритий - з редактора (з незбереженим), інакше з диска.
+func _searchLines(f) {
+    if (mapHas(app.editors, f)) { return mapGet(app.editors, f).lines }
+    try { return split(readFile(f), "\n") } catch (e) { return null }
+}
+
+// Скільки всього збігів і в скількох файлах (без обмеження 200 рядків).
+func _searchTotals() {
+    var q = app.searchText
+    var n = 0
+    var files = 0
+    if (len(q) < 2) { return [0, 0] }
+    for f in _allFiles(app.dir, 0) {
+        if (fileKind(f) == "blocks") { continue }
+        var lines = _searchLines(f)
+        if (lines == null) { continue }
+        var c = replaceAllIn(lines, q, "")[1]
+        if (c > 0) {
+            n = n + c
+            files = files + 1
+        }
+    }
+    return [n, files]
+}
+
+func askReplaceInFiles() {
+    var t = _searchTotals()
+    if (t[0] == 0) {
+        setStatus("Нема що замінювати")
+        return
+    }
+    var fw = "файлах"
+    if (t[1] == 1) { fw = "файлі" }
+    openDialog("Замінити «" + app.searchText + "» на «" + app.searchRepl + "»?",
+        toString(t[0]) + " збіг. у " + toString(t[1]) + " " + fw + ". Відкриті файли зміняться в редакторі (Ctrl+S - зберегти), решта - одразу на диску. Після заміни можна натиснути «Скасувати заміну».", "replfiles")
+}
+
+// Заміна в усіх файлах; старий текст - у app.replUndo для «Скасувати заміну».
+func replaceInFiles() {
+    var q = app.searchText
+    var undo = []
+    var total = 0
+    for f in _allFiles(app.dir, 0) {
+        if (fileKind(f) == "blocks") { continue }
+        var lines = _searchLines(f)
+        if (lines == null) { continue }
+        var r = replaceAllIn(lines, q, app.searchRepl)
+        if (r[1] == 0) { continue }
+        total = total + r[1]
+        if (mapHas(app.editors, f)) {
+            var ed = mapGet(app.editors, f)
+            append(undo, [f, edText(ed)])
+            edReplaceLines(ed, r[0])
+        } else {
+            append(undo, [f, join(lines, "\n")])
+            writeFile(f, join(r[0], "\n"))
+        }
+    }
+    app.replUndo = undo
+    app.git.stale = true
+    runSearch()
+    setStatus("Замінено: " + toString(total) + " у " + toString(len(undo)) + " файл.")
+}
+
+func undoReplaceInFiles() {
+    for u in app.replUndo {
+        if (mapHas(app.editors, u[0])) { edReplaceLines(mapGet(app.editors, u[0]), split(u[1], "\n")) }
+        else { writeFile(u[0], u[1]) }
+    }
+    setStatus("Заміну скасовано (" + toString(len(app.replUndo)) + " файл.)")
+    app.replUndo = []
+    app.git.stale = true
+    runSearch()
+}
+
 func runSearch() {
     app.searchResults = []
     var q = toLower(app.searchText)
     if (len(q) < 2) { return }
     for f in _allFiles(app.dir, 0) {
         if (fileKind(f) == "blocks") { continue }
-        var lines = []
-        try { lines = split(readFile(f), "\n") } catch (e) { continue }
+        var lines = _searchLines(f)
+        if (lines == null) { continue }
         var ln = 0
         while (ln < len(lines)) {
             if (contains(toLower(lines[ln]), q)) {
@@ -2537,17 +2622,41 @@ func drawExplorer(x, y, w, h) {
     surfaceUnclip(S)
 }
 
-func drawSearchView(x, y, w, h) {
-    var focused = app.focus == "search"
+// Поле панелі пошуку (field 0 - що шукати, 1 - на що замінити).
+func _searchInput(text, hint, field, x, y, w) {
+    var on = app.focus == "search" && app.searchField == field
     var border = C_SURFACE2
-    if (focused) { border = C_ACCENT }
-    surfaceRoundRect(S, x + 10, y, w - 20, 30, 6, border)
-    surfaceRoundRect(S, x + 11, y + 1, w - 22, 28, 6, C_BG)
-    var tw = surfaceText(S, app.searchText, x + 20, y + 7, 16, C_TEXT)
-    if (focused) { surfaceRect(S, x + 21 + tw, y + 5, 2, 20, C_ACCENT) }
-    if (app.searchText == "" && !focused) { surfaceText(S, "Шукати в усіх файлах…", x + 20, y + 7, 16, C_DIM) }
-    uiRegion("search.input", x + 10, y, w - 20, 30)
+    if (on) { border = C_ACCENT }
+    surfaceRoundRect(S, x, y, w, 30, 6, border)
+    surfaceRoundRect(S, x + 1, y + 1, w - 2, 28, 6, C_BG)
+    surfaceClip(S, x + 4, y, w - 8, 30)
+    var tw = surfaceText(S, text, x + 10, y + 7, 16, C_TEXT)
+    if (on) { surfaceRect(S, x + 11 + tw, y + 5, 2, 20, C_ACCENT) }
+    if (text == "" && !on) { surfaceText(S, hint, x + 10, y + 7, 16, C_DIM) }
+    surfaceUnclip(S)
+    uiRegion("search.input:" + toString(field), x, y, w, 30)
+}
+
+func drawSearchView(x, y, w, h) {
+    // ⌄/› ліворуч - показати/сховати заміну (як у VS Code)
+    if (uiHover(x + 4, y + 3, 22, 24)) {
+        surfaceRoundRect(S, x + 4, y + 3, 22, 24, 4, C_SURFACE)
+        app.tooltip = "Замінити в усіх файлах (Ctrl+Shift+H)"
+    }
+    iconChevron(x + 6, y + 6, 18, app.searchReplOpen, C_SUBTEXT)
+    uiRegion("search.repltoggle", x + 4, y + 3, 22, 24)
+    _searchInput(app.searchText, "Шукати в усіх файлах…", 0, x + 28, y, w - 38)
     var cy = y + 40
+    if (app.searchReplOpen) {
+        _searchInput(app.searchRepl, "Замінити на…", 1, x + 28, y + 36, w - 38)
+        cy = y + 76
+        var t = len(app.searchResults)
+        var bk = "primary"
+        if (t == 0) { bk = "normal" }
+        uiButton("search.replall", "Замінити все", x + 28, cy, 130, 28, bk)
+        if (len(app.replUndo) > 0) { uiButton("search.replundo", "Скасувати заміну", x + 164, cy, min(160, w - 174), 28, "flat") }
+        cy = cy + 38
+    }
     if (len(app.searchText) >= 2) {
         surfaceText(S, toString(len(app.searchResults)) + " збігів", x + 14, cy, 14, C_DIM)
         cy = cy + 22
@@ -3262,6 +3371,13 @@ func doAction(id) {
             edEnsureVisible(edz)
         }
     }
+    else if (id == "replfiles") {
+        app.side = "search"
+        app.focus = "search"
+        app.searchReplOpen = true
+        app.searchField = 0
+        if (app.searchText != "") { app.searchField = 1 }
+    }
     else if (id == "replace") {
         var edr = currentEditor()
         if (edr != null && app.mode == "code") {
@@ -3485,8 +3601,24 @@ func onMouseDown(e) {
         app.con.focused = true
         return
     }
-    if (id == "search.input") {
+    if (startsWith(id, "search.input:")) {
         app.focus = "search"
+        app.searchField = toInt(substring(id, 13, 1))
+        return
+    }
+    if (id == "search.repltoggle") {
+        app.searchReplOpen = !app.searchReplOpen
+        app.focus = "search"
+        app.searchField = 0
+        if (app.searchReplOpen) { app.searchField = 1 }
+        return
+    }
+    if (id == "search.replall") {
+        askReplaceInFiles()
+        return
+    }
+    if (id == "search.replundo") {
+        undoReplaceInFiles()
         return
     }
     if (app.focus == "search") { app.focus = "editor" }
@@ -3734,9 +3866,14 @@ func onKey(e) {
         openPalette("commands")
         return
     }
-    if (e.ctrl && e.shift && k == "f") {
+    if (e.ctrl && e.shift && (k == "f" || k == "h")) {
         app.side = "search"
         app.focus = "search"
+        app.searchField = 0
+        if (k == "h") {
+            app.searchReplOpen = true
+            if (app.searchText != "") { app.searchField = 1 }
+        }
         return
     }
     if (e.ctrl && k == "p") {
@@ -3797,10 +3934,15 @@ func onKey(e) {
     }
     if (app.focus == "search") {
         if (k == "Escape") { app.focus = "editor" }
+        else if (k == "Tab" && app.searchReplOpen) { app.searchField = 1 - app.searchField }
+        else if (k == "Backspace" && app.searchField == 1) {
+            if (len(app.searchRepl) > 0) { app.searchRepl = uiDropLast(app.searchRepl) }
+        }
         else if (k == "Backspace" && len(app.searchText) > 0) {
             app.searchText = uiDropLast(app.searchText)
             runSearch()
         }
+        else if (k == "Enter" && app.searchField == 1) { askReplaceInFiles() }
         else if (k == "Enter") { runSearch() }
         return
     }
@@ -3855,6 +3997,10 @@ func onText(e) {
         return
     }
     if (app.focus == "search") {
+        if (app.searchField == 1) {
+            app.searchRepl = app.searchRepl + e.text
+            return
+        }
         app.searchText = app.searchText + e.text
         runSearch()
         return
@@ -4431,7 +4577,7 @@ func drawDemoCursor() {
 func newApp(dir) {
     return App { mode: "code", dir: dir, files: [], expanded: newMap(), editors: newMap(), current: "",
         blocks: newMap(), currentB: "", tabs: [], active: "", side: "files", sideW: 270, sideScroll: 0,
-        panelOpen: true, panelTab: "console", problems: [], palette: null, searchText: "", searchResults: [],
+        panelOpen: true, panelTab: "console", problems: [], palette: null, searchText: "", searchResults: [], searchRepl: "", searchField: 0, searchReplOpen: false, replUndo: [],
         genMap: [], guideTab: "lessons", guideLesson: -1, done: [], demo: null, cursorX: 0, cursorY: 0,
         hintRun: 0, tour: -1, tourFirstRun: false, histSel: -1, histScroll: 0, histList: [], histCounts: [],
         histDiff: [], histDiffKey: "", con: newConsole(), focus: "editor", drag: "", consoleH: 200,

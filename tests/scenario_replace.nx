@@ -1,0 +1,52 @@
+// Заміна в усіх файлах (Ctrl+Shift+H): підтвердження, відкритий файл
+// міняється в редакторі (незбережений), закритий - на диску, блоки не
+// чіпаються, «Скасувати заміну» повертає все.
+// NYX_IDE_CONFIG=<файл> NX_HEADLESS=1 nx tests/scenario_replace.nx <тека> <тека-для-png>
+import "helpers.nx"
+import "../src/ide.nx" { ideInit, ideStep, ideShutdown, app, draw, openPath, currentEditor }
+
+func main() {
+    var dir = scriptArgs()[0]
+    outDir = scriptArgs()[1]
+    presetConfig("advanced", false, false, false)
+    makeDir(dir + "/ігри")
+    writeFile(dir + "/ігри/a.nx", "func main() {\n    var кіт = 1\n    print(Кіт)\n}\n")
+    writeFile(dir + "/b.nx", "// кіт\nprint(\"кіт\")\n")
+    writeFile(dir + "/c.txt", "без збігів\n")
+    ideInit(dir)
+    openPath(dir + "/b.nx")
+    step()
+    key("h", true, true)
+    step()
+    check(app.side == "search" && app.focus == "search" && app.searchReplOpen, "Ctrl+Shift+H - пошук із заміною")
+    typeText("кіт")
+    step()
+    check(len(app.searchResults) == 4, "знайдено 4 рядки")
+    key("Tab", false, false)
+    typeText("пес")
+    step()
+    check(app.searchRepl == "пес" && app.searchText == "кіт", "Tab - поле «Замінити на»")
+    draw()
+    shot("r01_replace")
+    key("Enter", false, false)
+    step()
+    check(app.dialog != null && app.dialog.action == "replfiles", "перед заміною - питання")
+    key("Escape", false, false)
+    step()
+    check(app.dialog == null && contains(readFile(dir + "/ігри/a.nx"), "кіт"), "Escape - нічого не змінено")
+    draw()
+    clickId("search.replall")
+    step()
+    key("Enter", false, false)
+    step()
+    check(readFile(dir + "/ігри/a.nx") == "func main() {\n    var пес = 1\n    print(пес)\n}\n", "закритий файл - змінено на диску")
+    var ed = currentEditor()
+    check(ed.lines[0] == "// пес" && ed.dirty && contains(readFile(dir + "/b.nx"), "кіт"), "відкритий - у редакторі, ще не збережено")
+    check(len(app.searchResults) == 0, "після заміни збігів нема")
+    draw()
+    clickId("search.replundo")
+    step()
+    check(contains(readFile(dir + "/ігри/a.nx"), "var кіт") && ed.lines[0] == "// кіт", "«Скасувати заміну» повертає все")
+    ideShutdown()
+    print("ЗАМІНА: УСЕ ГАРАЗД")
+}

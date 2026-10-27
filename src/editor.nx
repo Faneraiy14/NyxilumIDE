@@ -738,24 +738,31 @@ func edReplaceOne(ed) {
 func edReplaceAll(ed) {
     var q = ed.findText
     if (q == "") { return 0 }
+    var r = replaceAllIn(ed.lines, q, ed.replText)
+    if (r[1] > 0) { edReplaceLines(ed, r[0]) }
+    return r[1]
+}
+
+// Усі входження q (без різниці великих/малих) у рядках - на rep:
+// [нові рядки, скільки замінено]. Для Ctrl+H і заміни в усіх файлах.
+func replaceAllIn(lines, q, rep) {
     var lq = toLower(q)
     var count = 0
     var out = []
-    for l in ed.lines {
+    for l in lines {
         var low = toLower(l)
         var res = ""
         var pos = 0
         while (true) {
             var at = indexOf(cut(low, pos, len(low)), lq)
             if (at < 0) { break }
-            res = res + cut(l, pos, pos + at) + ed.replText
+            res = res + cut(l, pos, pos + at) + rep
             pos = pos + at + len(lq)
             count = count + 1
         }
         append(out, res + cut(l, pos, len(l)))
     }
-    if (count > 0) { edReplaceLines(ed, out) }
-    return count
+    return [out, count]
 }
 
 // Набраний символ (подія "text"): автопари дужок і лапок.
