@@ -1451,7 +1451,7 @@ func drawCmdPalette() {
         var it = p.items[i]
         if (i == p.sel) { surfaceRoundRect(S, x + 6, iy, w - 12, rowH, 5, C_SURFACE2) }
         if (p.mode == "files") {
-            iconFileKind(fileKind(it[1]), x + 14, iy + 3, 20, C_SUBTEXT)
+            iconFile(it[1], x + 14, iy + 3, 20, C_SUBTEXT)
             surfaceText(S, it[1], x + 42, iy + 5, 16, C_TEXT)
         } else {
             surfaceText(S, it[1], x + 16, iy + 5, 16, C_TEXT)
@@ -2023,6 +2023,11 @@ func openSettings() {
     app.setScroll = 0
 }
 
+// Шестерня внизу: відкрити, а якщо вже відкрито - закрити.
+func toggleSettings() {
+    if (app.settingsOpen) { settingsAction("set.close") } else { openSettings() }
+}
+
 func _setMatches(d, q) {
     if (q == "") { return true }
     var all = toLower(d[2] + " " + d[3])
@@ -2037,7 +2042,7 @@ func drawSettingsPage(x, y, w, h) {
     surfaceRect(S, x, y, w, 52, C_PANEL2)
     surfaceText(S, "Налаштування", x + 20, y + 14, 20, C_TEXT, true)
     var sx = x + 200
-    var sw = min(420, w - 280)
+    var sw = min(420, w - 330)
     var focused = app.focus == "settings"
     if (sw > 120) {
         var border = C_BORDER
@@ -2050,7 +2055,9 @@ func drawSettingsPage(x, y, w, h) {
         if (focused) { surfaceRect(S, sx + 33 + tw, y + 16, 2, 20, C_ACCENT) }
         uiRegion("set.search", sx, y + 11, sw, 30)
     }
-    uiButton("set.close", "×", x + w - 44, y + 11, 30, 30, "flat")
+    var cbw = uiButtonW("× Закрити")
+    uiButton("set.close", "× Закрити", x + w - cbw - 14, y + 11, cbw, 30, "normal")
+    if (uiHover(x + w - cbw - 14, y + 11, cbw, 30)) { app.tooltip = "Закрити налаштування (Esc або ще раз шестерня внизу ліворуч)" }
     // розділи зліва
     var navW = 170
     if (w < 620) { navW = 120 }
@@ -2521,13 +2528,29 @@ func drawCtx() {
 }
 
 func _entryRow(x, ry, w, depth, kind) {
-    var indent = 10 + depth * 14
-    iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
-    var bx = x + indent + 40
-    surfaceRect(S, bx, ry + 1, w - (bx - x) - 6, 22, C_BG)
-    surfaceRectLine(S, bx, ry + 1, w - (bx - x) - 6, 22, C_ACCENT, 1)
-    var tw = surfaceText(S, app.entry.text, bx + 4, ry + 4, 16, C_TEXT)
-    surfaceRect(S, bx + 5 + tw, ry + 3, 2, 18, C_ACCENT)
+    var indent = EX_PAD + depth * EX_INDENT
+    _exGuides(x, ry, depth)
+    if (kind == "dir") { iconChevron(x + indent, ry + 1, 20, false, C_SUBTEXT) }
+    else { iconFile(app.entry.text, x + indent + 18, ry + 3, 16, C_DIM) }
+    var bx = x + indent + 38
+    surfaceRect(S, bx, ry + 1, w - (bx - x) - 6, EX_ROW - 2, C_BG)
+    surfaceRectLine(S, bx, ry + 1, w - (bx - x) - 6, EX_ROW - 2, C_ACCENT, 1)
+    var tw = surfaceText(S, app.entry.text, bx + 4, ry + 3, 15, C_TEXT)
+    surfaceRect(S, bx + 5 + tw, ry + 3, 2, EX_ROW - 6, C_ACCENT)
+}
+
+// Дерево провідника (як у VS Code): відступ рівня, висота рядка.
+var EX_PAD = 8
+var EX_INDENT = 14
+var EX_ROW = 22
+
+// Тонкі вертикальні лінії рівнів вкладеності.
+func _exGuides(x, ry, depth) {
+    var k = 0
+    while (k < depth) {
+        surfaceRect(S, x + EX_PAD + k * EX_INDENT + 9, ry, 1, EX_ROW, C_SURFACE2)
+        k = k + 1
+    }
 }
 
 func _exIcon(id, x, y, tip) {
@@ -2561,7 +2584,7 @@ func drawExplorer(x, y, w, h) {
     _exIcon("ex.newdir", ix - 48, y, "Нова тека")
     _exIcon("ex.newfile", ix - 72, y, "Новий файл (без розширення - .nx, .nxb - блоки)")
     var top = y + 28
-    var rowH = 24
+    var rowH = EX_ROW
     uiRegion("ex.empty", x, top, w, h - 28)
     surfaceClip(S, x, top, w, h - 28)
     var ry = top - app.sideScroll
@@ -2585,18 +2608,18 @@ func drawExplorer(x, y, w, h) {
         if (ry + rowH >= top && ry < top + h) {
             var on = path == app.active
             var sel = path == app.exSel
-            var indent = 10 + f[2] * 14
+            var indent = EX_PAD + f[2] * EX_INDENT
             if (on) { surfaceRect(S, x, ry, w, rowH, C_SURFACE) }
             else if (sel) { surfaceRect(S, x, ry, w, rowH, C_BG) }
             else if (uiHover(x, ry, w, rowH)) { surfaceRect(S, x, ry, w, rowH, C_BG) }
+            _exGuides(x, ry, f[2])
             if (f[3]) {
-                iconChevron(x + indent, ry + 2, 20, mapHas(app.expanded, path), C_SUBTEXT)
-                iconFileKind("dir", x + indent + 18, ry + 3, 18, C_SUBTEXT)
-                surfaceText(S, uiFit(f[1], w - indent - 50, 16), x + indent + 42, ry + 4, 16, C_SUBTEXT)
+                // тека - лише стрілка й назва (як у VS Code)
+                iconChevron(x + indent, ry + 1, 20, mapHas(app.expanded, path), C_SUBTEXT)
+                surfaceText(S, uiFit(f[1], w - indent - 40, 15), x + indent + 20, ry + 3, 15, C_SUBTEXT)
                 uiRegion("dir:" + path, x, ry, w, rowH)
             } else {
-                var kind = fileKind(path)
-                iconFileKind(kind, x + indent + 18, ry + 3, 18, C_DIM)
+                iconFile(path, x + indent + 18, ry + 3, 16, C_DIM)
                 var col = C_SUBTEXT
                 if (on) { col = C_TEXT }
                 // стан у git: літера праворуч і колір назви (як у VS Code)
@@ -2604,10 +2627,10 @@ func drawExplorer(x, y, w, h) {
                 if (app.git.isRepo && mapHas(app.git.byPath, path)) {
                     gl = mapGet(app.git.byPath, path)
                     col = gitLetterColor(gl)
-                    surfaceText(S, gl, x + w - 34, ry + 4, 14, col, true)
+                    surfaceText(S, gl, x + w - 34, ry + 3, 14, col, true)
                 }
-                surfaceText(S, uiFit(f[1], w - indent - 64, 16), x + indent + 42, ry + 4, 16, col)
-                if (_isDirty(path)) { surfaceCircle(S, x + w - 16, ry + 12, 4, C_PEACH) }
+                surfaceText(S, uiFit(f[1], w - indent - 80, 15), x + indent + 38, ry + 3, 15, col)
+                if (_isDirty(path)) { surfaceCircle(S, x + w - 16, ry + 11, 4, C_PEACH) }
                 uiRegion("file:" + path, x, ry, w, rowH)
             }
         }
@@ -2674,7 +2697,7 @@ func drawSearchView(x, y, w, h) {
         var r = app.searchResults[i]
         if (r[0] != lastFile) {
             lastFile = r[0]
-            iconFileKind(fileKind(r[0]), x + 10, ry + 3, 16, C_DIM)
+            iconFile(r[0], x + 10, ry + 3, 16, C_DIM)
             surfaceText(S, uiFit(fileName(r[0]), w - 40, 14), x + 32, ry + 4, 14, C_TEXT, true)
             ry = ry + 22
         }
@@ -2881,17 +2904,21 @@ func drawTabs(x, y, w) {
     surfaceRect(S, x, y, w, TABS_H, C_PANEL2)
     uiRegion("tabs", x, y, w, TABS_H)
     var tx = x
+    // відкриті налаштування - місце під їхню вкладку праворуч
+    var right = x + w
+    if (app.settingsOpen) { right = x + w - _settingsTabW() }
     for path in app.tabs {
         var name = fileName(path)
         var tw = textWidth(name, 14) + 64
-        var on = path == app.active
+        if (app.settingsOpen && tx + tw > right) { break }
+        var on = path == app.active && !app.settingsOpen
         var bg = C_PANEL2
         if (on) { bg = C_BG }
         else if (uiHover(tx, y, tw, TABS_H)) { bg = C_PANEL }
         surfaceRect(S, tx, y, tw, TABS_H, bg)
         if (on) { surfaceRect(S, tx, y, tw, 2, C_ACCENT) }
         surfaceRect(S, tx + tw - 1, y + 6, 1, TABS_H - 12, C_BORDER)
-        iconFileKind(fileKind(path), tx + 10, y + 8, 18, C_DIM)
+        iconFile(path, tx + 10, y + 8, 18, C_DIM)
         var col = C_SUBTEXT
         if (on) { col = C_TEXT }
         surfaceText(S, name, tx + 34, y + 10, 14, col)
@@ -2912,6 +2939,31 @@ func drawTabs(x, y, w) {
         tx = tx + tw
         if (tx > x + w) { break }
     }
+    if (app.settingsOpen) { _settingsTab(min(tx, right), y) }
+}
+
+func _settingsTabW() { return textWidth("Налаштування", 14) + 64 }
+
+// Налаштування - окрема вкладка (як у VS Code): завжди активна, поки відкрита, з "×".
+func _settingsTab(tx, y) {
+    var name = "Налаштування"
+    var tw = _settingsTabW()
+    surfaceRect(S, tx, y, tw, TABS_H, C_BG)
+    surfaceRect(S, tx, y, tw, 2, C_ACCENT)
+    surfaceRect(S, tx + tw - 1, y + 6, 1, TABS_H - 12, C_BORDER)
+    iconGear(tx + 10, y + 8, 18, C_SUBTEXT)
+    surfaceText(S, name, tx + 34, y + 10, 14, C_TEXT)
+    uiRegion("settab", tx, y, tw, TABS_H)
+    var bx = tx + tw - 24
+    var xc = C_SUBTEXT
+    if (uiHover(bx, y + 7, 20, 20)) {
+        surfaceRoundRect(S, bx, y + 7, 20, 20, 4, C_SURFACE2)
+        xc = C_TEXT
+        app.tooltip = "Закрити налаштування (Esc)"
+    }
+    surfaceLine(S, bx + 6, y + 13, bx + 13, y + 20, xc, 2)
+    surfaceLine(S, bx + 13, y + 13, bx + 6, y + 20, xc, 2)
+    uiRegion("settab.close", bx, y + 7, 20, 20)
 }
 
 func drawWelcome(x, y, w, h) {
@@ -3205,12 +3257,14 @@ func draw() {
         stageW = clamp(toInt(ew * 0.4), 260, 560)
         ew = ew - stageW
     }
-    if (len(app.tabs) == 0) {
+    if (app.settingsOpen) {
+        drawTabs(ex, tabsY, ew)
+        drawSettingsPage(ex, edY, ew, edH)
+    } else if (len(app.tabs) == 0) {
         drawWelcome(ex, bodyY, ew, bodyH - panelH)
     } else {
         drawTabs(ex, tabsY, ew)
-        if (app.settingsOpen) { drawSettingsPage(ex, tabsY, ew, bodyH - panelH) }
-        else if (app.mode == "blocks") {
+        if (app.mode == "blocks") {
             var ws = currentBlocks()
             if (ws != null) { blocksDraw(ws, ex, edY, ew, edH, blocksTitle(ws)) }
         } else {
@@ -3303,7 +3357,9 @@ func doAction(id) {
     else if (id == "con.clear") { conClear(app.con) }
     else if (id == "dialog.ok") { closeDialog(true) }
     else if (id == "dialog.cancel") { closeDialog(false) }
-    else if (id == "act:settings") { openSettings() }
+    else if (id == "act:settings") { toggleSettings() }
+    else if (id == "settab") { app.focus = "settings" }
+    else if (id == "settab.close") { settingsAction("set.close") }
     else if (startsWith(id, "act:")) { toggleSide(substring(id, 4, len(id) - 4)) }
     else if (id == "side.collapse") { app.side = "" }
     else if (id == "stage.close") {

@@ -120,7 +120,16 @@ func main() {
     app.cfg.seen = []
     clickId("act:settings")
     check(app.settingsOpen, "налаштування відкрито (сторінка)")
+    draw()
+    check(uiFind("settab") != null && uiFind("settab.close") != null, "налаштування - окрема вкладка з ×")
     shot("s01_settings")
+    clickId("act:settings")
+    check(!app.settingsOpen, "шестерня ще раз - налаштування закрито")
+    clickId("act:settings")
+    clickId("settab.close")
+    check(!app.settingsOpen, "× на вкладці закриває налаштування")
+    clickId("act:settings")
+    check(app.settingsOpen, "і знову відкрито")
     // масштаб інтерфейсу: 150% - логічне вікно менше, все більше
     clickId("set.sec:look")
     clickId("set.scale:150")
@@ -130,17 +139,21 @@ func main() {
     // теми: світла і контрастна змінюють кольори, темна - повертає
     clickId("set.theme:light")
     check(app.cfg.theme == "light" && C_BG == 0xeff1f5, "світла тема")
-    clickId("act:files")
     draw()
     shot("s01c_light")
+    clickId("set.close")
+    check(!app.settingsOpen, "«Закрити» в шапці закриває")
     clickId("act:settings")
     check(app.settingsOpen && app.setSection == "look", "налаштування - той самий розділ")
+    // при 150% кнопки тем - під нижнім краєм сторінки: прогорнути
+    app.setScroll = 60
     clickId("set.theme:contrast")
     check(C_BG == 0 && C_ACCENT == 0xffd700, "контрастна тема")
     draw()
     shot("s01d_contrast")
     clickId("set.theme:dark")
     check(app.cfg.theme == "dark" && C_BG == 0x1e1e2e, "темна тема знову")
+    app.setScroll = 0
     clickId("set.scale:100")
     check(app.cfg.uiScale == 100 && surfaceWidth(S) == 1280, "масштаб назад 100%")
     // пошук по всіх розділах
@@ -165,8 +178,9 @@ func main() {
     clickId("act:history")
     check(app.offer == null, "та сама пропозиція вдруге не з'являється")
 
-    // рівень "просунутий": блоки й уроки вимкнено
-    clickId("act:settings")
+    // рівень "просунутий": блоки й уроки вимкнено (налаштування досі відкриті -
+    // бічні панелі їх не закривають)
+    check(app.settingsOpen, "бічна панель не закриває налаштувань")
     clickId("set.level:advanced")
     check(!app.cfg.blocks && !app.cfg.lessons, "просунутий: блоки й уроки вимкнено")
     draw()
@@ -177,7 +191,6 @@ func main() {
     var nxbVisible = false
     for f in app.files { if (endsWith(f[0], ".nxb")) { nxbVisible = true } }
     check(!nxbVisible, "файли .nxb у Провіднику сховано")
-    clickId("act:settings")
     clickId("set.blocks")
     check(app.cfg.blocks, "перемикач повертає блоки")
     shot("s03_advanced")

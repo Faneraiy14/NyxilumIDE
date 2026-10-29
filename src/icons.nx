@@ -85,6 +85,69 @@ func iconFileKind(kind, x, y, s, c) {
     }
 }
 
+// Значок файла за розширенням, як у VS Code (тема Seti): кольорова
+// літера / знак. .nx і .nxb - свої значки, невідоме - рядки тексту.
+var FILE_ICONS = [
+    ["java", "J", 0xcc3e44], ["class", "J", 0xcc3e44], ["jar", "J", 0xcc3e44],
+    ["json", "{}", 0xcbcb41], ["js", "JS", 0xcbcb41], ["mjs", "JS", 0xcbcb41], ["cjs", "JS", 0xcbcb41],
+    ["ts", "TS", 0x519aba], ["jsx", "JSX", 0x519aba], ["tsx", "TSX", 0x519aba],
+    ["py", "PY", 0x519aba], ["php", "php", 0xa074c4], ["rb", "RB", 0xcc3e44],
+    ["html", "<>", 0xe37933], ["htm", "<>", 0xe37933], ["xml", "<>", 0xe37933], ["vue", "V", 0x8dc149],
+    ["css", "#", 0x519aba], ["scss", "#", 0xf55385], ["less", "#", 0x519aba],
+    ["md", "M", 0x519aba], ["c", "C", 0x519aba], ["h", "h", 0xa074c4], ["cpp", "++", 0x519aba],
+    ["hpp", "h", 0xa074c4], ["cs", "C#", 0x519aba], ["go", "GO", 0x519aba], ["rs", "RS", 0xe37933],
+    ["kt", "K", 0xa074c4], ["kts", "K", 0xa074c4], ["gradle", "G", 0x8dc149], ["swift", "S", 0xe37933],
+    ["lua", "L", 0x519aba], ["dart", "D", 0x519aba], ["sql", "DB", 0xf55385],
+    ["sh", "$", 0x8dc149], ["bash", "$", 0x8dc149], ["bat", ">", 0x8dc149], ["cmd", ">", 0x8dc149], ["ps1", ">", 0x519aba],
+    ["csv", "CSV", 0x8dc149], ["zip", "Z", 0xa074c4], ["gz", "Z", 0xa074c4]
+]
+var GEAR_EXTS = ["toml", "ini", "cfg", "conf", "properties", "yaml", "yml", "lock", "env", "editorconfig", "gitignore", "gitattributes"]
+var IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp"]
+
+func iconFile(path, x, y, s, c) {
+    var p = toLower(replace(path, "\\", "/"))
+    if (endsWith(p, ".nxb")) {
+        iconFileKind("blocks", x, y, s, c)
+        return
+    }
+    if (endsWith(p, ".nx")) {
+        iconFileKind("code", x, y, s, c)
+        return
+    }
+    var name = p
+    var sl = len(name) - 1
+    while (sl >= 0 && name[sl] != "/") { sl = sl - 1 }
+    if (sl >= 0) { name = substring(name, sl + 1, len(name) - sl - 1) }
+    var ext = ""
+    var d = len(name) - 1
+    while (d >= 0 && name[d] != ".") { d = d - 1 }
+    if (d >= 0) { ext = substring(name, d + 1, len(name) - d - 1) }
+    for fi in FILE_ICONS {
+        if (fi[0] == ext) {
+            var lbl = fi[1]
+            var fs = 14
+            if (len(lbl) == 2) { fs = 11 }
+            if (len(lbl) >= 3) { fs = 9 }
+            var tw = textWidth(lbl, fs, true)
+            surfaceText(S, lbl, x + toInt((s - tw) / 2), y + toInt((s - textHeight(fs)) / 2), fs, fi[2], true)
+            return
+        }
+    }
+    if (indexOf(GEAR_EXTS, ext) >= 0 || name == "makefile" || name == "dockerfile") {
+        iconGear(x - 2, y - 2, s + 2, 0x6d8086)
+        return
+    }
+    if (indexOf(IMAGE_EXTS, ext) >= 0) {
+        // картинка: рамка, гора й сонце
+        var m = 0xa074c4
+        surfaceRectLine(S, x + 1, y + 3, s - 2, s - 6, m, 1)
+        surfacePolygon(S, [x + 3, y + s - 5, x + 8, y + 8, x + 12, y + s - 5], m)
+        surfaceCircle(S, x + s - 6, y + 7, 2, m)
+        return
+    }
+    iconFileKind("text", x, y, s, c)
+}
+
 // Налаштування: шестерня.
 func iconGear(x, y, s, c) {
     var a = s / 24

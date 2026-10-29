@@ -73,8 +73,9 @@ everything is back after a restart.
 
 ## Settings
 
-The gear at the bottom of the left bar opens the settings page (like VS Code, but
-short): sections on the left, at the top - **search across all of them** (just start
+The gear at the bottom of the left bar opens settings as a separate tab (like VS Code,
+but short), the gear again closes it. You can also close it with the × on the tab,
+the «× Закрити» (Close) button or Esc; clicking a file tab goes back to the code. Sections on the left, at the top - **search across all of them** (just start
 typing; Esc - clear, again - close). Every setting has an explanation in plain words.
 Settings are shared by all folders (`~/.nyx-ide/налаштування.json`).
 
