@@ -6,7 +6,7 @@ A programming environment for [NyxilumLang](https://github.com/Faneraiy14/Nyxilu
 **in NyxilumLang itself**. For anyone starting to program, and for those who already can.
 
 - **Blocks** - like Scratch: a hero on the stage, drawing, lists, your own blocks; code ↔ blocks.
-- **Code** - like VS Code: any folder (Ctrl+O), completion, F12/F2, replace, code folding, split editor, debugger, a stage for games.
+- **Code** - like VS Code: any folder (Ctrl+O), completion, F12/F2, replace, code folding, split editor, minimap, breadcrumbs, a function list (Ctrl+Shift+O), debugger, a stage for games.
 - **Learning** - lessons with auto-checks and "Show me", examples, error hints in plain language.
 - **Tools** - a real terminal (bash/cmd, colors, vim), git (pick files to commit, history), version history, extensions (Anylint; your own are written in NyxilumLang).
 - **Look** - themes, antialiased fonts, UI scale, a side drawer; settings with sections and search; updates with a button inside the IDE.
@@ -78,7 +78,7 @@ If you write in the terminal - the language on its own, like Node.js: [NyxilumNo
 - **"Open as blocks"** handles only simple programs: `struct`, `return`, `try/catch`, arrays with `[0]`, `for x in list`, a loop counter used in the body can't be built from blocks (the IDE explains what and on which line).
 - **The terminal** on Windows (cmd via ConPTY) is less tested than on Linux.
 - **Git** - changes, picking files to commit, discarding a file's changes, commit history, branches, push/pull. Resolving conflicts - in the terminal or another tool for now.
-- **The editor** - a single cursor (no multi-cursor), no minimap.
+- **The editor** - a single cursor (no multi-cursor).
 - **The interface and lessons** are Ukrainian only.
 - **The Windows version** hasn't been tested much on real computers yet.
 
@@ -127,6 +127,7 @@ NX_IDE_HOME=/path/to/NyxilumIDE nx ide
 | Ctrl+Shift+[ / Ctrl+Shift+] | fold / unfold a `{ }` block (or the arrow next to the line number) |
 | Ctrl+B / Ctrl+J / Ctrl+` | side drawer / bottom panel / terminal |
 | F12 / F2 | go to definition / rename everywhere |
+| Ctrl+Shift+O | go to a function in the file |
 
 The full list - in [GUIDE.md](GUIDE.md).
 

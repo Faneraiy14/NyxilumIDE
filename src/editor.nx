@@ -261,6 +261,7 @@ func edInsert(ed, text) {
 // З налаштувань IDE: ширина відступу й автозакриття дужок/лапок.
 var ED_TAB = 4
 var ED_AUTOCLOSE = true
+var ED_MINIMAP = true
 
 func edBackspace(ed) {
     _hlFrom(ed, ed.cy - 1)
@@ -929,7 +930,7 @@ func edEnsureVisible(ed) {
             between = between - 1
         }
     }
-    var cols = max(4, toInt((ed.w - ed.gutterW - 12) / ed.charW))
+    var cols = max(4, toInt((ed.w - ed.gutterW - 12 - edMiniW(ed)) / ed.charW))
     if (ed.cx < ed.left) { ed.left = max(0, ed.cx - 4) }
     if (ed.cx > ed.left + cols - 2) { ed.left = ed.cx - cols + 2 }
 }
@@ -1402,6 +1403,126 @@ func _warmTokens(ed, upTo) {
     ed.hlOk = max(ed.hlOk, min(upTo + 1, len(ed.lines)))
 }
 
+// ---------- мінікарта (як у VS Code): весь файл дрібно праворуч ----------
+//
+// Рядок - 3 пікселі, символ - 2, слово - смужка кольору підсвітки. Довгий файл їде
+// разом із прокруткою: видно ~h/3 рядків довкола того, що на екрані.
+
+var MINI_W = 100
+var MINI_LH = 3
+var MINI_CW = 2
+
+// Ширина мінікарти (0 - вимкнено або вузький редактор).
+func edMiniW(ed) {
+    if (!ED_MINIMAP || ed.w < 520) { return 0 }
+    return MINI_W
+}
+
+// Перший рядок, з якого малюється мінікарта.
+func _miniStart(ed, h, rows) {
+    var cap = toInt(h / MINI_LH)
+    var n = len(ed.lines)
+    if (n <= cap) { return 0 }
+    return toInt((n - cap) * ed.top / max(1, n - rows + 1))
+}
+
+func edDrawMinimap(ed, x, y, w, h, rows) {
+    var mw = edMiniW(ed)
+    if (mw == 0) { return }
+    var mx = x + w - mw - 10
+    surfaceRect(S, mx - 1, y, 1, h, C_PANEL)
+    var start = _miniStart(ed, h, rows)
+    var last = min(len(ed.lines) - 1, start + toInt(h / MINI_LH))
+    _warmTokens(ed, last)
+    // поточний екран - напівпрозора смуга
+    var vy = y + (ed.top - start) * MINI_LH
+    var hover = uiHover(mx, y, mw, h)
+    // поверх кольору теми (видно і на світлій, і на темній)
+    var vc = 0x20000000 + C_SUBTEXT
+    if (hover || uiPressedId == "minimap") { vc = 0x38000000 + C_SUBTEXT }
+    surfaceRect(S, mx, vy, mw, (rows - 1) * MINI_LH, vc)
+    var maxCol = toInt(mw / MINI_CW)
+    var li = start
+    var my = y
+    while (li <= last) {
+        var runs = _miniRuns(ed, li, maxCol)
+        var r = 0
+        var nr = len(runs)
+        while (r < nr) {
+            surfaceRect(S, mx + runs[r] * MINI_CW, my, runs[r + 1] * MINI_CW, MINI_LH - 1, runs[r + 2])
+            r = r + 3
+        }
+        if (li == ed.errLine) { surfaceRect(S, mx, my, mw, MINI_LH, C_RED) }
+        if (li == ed.cy) { surfaceRect(S, mx, my, mw, 1, C_ACCENT) }
+        li = li + 1
+        my = my + MINI_LH
+    }
+}
+
+// Смужки рядка для мінікарти: [початок, довжина, колір, ...]. Кеш за текстом
+// рядка (і станом коментаря) - щокадру не розбирати токени наново.
+var _miniCache = newMap()
+var _miniCacheN = 0
+
+func _miniRuns(ed, li, maxCol) {
+    var line = ed.lines[li]
+    var key = line
+    if (ed.hlIn[li]) { key = "\n" + line }
+    if (mapHas(_miniCache, key)) { return mapGet(_miniCache, key) }
+    var out = []
+    var toks = ed.hlTok[li]
+    var k = 0
+    var nt = len(toks)
+    // токени без пробілу між ними - одна смужка кольору першого
+    var rs = -1
+    var re = -1
+    var rc = 0
+    while (k < nt) {
+        var ts = toks[k]
+        if (ts >= maxCol) { break }
+        var te = min(toks[k + 1], maxCol)
+        // пробіли на початку - не малюємо (видно відступи)
+        while (ts < te && line[ts] == " ") { ts = ts + 1 }
+        if (te > ts) {
+            if (ts == re) { re = te }
+            else {
+                if (re > rs) { append(out, rs) append(out, re - rs) append(out, rc) }
+                rs = ts
+                re = te
+                rc = HL_COLORS[toks[k + 2]]
+            }
+        }
+        k = k + 3
+    }
+    if (re > rs) { append(out, rs) append(out, re - rs) append(out, rc) }
+    // кеш не росте безмежно (і скидається зі зміною теми - див. edMiniReset)
+    if (_miniCacheN > 20000) { edMiniReset() }
+    mapSet(_miniCache, key, out)
+    _miniCacheN = _miniCacheN + 1
+    return out
+}
+
+// Скинути кеш мінікарти (нова тема - інші кольори).
+func edMiniReset() {
+    _miniCache = newMap()
+    _miniCacheN = 0
+}
+
+// Клік / перетягування по мінікарті: рядок під мишею - посередині екрана.
+// Довгий файл (не влазить у мінікарту) - пропорційно висоті, щоб при
+// перетягуванні мінікарта, що їде слідом, не смикала прокрутку.
+func edMiniJump(ed, my) {
+    var rows = toInt(ed.h / ed.lineH)
+    var n = len(ed.lines)
+    var p = clamp(my - ed.y, 0, ed.h)
+    if (n <= toInt(ed.h / MINI_LH)) {
+        var li = clamp(toInt(p / MINI_LH), 0, n - 1)
+        ed.top = clamp(li - toInt(rows / 2), 0, max(0, n - 1))
+    } else {
+        ed.top = clamp(toInt((n - rows + 1) * p / ed.h), 0, max(0, n - rows + 1))
+    }
+}
+
 func edDraw(ed, x, y, w, h, focused) {
     // код - моноширинним (якщо не вибрано піксельний шрифт)
     var prevFont = surfaceFont("mono")
@@ -1586,6 +1707,8 @@ func edDraw(ed, x, y, w, h, focused) {
         }
     }
 
+    edDrawMinimap(ed, x, y, w, h, rows)
+
     // смуга прокрутки
     if (len(ed.lines) > rows - 1) {
         var total = len(ed.lines) + rows - 2
@@ -1595,6 +1718,7 @@ func edDraw(ed, x, y, w, h, focused) {
     }
     surfaceUnclip(S)
     uiRegion("editor", x, y, w, h)
+    if (edMiniW(ed) > 0) { uiRegion("minimap", x + w - edMiniW(ed) - 10, y, edMiniW(ed), h) }
     // жолоб з номерами рядків - клік ставить/знімає точку зупинки
     uiRegion("gutter", x, y, ed.gutterW - 6, h)
     // стрілки й «...» згортання - поверх редактора й жолоба

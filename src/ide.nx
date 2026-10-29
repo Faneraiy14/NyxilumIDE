@@ -1365,6 +1365,7 @@ func commandList() {
         ["terminal", "Термінал", "Ctrl+`"],
         ["stage.toggle", "Показати/сховати сцену", ""],
         ["quickopen", "Відкрити файл…", "Ctrl+P"],
+        ["outline", "Перейти до функції у файлі…", "Ctrl+Shift+O"],
         ["openfolder", "Відкрити теку…", "Ctrl+O"]
     ]
     for r in app.cfg.recent {
@@ -1380,13 +1381,46 @@ func commandList() {
 func openPalette(mode) {
     app.palette = Palette { mode: mode, text: "", sel: 0, items: [] }
     refreshPalette()
+    if (mode == "symbols") { _outlineSelectCurrent() }
 }
+
+// Схема поточного файла коду; null - не код.
+func currentOutline() {
+    var ed = currentEditor()
+    if (ed == null || app.mode != "code" || app.settingsOpen || fileKind(app.active) != "code") { return null }
+    return symOutline(ed.lines)
+}
+
+// Порожній пошук - підсвітити функцію, у якій зараз курсор.
+func _outlineSelectCurrent() {
+    var p = app.palette
+    var ed = currentEditor()
+    if (ed == null) { return }
+    var i = 0
+    while (i < len(p.items)) {
+        if (toInt(substring(p.items[i][0], 4, len(p.items[i][0]) - 4)) <= ed.cy) { p.sel = i }
+        i = i + 1
+    }
+}
+
+var OUTLINE_KIND = [["func", "функція"], ["struct", "struct"], ["var", "змінна"]]
 
 func refreshPalette() {
     var p = app.palette
     var q = toLower(p.text)
     var items = []
-    if (p.mode == "files") {
+    var limit = 14
+    if (p.mode == "symbols") {
+        var ol = currentOutline()
+        if (ol != null) {
+            for o in ol {
+                var kl = ""
+                for kd in OUTLINE_KIND { if (kd[0] == o[0]) { kl = kd[1] } }
+                if (q == "" || contains(toLower(o[1]), q)) { append(items, ["sym:" + toString(o[2]), o[1], kl]) }
+            }
+        }
+        limit = 200
+    } else if (p.mode == "files") {
         refreshFiles()
         for f in app.files {
             if (!f[3] && (q == "" || contains(toLower(f[1]), q))) { append(items, ["file:" + f[0], f[1], ""]) }
@@ -1397,7 +1431,7 @@ func refreshPalette() {
             if (!hide && (q == "" || contains(toLower(c[1]), q))) { append(items, c) }
         }
     }
-    p.items = slice(items, 0, min(len(items), 14))
+    p.items = slice(items, 0, min(len(items), limit))
     p.sel = clamp(p.sel, 0, max(0, len(p.items) - 1))
 }
 
@@ -1430,7 +1464,10 @@ func drawCmdPalette() {
     var x = toInt((W - w) / 2)
     var y = TITLE_H + 6
     var rowH = 26
-    var h = 48 + len(p.items) * rowH + 8
+    // довгий список (схема файла) - вікно з 14 рядків довкола вибраного
+    var vis = min(len(p.items), 14)
+    var first = clamp(p.sel - vis + 1, 0, max(0, len(p.items) - vis))
+    var h = 48 + vis * rowH + 8
     surfaceRoundRect(S, x + 4, y + 4, w, h, 8, 0x88000000)
     surfaceRoundRect(S, x, y, w, h, 8, C_PANEL)
     uiRegion("pal.box", x, y, w, h)
@@ -1438,21 +1475,34 @@ func drawCmdPalette() {
     surfaceRoundRect(S, x + 9, y + 9, w - 18, 30, 6, C_BG)
     var prefix = "> "
     if (p.mode == "files") { prefix = "" }
+    if (p.mode == "symbols") { prefix = "@ " }
     var tw = surfaceText(S, prefix + p.text, x + 18, y + 16, 16, C_TEXT)
     surfaceRect(S, x + 19 + tw, y + 14, 2, 20, C_ACCENT)
     if (p.text == "") {
         var hint = "Назва команди…"
         if (p.mode == "files") { hint = "Назва файла…" }
+        if (p.mode == "symbols") {
+            hint = "Назва функції…"
+            if (len(p.items) == 0) { hint = "У цьому файлі нема функцій (або відкрито не код)" }
+        }
         surfaceText(S, hint, x + 28 + tw, y + 16, 16, C_DIM)
     }
     var iy = y + 48
-    var i = 0
-    while (i < len(p.items)) {
+    var i = first
+    while (i < first + vis) {
         var it = p.items[i]
         if (i == p.sel) { surfaceRoundRect(S, x + 6, iy, w - 12, rowH, 5, C_SURFACE2) }
         if (p.mode == "files") {
             iconFile(it[1], x + 14, iy + 3, 20, C_SUBTEXT)
             surfaceText(S, it[1], x + 42, iy + 5, 16, C_TEXT)
+        } else if (p.mode == "symbols") {
+            var kc = C_MAUVE
+            if (it[2] == "struct") { kc = C_YELLOW }
+            if (it[2] == "змінна") { kc = C_ACCENT }
+            surfaceText(S, uiFit(it[1], w - 150, 16), x + 16, iy + 5, 16, C_TEXT)
+            var ln = "рядок " + toString(toInt(substring(it[0], 4, len(it[0]) - 4)) + 1)
+            surfaceText(S, ln, x + w - 16 - textWidth(ln, 14), iy + 6, 14, C_DIM)
+            surfaceText(S, it[2], x + w - 110 - textWidth(it[2], 13), iy + 7, 13, kc)
         } else {
             surfaceText(S, it[1], x + 16, iy + 5, 16, C_TEXT)
             if (it[2] != "") { surfaceText(S, it[2], x + w - 16 - textWidth(it[2], 14), iy + 6, 14, C_DIM) }
@@ -1597,6 +1647,8 @@ struct Settings {
     tabSize: i32
     autoClose: bool
     termFont: i32
+    crumbs: bool
+    minimap: bool
 }
 
 // Глобальні налаштування (однакові для всіх тек): ~/.nyx-ide/налаштування.json,
@@ -1663,6 +1715,8 @@ func loadSettings() {
         c.tabSize = _intOf(m, "tabSize", 4, 2, 8)
         c.autoClose = _boolOf(m, "autoClose", true)
         c.termFont = _intOf(m, "termFont", 15, 10, 30)
+        c.crumbs = _boolOf(m, "crumbs", true)
+        c.minimap = _boolOf(m, "minimap", true)
         return c
     } catch (e) { return null }
 }
@@ -1690,6 +1744,8 @@ func saveSettings() {
     mapSet(m, "tabSize", c.tabSize)
     mapSet(m, "autoClose", c.autoClose)
     mapSet(m, "termFont", c.termFont)
+    mapSet(m, "crumbs", c.crumbs)
+    mapSet(m, "minimap", c.minimap)
     var path = configPath()
     var parts = split(replace(path, "\\", "/"), "/")
     var dir = substring(path, 0, len(path) - len(parts[len(parts) - 1]) - 1)
@@ -1702,7 +1758,7 @@ func defaultSettings(level) {
     var adv = level == "advanced"
     return Settings { level: level, blocks: !adv, lessons: !adv, hints: !adv, offers: true, seen: [], extOff: [], pixelFont: false,
         uiScale: 100, theme: "dark", updCheck: true, lastUpd: 0, recent: [], sideW: 270, sideOverlay: false, anim: true,
-        edFont: 16, tabSize: 4, autoClose: true, termFont: 15 }
+        edFont: 16, tabSize: 4, autoClose: true, termFont: 15, crumbs: true, minimap: true }
 }
 
 var LEVELS = [["beginner", "Новачок", "Ніколи не програмував(ла) або тільки починаю"],
@@ -1883,6 +1939,8 @@ func settingsList() {
         ["editor", "edfont", "Розмір шрифту коду", "Те саме - Ctrl+= і Ctrl+- або Ctrl+колесо миші в редакторі.", "num", [10, 32, 1]],
         ["editor", "tabsize", "Відступ (Tab)", "Скільки пробілів ставить Tab і новий рядок після {.", "choice", [[2, "2"], [4, "4"], [8, "8"]]],
         ["editor", "autoclose", "Закривати дужки й лапки", "Набрав ( - одразу з'являється ), так само [ ] { } і лапки.", "bool", []],
+        ["editor", "crumbs", "Хлібні крихти", "Рядок над кодом: тека › файл › функція, де зараз курсор. Клік - перейти до іншої функції.", "bool", []],
+        ["editor", "minimap", "Мінікарта", "Зменшений весь файл праворуч від коду: видно, де ти, клік чи перетягування - туди.", "bool", []],
         ["terminal", "termfont", "Розмір шрифту терміналу", "Шрифт у вкладці «Термінал» внизу.", "num", [10, 24, 1]],
         ["side", "sideoverlay", "Шторка поверх коду", "Бічна панель не стискає код, а виїжджає над ним і ховається, коли клацнеш у код. Зручно на маленькому екрані. Вимкнено - шторка завжди поруч, як у VS Code.", "bool", []],
         ["side", "sidew", "Ширина шторки", "Або тягни праву межу шторки мишею.", "num", [160, 600, 10]],
@@ -1908,6 +1966,8 @@ func cfgGet(id) {
     if (id == "autoclose") { return c.autoClose }
     if (id == "termfont") { return c.termFont }
     if (id == "sideoverlay") { return c.sideOverlay }
+    if (id == "crumbs") { return c.crumbs }
+    if (id == "minimap") { return c.minimap }
     if (id == "sidew") { return app.sideW }
     if (id == "lessons") { return c.lessons }
     if (id == "hints") { return c.hints }
@@ -1928,6 +1988,7 @@ func cfgSet(id, v) {
     if (id == "theme") {
         c.theme = v
         applyTheme(v)
+        edMiniReset()
     }
     if (id == "scale") {
         c.uiScale = toInt(v)
@@ -1952,6 +2013,11 @@ func cfgSet(id, v) {
         termSetFont(c.termFont)
     }
     if (id == "sideoverlay") { c.sideOverlay = v }
+    if (id == "crumbs") { c.crumbs = v }
+    if (id == "minimap") {
+        c.minimap = v
+        ED_MINIMAP = v
+    }
     if (id == "sidew") {
         app.sideW = toInt(v)
         c.sideW = app.sideW
@@ -1974,6 +2040,7 @@ func cfgSet(id, v) {
 func applyEditorSettings() {
     ED_TAB = app.cfg.tabSize
     ED_AUTOCLOSE = app.cfg.autoClose
+    ED_MINIMAP = app.cfg.minimap
     termSetFont(app.cfg.termFont)
 }
 
@@ -2969,6 +3036,85 @@ func _settingsTab(tx, y) {
     uiRegion("settab.close", bx, y + 7, 20, 20)
 }
 
+// ---------- «хлібні крихти» над кодом: тека › файл › функція ----------
+
+var CRUMBS_H = 24
+
+// Функція (з схеми файла), у якій зараз курсор: [вид, назва, рядок] або null.
+func crumbsSymbol(ed) {
+    var fr = symFuncRange(ed.lines, ed.cy)
+    if (fr == null) { return null }
+    // лише рядок «func» - не весь файл (кадр на великому файлі)
+    var one = symOutline([ed.lines[fr[0]]])
+    if (len(one) == 0) { return null }
+    return [one[0][0], one[0][1], fr[0]]
+}
+
+func drawCrumbs(ed, x, y, w) {
+    surfaceRect(S, x, y, w, CRUMBS_H, C_BG)
+    var parts = split(_rel(app.current), "/")
+    var cx = x + 14
+    var path = app.dir
+    var i = 0
+    while (i < len(parts)) {
+        var last = i == len(parts) - 1
+        path = path + "/" + parts[i]
+        var nm = parts[i]
+        var col = C_DIM
+        if (last) {
+            iconFile(app.current, cx, y + 5, 14, C_DIM)
+            cx = cx + 18
+            col = C_SUBTEXT
+        }
+        var tw = textWidth(nm, 13)
+        if (uiHover(cx - 2, y + 2, tw + 4, CRUMBS_H - 4)) {
+            col = C_TEXT
+            app.tooltip = "Показати в Провіднику"
+        }
+        surfaceText(S, nm, cx, y + 5, 13, col)
+        uiRegion("crumb:" + path, cx - 2, y + 2, tw + 4, CRUMBS_H - 4)
+        cx = cx + tw
+        if (!last) {
+            iconChevron(cx + 1, y + 4, 16, false, C_DIM)
+            cx = cx + 18
+        }
+        i = i + 1
+    }
+    var sym = crumbsSymbol(ed)
+    iconChevron(cx + 1, y + 4, 16, false, C_DIM)
+    cx = cx + 18
+    var label = "…"
+    if (sym != null) { label = symShortName(sym[1]) }
+    var sw = textWidth(label, 13) + 4
+    var sc = C_SUBTEXT
+    if (uiHover(cx - 2, y + 2, sw, CRUMBS_H - 4)) {
+        sc = C_TEXT
+        app.tooltip = "Функції цього файла (Ctrl+Shift+O)"
+    }
+    if (sym != null) {
+        // значок функції - фіолетовий кубик, як у VS Code
+        surfaceRoundRect(S, cx, y + 8, 9, 9, 2, C_MAUVE)
+        cx = cx + 14
+    }
+    surfaceText(S, uiFit(label, x + w - cx - 10, 13), cx, y + 5, 13, sc)
+    uiRegion("crumb.sym", cx - 2, y + 2, sw + 10, CRUMBS_H - 4)
+}
+
+// Клік по теці / файлу в крихтах: показати в Провіднику.
+func revealInExplorer(path) {
+    app.side = "files"
+    var d = path
+    while (len(d) > len(app.dir)) {
+        var sl = len(d) - 1
+        while (sl > 0 && d[sl] != "/") { sl = sl - 1 }
+        d = substring(d, 0, sl)
+        if (len(d) > len(app.dir)) { mapSet(app.expanded, d, true) }
+    }
+    if (dirExists(path)) { mapSet(app.expanded, path, true) }
+    app.exSel = path
+    refreshFiles()
+}
+
 func drawWelcome(x, y, w, h) {
     surfaceRect(S, x, y, w, h, C_BG)
     var cx = x + toInt(w / 2)
@@ -3273,6 +3419,11 @@ func draw() {
         } else {
             var ed = currentEditor()
             var edFocus = app.focus == "editor" && app.dialog == null && app.palette == null
+            if (ed != null && app.cfg.crumbs && edH > 120) {
+                drawCrumbs(ed, ex, edY, ew)
+                edY = edY + CRUMBS_H
+                edH = edH - CRUMBS_H
+            }
             if (ed != null && app.split != "" && mapHas(app.editors, app.split) && ew >= 500) {
                 drawSplit(ed, ex, edY, ew, edH, edFocus)
             } else if (ed != null) { edDraw(ed, ex, edY, ew, edH, edFocus) }
@@ -3396,6 +3547,12 @@ func doAction(id) {
     }
     else if (id == "cmd.open") { openPalette("commands") }
     else if (id == "quickopen") { openPalette("files") }
+    else if (id == "outline" || id == "crumb.sym") { openPalette("symbols") }
+    else if (startsWith(id, "crumb:")) { revealInExplorer(substring(id, 6, len(id) - 6)) }
+    else if (startsWith(id, "sym:")) {
+        var sed = currentEditor()
+        if (sed != null) { edGoToLine(sed, toInt(substring(id, 4, len(id) - 4))) }
+    }
     else if (id == "openfolder") { openFolderPicker() }
     else if (startsWith(id, "folder:")) { openFolder(substring(id, 7, len(id) - 7)) }
     else if (startsWith(id, "fp.")) { fpickAction(id) }
@@ -3628,6 +3785,11 @@ func onMouseDown(e) {
         }
         return
     }
+    if (id == "minimap" && ed != null) {
+        edMiniJump(ed, e.y)
+        app.drag = "minimap"
+        return
+    }
     if (startsWith(id, "fold:") && ed != null) {
         app.focus = "editor"
         edToggleFold(ed, toInt(substring(id, 5, len(id) - 5)))
@@ -3786,6 +3948,7 @@ func onMouseMove(e) {
         if (e.y < ed.y) { edScroll(ed, -1) }
         if (e.y > ed.y + ed.h) { edScroll(ed, 1) }
     }
+    if (app.drag == "minimap" && ed != null) { edMiniJump(ed, e.y) }
     if (app.drag == "term") { termMouseMove(app.term, e.x, e.y) }
     if (app.drag == "split") {
         app.consoleH = surfaceHeight(S) - STATUS_H - e.y
@@ -3932,6 +4095,10 @@ func onKey(e) {
     }
     if (e.ctrl && e.shift && k == "p") {
         openPalette("commands")
+        return
+    }
+    if (e.ctrl && e.shift && k == "o") {
+        openPalette("symbols")
         return
     }
     if (e.ctrl && e.shift && (k == "f" || k == "h")) {

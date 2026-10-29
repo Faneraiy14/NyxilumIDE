@@ -182,3 +182,41 @@ func symReplace(lines, occ, word, nw) {
     }
     return out
 }
+
+// Схема файла (Ctrl+Shift+O, «хлібні крихти»): функції, struct і глобальні
+// var - масив [вид, назва, рядок]; вид - "func" | "struct" | "var".
+// Для func назва з параметрами: "стрибнути(висота)", метод - "Кіт.нявкнути()".
+func symOutline(lines) {
+    var out = []
+    var i = 0
+    while (i < len(lines)) {
+        var l = lines[i]
+        if (startsWith(l, "func ")) {
+            var rest = substring(l, 5, len(l) - 5)
+            var cl = indexOf(rest, ")")
+            if (cl >= 0) { rest = substring(rest, 0, cl + 1) }
+            else {
+                var br = indexOf(rest, "{")
+                if (br >= 0) { rest = substring(rest, 0, br) }
+            }
+            rest = trim(rest)
+            if (rest != "") { append(out, ["func", rest, i]) }
+        } else if (startsWith(l, "struct ") || startsWith(l, "var ")) {
+            var kw = "var"
+            if (startsWith(l, "struct ")) { kw = "struct" }
+            var s = len(kw) + 1
+            var e = s
+            while (e < len(l) && isIdentPart(charCode(l[e]))) { e = e + 1 }
+            if (e > s) { append(out, [kw, substring(l, s, e - s), i]) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Ім'я функції без параметрів: "Кіт.нявкнути(...)" -> "Кіт.нявкнути".
+func symShortName(name) {
+    var p = indexOf(name, "(")
+    if (p < 0) { return name }
+    return substring(name, 0, p)
+}

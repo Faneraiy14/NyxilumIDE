@@ -284,6 +284,48 @@ func main() {
     check(se.lines[9] == "    print(допомога(результат))" && other.lines[0] == "func допомога(r) {", "Ctrl+Z повертає перейменування в обох файлах")
     saveAll()
 
+    // Ctrl+Shift+O - функції файла; порожній пошук стоїть на тій, де курсор
+    openPath(dir + "/символи.nx")
+    se.cy = 9
+    key("o", true, true)
+    step()
+    check(app.palette != null && app.palette.mode == "symbols" && len(app.palette.items) == 2, "Ctrl+Shift+O - дві функції")
+    check(app.palette.items[0][1] == "подвоїти(x)" && app.palette.items[app.palette.sel][1] == "main()", "з параметрами, вибрано main (там курсор)")
+    shot("c12_outline")
+    typeText("подв")
+    step()
+    check(len(app.palette.items) == 1, "пошук звужує список")
+    key("Enter", false, false)
+    step()
+    check(app.palette == null && se.cy == 2, "Enter - до рядка функції")
+    // «хлібні крихти»: файл › функція під курсором; клік по функції - той самий список
+    se.cy = 3
+    draw()
+    check(uiFind("crumb:" + dir + "/символи.nx") != null && uiFind("crumb.sym") != null, "крихти над кодом")
+    clickId("crumb.sym")
+    check(app.palette != null && app.palette.mode == "symbols" && app.palette.items[app.palette.sel][1] == "подвоїти(x)", "клік по функції в крихтах - список функцій")
+    key("Escape", false, false)
+    step()
+    // мінікарта: клік унизу довгого файла - туди прокрутка
+    var long = []
+    var li = 0
+    while (li < 300) {
+        append(long, "// рядок " + toString(li))
+        li = li + 1
+    }
+    writeFile(dir + "/довгий.nx", join(long, "\n") + "\n")
+    openPath(dir + "/довгий.nx")
+    draw()
+    var rm = uiFind("minimap")
+    check(rm != null, "мінікарта праворуч")
+    click(rm[0] + 20, rm[1] + rm[3] - 6)
+    check(currentEditor().top > 150, "клік по мінікарті внизу - прокрутка вниз")
+    shot("c13_minimap")
+    doAction("set.minimap")
+    draw()
+    check(uiFind("minimap") == null, "мінікарту можна вимкнути")
+    doAction("set.minimap")
+
     // розділений редактор: Ctrl+\ - той самий файл у двох панелях
     openPath(dir + "/символи.nx")
     key("\\", true, false)

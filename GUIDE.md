@@ -53,7 +53,12 @@ extensions), a card appears at the bottom right: **"Show how this works?"** with
 - **Status bar** - git branch, number of problems (click - "Problems"), line and
   column, file language. Orange - while a program is running.
 - **Command palette** - the field at the top or Ctrl+Shift+P: any command by name.
-  Ctrl+P - quickly open a file, Ctrl+Shift+F - search in all files.
+  Ctrl+P - quickly open a file, Ctrl+Shift+F - search in all files,
+  Ctrl+Shift+O - go to a function in this file (an empty search sits on the one with the cursor).
+- **Above the code** - breadcrumbs: folder › file › the function with the cursor. Click a
+  folder or file - show it in the Explorer, the function - the file's function list.
+- **Minimap** on the right - the whole file in miniature; the light band is what is on screen.
+  Click or drag - go there. Breadcrumbs and the minimap can be turned off in Settings › Editor.
 
 **Updates:** once a day the IDE quietly checks whether a new version is out. If so, an
 **Update** («Оновити») card appears (the update runs in the IDE terminal, then **Restart**).
@@ -216,6 +221,7 @@ The **Version history** icon (a clock) in the left bar - a little "git" inside t
 | Drag a tab | reorder tabs |
 | Drag a file/folder in the Explorer | move it to another folder (open tabs are updated) |
 | F12 / Ctrl+click | go to definition (a function, a variable - in another file too) |
+| Ctrl+Shift+O | go to a function in the file |
 | Ctrl+` | terminal (the "Terminal" tab at the bottom) |
 | Ctrl+\ | split the editor into two panes (click a pane - it becomes active, a file from the Explorer opens in it) / unsplit |
 | F2 | rename everywhere (a local variable - in its function, a function - in all files; Ctrl+Z - undo) |
