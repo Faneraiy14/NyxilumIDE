@@ -1763,7 +1763,10 @@ func dismissOffer(forever) {
 func drawOffer(W, H) {
     var info = offerInfo(app.offer)
     if (info == null) { return }
-    var w = 360
+    var yw = uiButtonW("Показати") + 8
+    var nw = uiButtonW("Не треба") + 8
+    var vw = uiButtonW("Не пропонувати")
+    var w = max(360, 16 + yw + 8 + nw + 8 + vw + 12)
     var lines = wrapLines(info[0], w - 32, 16)
     var h = 74 + len(lines) * 20
     var x = W - w - 16
@@ -1776,9 +1779,9 @@ func drawOffer(W, H) {
         surfaceText(S, l, x + 16, ly, 16, C_TEXT)
         ly = ly + 20
     }
-    uiButton("offer.yes", "Показати", x + 16, y + h - 44, 110, 32, "primary")
-    uiButton("offer.no", "Не треба", x + 134, y + h - 44, 100, 32, "normal")
-    uiButton("offer.never", "Не пропонувати", x + 240, y + h - 44, w - 252, 32, "flat")
+    uiButton("offer.yes", "Показати", x + 16, y + h - 44, yw, 32, "primary")
+    uiButton("offer.no", "Не треба", x + 24 + yw, y + h - 44, nw, 32, "normal")
+    uiButton("offer.never", "Не пропонувати", x + 32 + yw + nw, y + h - 44, vw, 32, "flat")
 }
 
 func offerAction(id) {

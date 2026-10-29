@@ -256,8 +256,11 @@ func drawGuide(tab, open, done, ctx, x, y, w, h) {
     surfaceClip(S, x, y + 40, w, h - 40)
 
     if (tab == "examples") {
-        surfaceText(S, "Відкрий приклад - він скопіюється в твої програми.", x + 16, cy, 14, C_SUBTEXT)
-        cy = cy + 28
+        for l in wrapText("Відкрий приклад - він скопіюється в твої програми.", w - 32, 14) {
+            surfaceText(S, l, x + 16, cy, 14, C_SUBTEXT)
+            cy = cy + 18
+        }
+        cy = cy + 10
         for ex in EXAMPLES {
             var name = ex[0]
             var title = substring(name, 0, indexOf(name, "."))
@@ -291,8 +294,11 @@ func drawGuide(tab, open, done, ctx, x, y, w, h) {
     if (open < 0) {
         uiButton("g.tour", "Знайомство з IDE (екскурсія)", x + 12, cy - 4, w - 24, 34, "normal")
         cy = cy + 42
-        surfaceText(S, "Проходь по черзі - кожен урок перевіряється сам.", x + 16, cy, 14, C_SUBTEXT)
-        cy = cy + 28
+        for l in wrapText("Проходь по черзі - кожен урок перевіряється сам.", w - 32, 14) {
+            surfaceText(S, l, x + 16, cy, 14, C_SUBTEXT)
+            cy = cy + 18
+        }
+        cy = cy + 10
         var i = 0
         while (i < len(LESSONS)) {
             var les = LESSONS[i]

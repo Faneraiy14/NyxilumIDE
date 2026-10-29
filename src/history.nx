@@ -205,12 +205,18 @@ func drawHistory(file, list, counts, sel, diff, scroll, x, y, w, h) {
     cy = cy + 46
     uiButton("h.restore", "Повернути цю версію", x + 14, cy, 210, 32, "normal")
     cy = cy + 44
-    surfaceText(S, "Що змінилось відтоді (зараз проти версії):", x + 16, cy, 14, C_SUBTEXT)
-    cy = cy + 22
+    for l in wrapLines("Що змінилось відтоді (зараз проти версії):", w - 32, 14) {
+        surfaceText(S, l, x + 16, cy, 14, C_SUBTEXT)
+        cy = cy + 18
+    }
+    cy = cy + 4
     var d = diff
     var cnt2 = diffCounts(d)
     if (cnt2[0] == 0 && cnt2[1] == 0) {
-        surfaceText(S, "Нічого - програма така сама, як у цій версії.", x + 16, cy, 14, C_GREEN)
+        for l in wrapLines("Нічого - програма така сама, як у цій версії.", w - 32, 14) {
+            surfaceText(S, l, x + 16, cy, 14, C_GREEN)
+            cy = cy + 18
+        }
         surfaceUnclip(S)
         return
     }
@@ -253,6 +259,13 @@ func wrapLines(text, maxW, size) {
             append(lines, cur)
             cur = word
         } else { cur = cand }
+        // одне слово ширше за рядок (довгий шлях) - різати по символах
+        while (textWidth(cur, size) > maxW && len(cur) > 1) {
+            var n = len(cur) - 1
+            while (n > 1 && textWidth(substring(cur, 0, n), size) > maxW) { n = n - 1 }
+            append(lines, substring(cur, 0, n))
+            cur = substring(cur, n, len(cur) - n)
+        }
     }
     if (cur != "") { append(lines, cur) }
     return lines
